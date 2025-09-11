@@ -28,6 +28,8 @@ class Program
         _client.Ready += OnReadyAsync;
         _client.InteractionCreated += OnInteractionAsync;
 
+        // 터미널에 입력
+        // dotnet user-secrets set "Discord:Token" "여기에_봇_토큰"
         var token = _cfg["Discord:Token"];
         if (string.IsNullOrWhiteSpace(token))
             throw new Exception("Discord 토큰이 비었습니다. user-secrets 설정을 확인하세요.");
