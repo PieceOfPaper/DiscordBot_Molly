@@ -6,6 +6,7 @@ public class EmblemRuneGachaCommand :  InteractionModuleBase<SocketInteractionCo
 {
     private readonly Random m_Random = new Random();
 
+    //TODO - 데이터 테이블로 빼는게 좋을 것 같다.
     private static readonly string[] m_EmblemRuneNames = new string[]
     {
         "엠블럼 룬: 굳건함 +",
