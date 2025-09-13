@@ -20,7 +20,9 @@ class Program
 
         m_Client = new DiscordSocketClient(new DiscordSocketConfig
         {
-            GatewayIntents = GatewayIntents.Guilds
+            GatewayIntents = GatewayIntents.Guilds, // 슬래시 커맨드만 필요하다면 이 정도로 시작
+            AlwaysDownloadUsers = false,
+            MessageCacheSize = 0, // 필요 시 10~50 등 소량만
         });
         
         m_InteractionService = new InteractionService(m_Client.Rest);
