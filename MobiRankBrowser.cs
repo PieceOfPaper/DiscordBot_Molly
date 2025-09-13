@@ -66,13 +66,32 @@ public static class MobiRankBrowser
         Log($"Start Search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
 
         var pw = await Playwright.CreateAsync();
-        await using var browser = await pw.Chromium.LaunchAsync(new() { Headless = true });
+        await using var browser = await pw.Chromium.LaunchAsync(new()
+        {
+            Headless = true,
+            Args = new[] {
+                "--disable-dev-shm-usage", // /dev/shm 작을 때 크래시 방지
+                "--no-default-browser-check",
+                "--disable-background-networking",
+                "--disable-features=Translate,BackForwardCache,AcceptCHFrame",
+                "--mute-audio"
+                // 필요 시(보안 주의): "--no-sandbox"
+            },
+        });
 
         var context = await browser.NewContextAsync(new()
         {
             UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             Locale = "ko-KR",
             TimezoneId = "Asia/Seoul"
+        });
+        await context.RouteAsync("**/*", async route =>
+        {
+            var t = route.Request.ResourceType;
+            if (t is "image" or "media" or "font")
+                await route.AbortAsync();
+            else
+                await route.ContinueAsync();
         });
         context.SetDefaultTimeout(5000);                // 일반 동작(클릭/채우기)은 5초
         context.SetDefaultNavigationTimeout(30000);     // 네비게이션은 30초로 별도 설정
