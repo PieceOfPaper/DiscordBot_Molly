@@ -33,6 +33,13 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
+        if (MobiRankBrowser.IsFullRunning(rankingIndex))
+        {
+            await DeferAsync(ephemeral: true);
+            await ModifyOriginalResponseAsync(m => m.Content = "잠시 후에 다시 시도해주세요.");
+            return;
+        }
+
         var keyword = "전투력";
         var keywordEmoji = "⚔️";
         switch (rankingIndex)

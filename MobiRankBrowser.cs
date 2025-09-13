@@ -59,6 +59,10 @@ public static class MobiRankBrowser
         UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         Locale = "ko-KR",
         TimezoneId = "Asia/Seoul",
+        ServiceWorkers = ServiceWorkerPolicy.Block,
+        BypassCSP = true,
+        ViewportSize = new() { Width = 800, Height = 600 }, // 불필요하게 큰 해상도 지양
+        DeviceScaleFactor = 1,
     };
     private static readonly PageGotoOptions s_PageGotoOpt = new()
     {
@@ -66,6 +70,184 @@ public static class MobiRankBrowser
         Timeout = 30000,
     };
 
+    public class BrowserContainer : IAsyncDisposable
+    {
+        public int rankingIndex;
+
+        private IPlaywright m_Pw;
+        private IBrowser m_Browser;
+        private IBrowserContext m_BrowserContext;
+
+        private bool m_IsRunning = false;
+        public bool isRunning => m_IsRunning;
+
+        public async Task<MobiRankResult?> Run(
+            string nickname,
+            MobiServer? server = null,
+            string? className = null,
+            CancellationToken ct = default,
+            Action<string>? log = null)
+        {
+            m_IsRunning = true;
+            
+            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {msg}");
+
+            var keyword = "전투력";
+            switch (rankingIndex)
+            {
+                case 1:
+                    keyword = "전투력";
+                    break;
+                case 2:
+                    keyword = "매력";
+                    break;
+                case 3:
+                    keyword = "생활력";
+                    break;
+            }
+
+            if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
+            if (nickname.Length > 12) nickname = nickname[..12]; // maxlength=12
+
+            Log($"Start Search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
+
+            if (m_Pw == null) m_Pw = await Playwright.CreateAsync();
+            if (m_Browser == null) m_Browser = await m_Pw.Chromium.LaunchAsync(s_BrowserTypeLaunchOpt);
+
+            if (m_BrowserContext == null)
+            {
+                m_BrowserContext = await m_Browser.NewContextAsync(s_BrowserNewContextOpt);
+                await m_BrowserContext.RouteAsync("**/*",
+                    async route =>
+                    {
+                        var t = route.Request.ResourceType;
+                        if (t is "image" or "media" or "font")
+                            await route.AbortAsync();
+                        else
+                            await route.ContinueAsync();
+                    });
+                m_BrowserContext.SetDefaultTimeout(5000); // 일반 동작(클릭/채우기)은 5초
+                m_BrowserContext.SetDefaultNavigationTimeout(30000); // 네비게이션은 30초로 별도 설정
+            }
+
+            var page = await m_BrowserContext.NewPageAsync();
+            await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
+            await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}", s_PageGotoOpt);
+
+            // 팝업/쿠키 동의(있을 때만)
+            // await TryClick(page, "button:has-text('동의')", 800);
+            // await TryClick(page, "button:has-text('확인')", 800);
+
+            // 1) 서버 선택 (옵션)
+            if (server is not null)
+            {
+                // 서버 드롭다운(현재 선택 텍스트가 서버명인 select_box)을 열고 서버 li 클릭
+                // 보통 서버/클래스 2개의 select_box가 있는데, 서버는 '칼릭스/데이안...'처럼 서버명이 보입니다.
+                await TryClick(page, "div.select_box .selected", 1500); // 첫 번째 박스가 서버일 확률이 높음
+                var ok = await TryClick(page, $"li[data-searchtype='serverid'][data-serverid='{(int)server.Value}']", 2000);
+                await page.WaitForTimeoutAsync(600);
+            }
+
+            // 2) 클래스 선택 (옵션, 기본 전체 클래스)
+            var classId = 0L;
+            if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
+                classId = cid;
+
+            if (classId != 0)
+            {
+                // 클래스 드롭다운은 기본 텍스트가 '전체 클래스' — 그 상자만 명시적으로 찾자
+                var classBox = page.Locator("div.select_box:has(.selected:has-text('전체 클래스'))").First;
+                // 혹시 이미 바뀐 상태(= selected가 다른 클래스명)일 수도 있으니 fallback도 준비
+                if (await classBox.CountAsync() == 0)
+                    classBox = page.Locator("div.select_box").Nth(1); // 2번째 select_box로 추정
+
+                await SafeClick(classBox.Locator(".selected"), Log);
+                var ok = await SafeClick(classBox.Locator($"li[data-searchtype='classid'][data-classid='{classId}']"), Log);
+                await page.WaitForTimeoutAsync(600);
+            }
+            else
+            {
+                Log("Class: 전체 클래스(기본) 그대로 사용.");
+            }
+
+            // 3) 닉네임 검색
+            await TryFill(page, "input[name='search']", nickname, 2000);
+            await TryClick(page, "button[data-searchtype='search']", 2000);
+            await page.WaitForTimeoutAsync(800); // 부분 렌더링 안정 대기
+
+            // 4) 결과 파싱
+            var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
+            var normAll = Regex.Replace(allText ?? "", @"\\s+", " ").Trim(); // <- 실수 방지! 아래서 즉시 올바른 버전으로 다시 계산
+            normAll = Regex.Replace(allText ?? "", @"\s+", " ").Trim();
+
+            var idx = normAll.IndexOf(nickname, StringComparison.Ordinal);
+            if (idx < 0)
+            {
+                Log("Nickname not present after search.");
+                await page.CloseAsync();
+                m_IsRunning = false;
+                return null;
+            }
+
+            // 후보 블록 텍스트(닉네임+전투력 라벨 포함) 우선 추출
+            var block = await ExtractRecordBlockAsync(page, nickname, keyword);
+            var targetText = string.IsNullOrWhiteSpace(block)
+                ? SliceAround(normAll, nickname, 500, 800) // 최후 폴백
+                : block;
+
+            var rankMatch = Regex.Match(targetText, @"([\d,]+)\s*위");
+            var powerMatch = Regex.Match(targetText, @$"{keyword}\s*([\d,]+)");
+            var serverMatch = Regex.Match(targetText, @"서버명\s*([^\s]+)");
+            var classMatch = Regex.Match(targetText, @"클래스\s*([^\s]+)");
+            if (rankMatch.Success && powerMatch.Success)
+            {
+                int rank = int.Parse(rankMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
+                int power = int.Parse(powerMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
+                string serverName = serverMatch.Success ? serverMatch.Groups[1].Value : (server is not null ? server.Value.ToString() : "-");
+                string classSel = classMatch.Success ? classMatch.Groups[1].Value : (classId == 0 ? "전체 클래스" : (className ?? "-"));
+                await page.CloseAsync();
+                m_IsRunning = false;
+                return new MobiRankResult(rank, power, serverName, classSel);
+            }
+
+            Log("Parse failed. (Consider saving a screenshot for debugging.)");
+            await page.CloseAsync();
+            m_IsRunning = false;
+            return null;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (m_BrowserContext != null) await m_BrowserContext.DisposeAsync();
+            if (m_Browser != null) await m_Browser.DisposeAsync();
+            if (m_Pw != null) m_Pw.Dispose();
+        }
+    }
+
+    private const int BROWSER_COUNT = 1;
+    private static Dictionary<int, List<BrowserContainer>> m_BrowserQueues = new();
+    private static object m_BrowserLock = new();
+
+    public static bool IsFullRunning(int rankingIndex)
+    {
+        lock (m_BrowserLock)
+        {
+            if (m_BrowserQueues.ContainsKey(rankingIndex) == false)
+                return false;
+
+            if (m_BrowserQueues[rankingIndex].Count < BROWSER_COUNT)
+                return false;
+        
+            for (var i = 0; i < BROWSER_COUNT; i ++)
+            {
+                if (m_BrowserQueues[rankingIndex][i].isRunning == false)
+                    return false;
+            }
+        }
+
+        return true;
+    }
+    
     public static async Task<MobiRankResult?> GetRankBySearchAsync(
         int rankingIndex,
         string nickname,
@@ -74,115 +256,27 @@ public static class MobiRankBrowser
         CancellationToken ct = default,
         Action<string>? log = null)
     {
-        void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {msg}");
-
-        var keyword = "전투력";
-        switch (rankingIndex)
+        BrowserContainer browserContainer = null;
+        lock (m_BrowserLock)
         {
-            case 1: keyword = "전투력"; break;
-            case 2: keyword = "매력"; break;
-            case 3: keyword = "생활력"; break;
+            if (m_BrowserQueues.ContainsKey(rankingIndex) == false)
+                m_BrowserQueues.Add(rankingIndex, new());
+
+            var list = m_BrowserQueues[rankingIndex];
+            for (var i = 0; i < BROWSER_COUNT; i ++)
+            {
+                if (i >= list.Count)
+                    list.Add(new() { rankingIndex = rankingIndex });
+
+                if (list[i].isRunning) continue;
+
+                browserContainer = list[i];
+                break;
+            }
         }
 
-        if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
-        if (nickname.Length > 12) nickname = nickname[..12]; // maxlength=12
-
-        Log($"Start Search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
-
-        using var pw = await Playwright.CreateAsync();
-        await using var browser = await pw.Chromium.LaunchAsync(s_BrowserTypeLaunchOpt);
-
-        await using var context = await browser.NewContextAsync(s_BrowserNewContextOpt);
-        await context.RouteAsync("**/*", async route =>
-        {
-            var t = route.Request.ResourceType;
-            if (t is "image" or "media" or "font")
-                await route.AbortAsync();
-            else
-                await route.ContinueAsync();
-        });
-        context.SetDefaultTimeout(5000);                // 일반 동작(클릭/채우기)은 5초
-        context.SetDefaultNavigationTimeout(30000);     // 네비게이션은 30초로 별도 설정
-
-        var page = await context.NewPageAsync();
-        await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}", s_PageGotoOpt);
-
-        // 팝업/쿠키 동의(있을 때만)
-        await TryClick(page, "button:has-text('동의')", 800);
-        await TryClick(page, "button:has-text('확인')", 800);
-
-        // 1) 서버 선택 (옵션)
-        if (server is not null)
-        {
-            // 서버 드롭다운(현재 선택 텍스트가 서버명인 select_box)을 열고 서버 li 클릭
-            // 보통 서버/클래스 2개의 select_box가 있는데, 서버는 '칼릭스/데이안...'처럼 서버명이 보입니다.
-            await TryClick(page, "div.select_box .selected", 1500); // 첫 번째 박스가 서버일 확률이 높음
-            var ok = await TryClick(page, $"li[data-searchtype='serverid'][data-serverid='{(int)server.Value}']", 2000);
-            await page.WaitForTimeoutAsync(600);
-        }
-
-        // 2) 클래스 선택 (옵션, 기본 전체 클래스)
-        var classId = 0L;
-        if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
-            classId = cid;
-
-        if (classId != 0)
-        {
-            // 클래스 드롭다운은 기본 텍스트가 '전체 클래스' — 그 상자만 명시적으로 찾자
-            var classBox = page.Locator("div.select_box:has(.selected:has-text('전체 클래스'))").First;
-            // 혹시 이미 바뀐 상태(= selected가 다른 클래스명)일 수도 있으니 fallback도 준비
-            if (await classBox.CountAsync() == 0)
-                classBox = page.Locator("div.select_box").Nth(1); // 2번째 select_box로 추정
-
-            await SafeClick(classBox.Locator(".selected"), Log);
-            var ok = await SafeClick(classBox.Locator($"li[data-searchtype='classid'][data-classid='{classId}']"), Log);
-            await page.WaitForTimeoutAsync(600);
-        }
-        else
-        {
-            Log("Class: 전체 클래스(기본) 그대로 사용.");
-        }
-
-        // 3) 닉네임 검색
-        await TryFill(page, "input[name='search']", nickname, 2000);
-        await TryClick(page, "button[data-searchtype='search']", 2000);
-        await page.WaitForTimeoutAsync(800); // 부분 렌더링 안정 대기
-
-        // 4) 결과 파싱
-        var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
-        var normAll = Regex.Replace(allText ?? "", @"\\s+", " ").Trim(); // <- 실수 방지! 아래서 즉시 올바른 버전으로 다시 계산
-        normAll = Regex.Replace(allText ?? "", @"\s+", " ").Trim();
-
-        var idx = normAll.IndexOf(nickname, StringComparison.Ordinal);
-        if (idx < 0)
-        {
-            Log("Nickname not present after search.");
-            await page.CloseAsync();
-            return null;
-        }
-
-        // 후보 블록 텍스트(닉네임+전투력 라벨 포함) 우선 추출
-        var block = await ExtractRecordBlockAsync(page, nickname, keyword);
-        var targetText = string.IsNullOrWhiteSpace(block)
-            ? SliceAround(normAll, nickname, 500, 800)   // 최후 폴백
-            : block;
-        
-        var rankMatch  = Regex.Match(targetText, @"([\d,]+)\s*위");
-        var powerMatch = Regex.Match(targetText, @$"{keyword}\s*([\d,]+)");
-        var serverMatch = Regex.Match(targetText, @"서버명\s*([^\s]+)");
-        var classMatch  = Regex.Match(targetText, @"클래스\s*([^\s]+)");
-        if (rankMatch.Success && powerMatch.Success)
-        {
-            int rank = int.Parse(rankMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
-            int power = int.Parse(powerMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
-            string serverName = serverMatch.Success ? serverMatch.Groups[1].Value : (server is not null ? server.Value.ToString() : "-");
-            string classSel   = classMatch.Success ? classMatch.Groups[1].Value : (classId == 0 ? "전체 클래스" : (className ?? "-"));
-            await page.CloseAsync();
-            return new MobiRankResult(rank, power, serverName, classSel);
-        }
-
-        Log("Parse failed. (Consider saving a screenshot for debugging.)");
-        await page.CloseAsync();
+        if (browserContainer != null)
+            return await browserContainer.Run(nickname, server, className, ct, log);
         return null;
     }
 
