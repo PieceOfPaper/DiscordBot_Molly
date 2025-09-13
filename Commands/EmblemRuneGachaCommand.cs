@@ -4,8 +4,6 @@ namespace DiscordBot_Molly.Commands;
 
 public class EmblemRuneGachaCommand :  InteractionModuleBase<SocketInteractionContext>
 {
-    private readonly Random m_Random = new Random();
-
     //TODO - 데이터 테이블로 빼는게 좋을 것 같다.
     private const int LEGEND_COMBINE_RATE = 1000;
     private static readonly string[] EMBLEM_NAMES = new string[]
@@ -23,13 +21,13 @@ public class EmblemRuneGachaCommand :  InteractionModuleBase<SocketInteractionCo
     [SlashCommand("엠블럼룬뽑기", "엠블럼 룬을 뽑아보자!")]
     public async Task Command_EmblemRuneGacha()
     {
-        await RespondAsync(EMBLEM_NAMES[m_Random.Next(0, EMBLEM_NAMES.Length)]);
+        await RespondAsync(EMBLEM_NAMES[Random.Shared.Next(0, EMBLEM_NAMES.Length)]);
     }
     
     [SlashCommand("엠블럼룬합성", "엠블럼 룬을 합성해보자! (확률 10%)")]
     public async Task Command_EmblemRuneCombine()
     {
-        var randRate = m_Random.Next(0, 10000);
+        var randRate = Random.Shared.Next(0, 10000);
         if (randRate < LEGEND_COMBINE_RATE)
         {
             await Command_EmblemRuneGacha();
