@@ -5,10 +5,27 @@ namespace DiscordBot_Molly.Commands;
 public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
 {
     [SlashCommand("전투력랭킹", "캐릭터의 전투력 랭킹을 가져옵니다.")]
-    public async Task Command_CombatRank(
+    public async Task Command_Rank1(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
         [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
         [Summary("클래스이름", "클래스 이름 입력 (미입력시 모든 클래스)")] string? className = null)
+        => await ProcessCommand(1, nickname, server, className);
+    
+    [SlashCommand("매력랭킹", "캐릭터의 매력 랭킹을 가져옵니다.")]
+    public async Task Command_Rank2(
+        [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
+        [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
+        [Summary("클래스이름", "클래스 이름 입력 (미입력시 모든 클래스)")] string? className = null)
+        => await ProcessCommand(2, nickname, server, className);
+    
+    [SlashCommand("생활력랭킹", "캐릭터의 생활력 랭킹을 가져옵니다.")]
+    public async Task Command_Rank3(
+        [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
+        [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
+        [Summary("클래스이름", "클래스 이름 입력 (미입력시 모든 클래스)")] string? className = null)
+        => await ProcessCommand(3, nickname, server, className);
+
+    private async Task ProcessCommand(int rankingIndex, string nickname, MobiServer server, string? className = null)
     {
         if (string.IsNullOrWhiteSpace(nickname))
         {
@@ -16,6 +33,24 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
+        var keyword = "전투력";
+        var keywordEmoji = "⚔️";
+        switch (rankingIndex)
+        {
+            case 1:
+                keyword = "전투력";
+                keywordEmoji = "⚔️";
+                break;
+            case 2:
+                keyword = "매력";
+                keywordEmoji = "💕";
+                break;
+            case 3:
+                keyword = "생활력";
+                keywordEmoji = "🌱️";
+                break;
+        }
+        
         if (server == 0) server = MobiServer.칼릭스; //기본값 설정
 
         // 1) 3초 내 ACK
@@ -30,23 +65,24 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         try
         {
-            var result = await MobiRankBrowser.GetCombatRankBySearchAsync(nickname, server, className, cts.Token);
+            var result = await MobiRankBrowser.GetRankBySearchAsync(rankingIndex, nickname, server, className, cts.Token);
             if (result == null)
             {
                 await ModifyOriginalResponseAsync(m => m.Content =
-                    $"{server}서버에서 {nickname}의 랭킹을 찾는데 실패했어요.");
+                    $"{server}서버 {nickname}의 {keyword} 랭킹을 찾는데 실패했어요.");
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(className) || className == "모든 클래스")
+            await ModifyOriginalResponseAsync(m => m.Content = 
+                $"🔎 {server}서버 {nickname}의 {keyword} 랭킹을 찾았습니다!");
+            
+            if (string.IsNullOrWhiteSpace(className) || className == "전체 클래스")
             {
-                await ModifyOriginalResponseAsync(m => m.Content =
-                    $"🏆 [{result.ServerName}] 전체 {result.Rank:n0}위\n👤 {nickname} ({result.ClassName})\n⚔️ 전투력：{result.Power:n0}");
+                await FollowupAsync($"🏆 [{result.ServerName}] 전체 {result.Rank:n0}위\n👤 {nickname} ({result.ClassName})\n{keywordEmoji}️ {keyword}：{result.Power:n0}", ephemeral: false);
             }
             else
             {
-                await ModifyOriginalResponseAsync(m => m.Content =
-                    $"🏆 [{result.ServerName}] {className} {result.Rank:n0}위\n👤 {nickname}\n⚔️ 전투력：{result.Power:n0}");
+                await FollowupAsync($"🏆 [{result.ServerName}] {className} {result.Rank:n0}위\n👤 {nickname}\n{keywordEmoji}️ {keyword}：{result.Power:n0}", ephemeral: false);
             }
         }
         catch (TaskCanceledException)
@@ -54,5 +90,4 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
             await ModifyOriginalResponseAsync(m => m.Content = "⏱️ 작업이 제한 시간(60초)을 초과했어요.");
         }
     }
-
 }

@@ -42,11 +42,8 @@ public static class MobiRankBrowser
         ["견습 도적"] = 2058842272,
     };
 
-    /// <summary>
-    /// 서버/클래스(옵션) + 닉네임 검색으로 전투력 랭킹에서 결과 파싱.
-    /// className이 null/공백 또는 매핑 실패 시 '전체 클래스(0)' 그대로 둡니다.
-    /// </summary>
-    public static async Task<MobiRankResult?> GetCombatRankBySearchAsync(
+    public static async Task<MobiRankResult?> GetRankBySearchAsync(
+        int rankingIndex,
         string nickname,
         MobiServer? server = null,
         string? className = null,
@@ -54,6 +51,14 @@ public static class MobiRankBrowser
         Action<string>? log = null)
     {
         void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {msg}");
+
+        var keyword = "전투력";
+        switch (rankingIndex)
+        {
+            case 1: keyword = "전투력"; break;
+            case 2: keyword = "매력"; break;
+            case 3: keyword = "생활력"; break;
+        }
 
         if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
         if (nickname.Length > 12) nickname = nickname[..12]; // maxlength=12
@@ -73,7 +78,7 @@ public static class MobiRankBrowser
         context.SetDefaultNavigationTimeout(30000);     // 네비게이션은 30초로 별도 설정
 
         var page = await context.NewPageAsync();
-        await page.GotoAsync("https://mabinogimobile.nexon.com/Ranking/List?t=1",
+        await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
             new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 30000 });
 
         // 팝업/쿠키 동의(있을 때만)
@@ -130,13 +135,13 @@ public static class MobiRankBrowser
         }
 
         // 후보 블록 텍스트(닉네임+전투력 라벨 포함) 우선 추출
-        var block = await ExtractRecordBlockAsync(page, nickname);
+        var block = await ExtractRecordBlockAsync(page, nickname, keyword);
         var targetText = string.IsNullOrWhiteSpace(block)
             ? SliceAround(normAll, nickname, 500, 800)   // 최후 폴백
             : block;
         
         var rankMatch  = Regex.Match(targetText, @"([\d,]+)\s*위");
-        var powerMatch = Regex.Match(targetText, @"전투력\s*([\d,]+)");
+        var powerMatch = Regex.Match(targetText, @$"{keyword}\s*([\d,]+)");
         var serverMatch = Regex.Match(targetText, @"서버명\s*([^\s]+)");
         var classMatch  = Regex.Match(targetText, @"클래스\s*([^\s]+)");
         if (rankMatch.Success && powerMatch.Success)
@@ -178,7 +183,7 @@ public static class MobiRankBrowser
         return text[start..end];
     }
 
-    private static async Task<string> ExtractRecordBlockAsync(IPage page, string nickname)
+    private static async Task<string> ExtractRecordBlockAsync(IPage page, string nickname, string keyword)
     {
         // 닉네임/라벨(서버명/캐릭터명/클래스/전투력)을 모두 포함하는 후보를 좁혀감
         var nicknameLoc = page.Locator($":text('{nickname}')");
@@ -188,7 +193,7 @@ public static class MobiRankBrowser
             .Filter(new() { HasTextString = "서버명" })
             .Filter(new() { HasTextString = "캐릭터명" })
             .Filter(new() { HasTextString = "클래스" })
-            .Filter(new() { HasTextString = "전투력" });
+            .Filter(new() { HasTextString = keyword });
 
         var count = await candidates.CountAsync();
 
