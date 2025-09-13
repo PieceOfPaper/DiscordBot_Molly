@@ -12,7 +12,7 @@ public record MobiRankResult(
 public static class MobiRankBrowser
 {
     // 클래스명 → classid 매핑 (질문에 제공된 값 기준)
-    private static readonly Dictionary<string, long> ClassNameToId = new(StringComparer.Ordinal)
+    private static readonly Dictionary<string, long> CLASSNAME_TO_ID = new(StringComparer.Ordinal)
     {
         ["전체 클래스"] = 0,
         ["전사"] = 1285686831,
@@ -42,6 +42,30 @@ public static class MobiRankBrowser
         ["견습 도적"] = 2058842272,
     };
 
+    private static readonly BrowserTypeLaunchOptions s_BrowserTypeLaunchOpt = new()
+    {
+        Headless = true,
+        Args = new[] {
+            "--disable-dev-shm-usage", // /dev/shm 작을 때 크래시 방지
+            "--no-default-browser-check",
+            "--disable-background-networking",
+            "--disable-features=Translate,BackForwardCache,AcceptCHFrame",
+            "--mute-audio"
+            // 필요 시(보안 주의): "--no-sandbox"
+        },
+    };
+    private static readonly BrowserNewContextOptions s_BrowserNewContextOpt = new()
+    {
+        UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Locale = "ko-KR",
+        TimezoneId = "Asia/Seoul",
+    };
+    private static readonly PageGotoOptions s_PageGotoOpt = new()
+    {
+        WaitUntil = WaitUntilState.DOMContentLoaded,
+        Timeout = 30000,
+    };
+
     public static async Task<MobiRankResult?> GetRankBySearchAsync(
         int rankingIndex,
         string nickname,
@@ -65,26 +89,10 @@ public static class MobiRankBrowser
 
         Log($"Start Search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
 
-        var pw = await Playwright.CreateAsync();
-        await using var browser = await pw.Chromium.LaunchAsync(new()
-        {
-            Headless = true,
-            Args = new[] {
-                "--disable-dev-shm-usage", // /dev/shm 작을 때 크래시 방지
-                "--no-default-browser-check",
-                "--disable-background-networking",
-                "--disable-features=Translate,BackForwardCache,AcceptCHFrame",
-                "--mute-audio"
-                // 필요 시(보안 주의): "--no-sandbox"
-            },
-        });
+        using var pw = await Playwright.CreateAsync();
+        await using var browser = await pw.Chromium.LaunchAsync(s_BrowserTypeLaunchOpt);
 
-        var context = await browser.NewContextAsync(new()
-        {
-            UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            Locale = "ko-KR",
-            TimezoneId = "Asia/Seoul"
-        });
+        await using var context = await browser.NewContextAsync(s_BrowserNewContextOpt);
         await context.RouteAsync("**/*", async route =>
         {
             var t = route.Request.ResourceType;
@@ -97,8 +105,7 @@ public static class MobiRankBrowser
         context.SetDefaultNavigationTimeout(30000);     // 네비게이션은 30초로 별도 설정
 
         var page = await context.NewPageAsync();
-        await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
-            new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 30000 });
+        await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}", s_PageGotoOpt);
 
         // 팝업/쿠키 동의(있을 때만)
         await TryClick(page, "button:has-text('동의')", 800);
@@ -116,7 +123,7 @@ public static class MobiRankBrowser
 
         // 2) 클래스 선택 (옵션, 기본 전체 클래스)
         var classId = 0L;
-        if (!string.IsNullOrWhiteSpace(className) && ClassNameToId.TryGetValue(className.Trim(), out var cid))
+        if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
             classId = cid;
 
         if (classId != 0)
@@ -150,6 +157,7 @@ public static class MobiRankBrowser
         if (idx < 0)
         {
             Log("Nickname not present after search.");
+            await page.CloseAsync();
             return null;
         }
 
@@ -169,10 +177,12 @@ public static class MobiRankBrowser
             int power = int.Parse(powerMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
             string serverName = serverMatch.Success ? serverMatch.Groups[1].Value : (server is not null ? server.Value.ToString() : "-");
             string classSel   = classMatch.Success ? classMatch.Groups[1].Value : (classId == 0 ? "전체 클래스" : (className ?? "-"));
+            await page.CloseAsync();
             return new MobiRankResult(rank, power, serverName, classSel);
         }
 
         Log("Parse failed. (Consider saving a screenshot for debugging.)");
+        await page.CloseAsync();
         return null;
     }
 
