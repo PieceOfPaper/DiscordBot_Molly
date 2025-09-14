@@ -72,6 +72,8 @@ public static class MobiRankBrowser
         WaitUntil = WaitUntilState.DOMContentLoaded,
         Timeout = 30000,
     };
+    private const int SELECT_TIMEOUT = 2000;
+    private const int SELECT_RENDER_WAIT_TIME = 1000; //무언가 선택했을 때 렌더링까지 대기하는 시간
 
     public class BrowserContainer : IAsyncDisposable
     {
@@ -114,7 +116,7 @@ public static class MobiRankBrowser
 
         public async Task<MobiRankResult?> Run(
             string nickname,
-            MobiServer? server = null,
+            MobiServer server,
             string? className = null,
             CancellationToken ct = default,
             Action<string>? log = null)
@@ -143,7 +145,7 @@ public static class MobiRankBrowser
             if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
             if (nickname.Length > 12) nickname = nickname[..12]; // maxlength=12
 
-            Log($"start search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
+            Log($"start search(nickname='{nickname}', server={server}, class='{className ?? "전체 클래스"}')");
 
             var page = await m_BrowserContext.NewPageAsync();
             Log("NewPageAsync success");
@@ -154,16 +156,14 @@ public static class MobiRankBrowser
 
             
             // 1) 서버 선택
-            if (server is not null)
-            {
-                // 서버 드롭다운(현재 선택 텍스트가 서버명인 select_box)을 열고 서버 li 클릭
-                // 보통 서버/클래스 2개의 select_box가 있는데, 서버는 '칼릭스/데이안...'처럼 서버명이 보입니다.
-                await TryClick(page, "div.select_box .selected", 1500); // 첫 번째 박스가 서버일 확률이 높음
-                var ok = await TryClick(page, $"li[data-searchtype='serverid'][data-serverid='{(int)server.Value}']", 2000);
-                await page.WaitForTimeoutAsync(600);
-                Log("select server success");
-            }
+            // 서버 드롭다운(현재 선택 텍스트가 서버명인 select_box)을 열고 서버 li 클릭
+            // 보통 서버/클래스 2개의 select_box가 있는데, 서버는 '칼릭스/데이안...'처럼 서버명이 보입니다.
+            await TryClick(page, "div.select_box .selected", SELECT_TIMEOUT); // 첫 번째 박스가 서버일 확률이 높음
+            var serverClickResult = await TryClick(page, $"li[data-searchtype='serverid'][data-serverid='{(int)server}']", 2000);
+            await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
+            Log($"select server - {serverClickResult}");
 
+            
             // 2) 클래스 선택
             var classId = 0L;
             if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
@@ -177,18 +177,19 @@ public static class MobiRankBrowser
 
             await SafeClick(classBox.Locator(".selected"), Log);
             var classClickResult = await SafeClick(classBox.Locator($"li[data-searchtype='classid'][data-classid='{classId}']"), Log);
-            await page.WaitForTimeoutAsync(600);
-            Log("select class success");
+            await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
+            Log($"select class - {classClickResult}");
 
+            
             // 3) 닉네임 검색
-            await TryFill(page, "input[name='search']", nickname, 2000);
-            await TryClick(page, "button[data-searchtype='search']", 2000);
-            await page.WaitForTimeoutAsync(800); // 부분 렌더링 안정 대기
+            await TryFill(page, "input[name='search']", nickname, SELECT_TIMEOUT);
+            await TryClick(page, "button[data-searchtype='search']", SELECT_TIMEOUT);
+            await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME); // 부분 렌더링 안정 대기
             Log("send nickname success");
 
+            
             // 4) 결과 파싱
             var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
-            Log($"all texts: {allText.Length}");
             var normAll = Regex.Replace(allText ?? "", @"\\s+", " ").Trim(); // <- 실수 방지! 아래서 즉시 올바른 버전으로 다시 계산
             normAll = Regex.Replace(allText ?? "", @"\s+", " ").Trim();
 
@@ -215,7 +216,7 @@ public static class MobiRankBrowser
             {
                 int rank = int.Parse(rankMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
                 int power = int.Parse(powerMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
-                string serverName = serverMatch.Success ? serverMatch.Groups[1].Value : (server is not null ? server.Value.ToString() : "-");
+                string serverName = serverMatch.Success ? serverMatch.Groups[1].Value : server.ToString();
                 string classSel = classMatch.Success ? classMatch.Groups[1].Value : (classId == 0 ? "전체 클래스" : (className ?? "-"));
                 await page.CloseAsync();
                 m_IsRunning = false;
@@ -266,7 +267,7 @@ public static class MobiRankBrowser
     public static async Task<MobiRankResult?> GetRankBySearchAsync(
         int rankingIndex,
         string nickname,
-        MobiServer? server = null,
+        MobiServer server,
         string? className = null,
         CancellationToken ct = default,
         Action<string>? log = null)
