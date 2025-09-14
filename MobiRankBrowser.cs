@@ -72,8 +72,8 @@ public static class MobiRankBrowser
         WaitUntil = WaitUntilState.DOMContentLoaded,
         Timeout = 30000,
     };
-    private const int SELECT_TIMEOUT = 2000;
-    private const int SELECT_RENDER_WAIT_TIME = 1000; //무언가 선택했을 때 렌더링까지 대기하는 시간
+    private const int SELECT_TIMEOUT = 5000;
+    private const int SELECT_RENDER_WAIT_TIME = 5000; //무언가 선택했을 때 렌더링까지 대기하는 시간
 
     public class BrowserContainer : IAsyncDisposable
     {
