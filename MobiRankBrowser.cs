@@ -156,23 +156,9 @@ public static class MobiRankBrowser
             Log("page.GotoAsync success");
 
 
-            // -------------------- 서버 선택 --------------------
-            var serverBox = FindSelectBox(page, "server");
-
-            // server는 enum이라면 한글 표시명이 필요할 수 있음.
-            // 이미 로그에 '칼릭스'처럼 나오니 ToString()으로 충분할 가능성이 큼.
-            // 필요하면 별도 맵으로 표시명 확보:
-            var serverDisplay = server.ToString(); // 예: "칼릭스"
-            var serverId = (int)server;            // 예: 7
-
-            var serverOk = await SelectFromDropdownAsync(
-                page,
-                serverBox,
-                $"li[data-searchtype='serverid'][data-serverid='{serverId}']",
-                serverDisplay,                // 확인 텍스트. 표시명이 다르면 null로 두고 attr/class 검증만 해도 됨
-                SELECT_TIMEOUT,
-                Log
-            );
+            // 서버 선택
+            var serverId = (int)server;          // 예: 칼릭스=7
+            var serverOk = await SelectByDataAsync(page, "serverid", serverId.ToString(), server.ToString(), SELECT_TIMEOUT, Log);
             await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
             Log($"select server - {serverOk}");
 
@@ -486,4 +472,85 @@ public static class MobiRankBrowser
             return false;
         }
     }
+
+    private static async Task<bool> SelectByDataAsync(
+        IPage page,
+        string dataType, // "serverid" 또는 "classid"
+        string value, // 예: "7" (칼릭스) / "0" (전체 클래스)
+        string? expectSelectedText, // 선택 후 .selected에 기대하는 텍스트(검증용). 모르면 null
+        int timeoutMs,
+        Action<string> log)
+    {
+        // 페이지에 select_box가 최소 2개 나타날 때까지 대기
+        var boxes = page.Locator("div.select_box");
+        await boxes.First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = Math.Max(timeoutMs, 4000) });
+
+        var boxCount = await boxes.CountAsync();
+        if (boxCount == 0)
+        {
+            log("no select_box found");
+            return false;
+        }
+
+        // 최대 2개만 검사 (서버/클래스)
+        var indices = new int[] { 0, 1 }.Where(i => i < boxCount);
+
+        foreach (var i in indices)
+        {
+            var box = boxes.Nth(i);
+
+            // 1) 드롭다운 펼치기 (광고/서드파티 네비게이션에 영향 안 받게 NoWaitAfter)
+            await box.Locator(".selected").ClickAsync(new() { Timeout = timeoutMs, NoWaitAfter = true });
+
+            // 2) 올바른 타입의 항목이 나타나는지 짧게 확인
+            var pattern = $"li[data-searchtype='{dataType}']";
+            var found = await page.Locator(pattern).First.WaitForAsync(
+                new() { State = WaitForSelectorState.Visible, Timeout = 1200 }
+            ).ContinueWith(t => t.Status == TaskStatus.RanToCompletion);
+
+            if (!found)
+            {
+                // 다른 박스일 가능성 → 닫고 다음 후보로
+                await page.Keyboard.PressAsync("Escape");
+                continue;
+            }
+
+            // 3) 원하는 값 클릭
+            var option = page.Locator($"li[data-searchtype='{dataType}'][data-{dataType}='{value}']").First;
+            await option.ClickAsync(new() { Timeout = timeoutMs, NoWaitAfter = true });
+
+            // 4) 약간의 안정화
+            await page.WaitForTimeoutAsync(150);
+
+            // 5) 선택 검증
+            try
+            {
+                // (A) 기대 텍스트로 검증
+                if (!string.IsNullOrWhiteSpace(expectSelectedText))
+                {
+                    var selText = (await box.Locator(".selected").InnerTextAsync()).Trim();
+                    var ok = selText.Contains(expectSelectedText!, StringComparison.OrdinalIgnoreCase);
+                    log($"verify text: '{selText}' ?~ '{expectSelectedText}' => {ok}");
+                    if (ok) return true;
+                }
+
+                // (B) li의 상태로 검증
+                var selectedAttr = await option.GetAttributeAsync("data-selected");
+                var cls = await option.GetAttributeAsync("class");
+                var ok2 = string.Equals(selectedAttr, "true", StringComparison.OrdinalIgnoreCase)
+                          || (cls?.Split(' ').Contains("on") ?? false);
+                log($"verify attr/class: data-selected={selectedAttr}, class={cls} => {ok2}");
+                return ok2;
+            }
+            finally
+            {
+                // 혹시 열려 있으면 닫기 (다음 동작에 간섭 방지)
+                await page.Keyboard.PressAsync("Escape");
+            }
+        }
+
+        log("no matching select_box responded with requested dataType.");
+        return false;
+    }
+
 }
