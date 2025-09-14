@@ -46,12 +46,14 @@ public static class MobiRankBrowser
     {
         Headless = true,
         Args = new[] {
-            "--disable-dev-shm-usage", // /dev/shm 작을 때 크래시 방지
+            "--no-sandbox",              // ★ 핵심: systemd 하드닝과 충돌 회피
+            "--disable-setuid-sandbox",  // 보조
+            "--disable-dev-shm-usage",
             "--no-default-browser-check",
             "--disable-background-networking",
             "--disable-features=Translate,BackForwardCache,AcceptCHFrame",
-            "--mute-audio"
-            // 필요 시(보안 주의): "--no-sandbox"
+            "--mute-audio",
+            "--no-zygote"                // (선택) 프로세스 수 감축
         },
     };
     private static readonly BrowserNewContextOptions s_BrowserNewContextOpt = new()
