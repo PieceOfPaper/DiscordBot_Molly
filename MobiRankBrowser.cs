@@ -53,7 +53,8 @@ public static class MobiRankBrowser
             "--disable-background-networking",
             "--disable-features=Translate,BackForwardCache,AcceptCHFrame",
             "--mute-audio",
-            "--no-zygote"                // (선택) 프로세스 수 감축
+            "--no-zygote",                // (선택) 프로세스 수 감축
+            "--renderer-process-limit=1",   // 렌더러 동시 수 최소화
         },
     };
     private static readonly BrowserNewContextOptions s_BrowserNewContextOpt = new()
@@ -85,7 +86,7 @@ public static class MobiRankBrowser
         private bool m_IsRunning = false;
         public bool isRunning => m_IsRunning;
 
-        private async Task Init(Action<string>? log = null)
+        private async Task Init(CancellationToken ct = default, Action<string>? log = null)
         {
             void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {rankingIndex}_{index}: {msg}");
 
@@ -123,7 +124,7 @@ public static class MobiRankBrowser
             void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {rankingIndex}_{index}: {msg}");
 
             //Init!
-            if (m_IsInited == false) await Init();
+            if (m_IsInited == false) await Init(ct, log);
 
             var keyword = "전투력";
             switch (rankingIndex)
@@ -142,8 +143,7 @@ public static class MobiRankBrowser
             if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
             if (nickname.Length > 12) nickname = nickname[..12]; // maxlength=12
 
-            Log($"Start Search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
-
+            Log($"start search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
 
             var page = await m_BrowserContext.NewPageAsync();
             Log("NewPageAsync success");
@@ -152,11 +152,8 @@ public static class MobiRankBrowser
             await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}", s_PageGotoOpt);
             Log("page.GotoAsync success");
 
-            // 팝업/쿠키 동의(있을 때만)
-            // await TryClick(page, "button:has-text('동의')", 800);
-            // await TryClick(page, "button:has-text('확인')", 800);
-
-            // 1) 서버 선택 (옵션)
+            
+            // 1) 서버 선택
             if (server is not null)
             {
                 // 서버 드롭다운(현재 선택 텍스트가 서버명인 select_box)을 열고 서버 li 클릭
@@ -167,12 +164,11 @@ public static class MobiRankBrowser
                 Log("select server success");
             }
 
-            // 2) 클래스 선택 (옵션, 기본 전체 클래스)
+            // 2) 클래스 선택
             var classId = 0L;
             if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
                 classId = cid;
 
-            
             // 클래스 드롭다운은 기본 텍스트가 '전체 클래스' — 그 상자만 명시적으로 찾자
             var classBox = page.Locator("div.select_box:has(.selected:has-text('전체 클래스'))").First;
             // 혹시 이미 바뀐 상태(= selected가 다른 클래스명)일 수도 있으니 fallback도 준비
@@ -192,6 +188,7 @@ public static class MobiRankBrowser
 
             // 4) 결과 파싱
             var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
+            Log($"all texts: {allText.Length}");
             var normAll = Regex.Replace(allText ?? "", @"\\s+", " ").Trim(); // <- 실수 방지! 아래서 즉시 올바른 버전으로 다시 계산
             normAll = Regex.Replace(allText ?? "", @"\s+", " ").Trim();
 
