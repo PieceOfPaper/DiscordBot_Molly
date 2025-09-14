@@ -72,14 +72,42 @@ public static class MobiRankBrowser
 
     public class BrowserContainer : IAsyncDisposable
     {
-        public int rankingIndex;
+        public int rankingIndex = 0;
+        public int index = 0;
 
+        private bool m_IsInited = false;
         private IPlaywright m_Pw;
         private IBrowser m_Browser;
         private IBrowserContext m_BrowserContext;
 
         private bool m_IsRunning = false;
         public bool isRunning => m_IsRunning;
+
+        private async Task Init(Action<string>? log = null)
+        {
+            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {rankingIndex}_{index}: {msg}");
+
+            m_Pw = await Playwright.CreateAsync();
+            Log("init pw");
+            m_Browser = await m_Pw.Chromium.LaunchAsync(s_BrowserTypeLaunchOpt);
+            Log("init browser");
+
+            m_BrowserContext = await m_Browser.NewContextAsync(s_BrowserNewContextOpt);
+            await m_BrowserContext.RouteAsync("**/*",
+                async route =>
+                {
+                    var t = route.Request.ResourceType;
+                    if (t is "image" or "media" or "font")
+                        await route.AbortAsync();
+                    else
+                        await route.ContinueAsync();
+                });
+            m_BrowserContext.SetDefaultTimeout(5000); // 일반 동작(클릭/채우기)은 5초
+            m_BrowserContext.SetDefaultNavigationTimeout(30000); // 네비게이션은 30초로 별도 설정
+            Log("init browser context");
+
+            m_IsInited = true;
+        }
 
         public async Task<MobiRankResult?> Run(
             string nickname,
@@ -90,7 +118,10 @@ public static class MobiRankBrowser
         {
             m_IsRunning = true;
             
-            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {msg}");
+            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {rankingIndex}_{index}: {msg}");
+
+            //Init!
+            if (m_IsInited == false) await Init();
 
             var keyword = "전투력";
             switch (rankingIndex)
@@ -111,28 +142,13 @@ public static class MobiRankBrowser
 
             Log($"Start Search(nickname='{nickname}', server={(server?.ToString() ?? "null")}, class='{className ?? "전체 클래스"}')");
 
-            if (m_Pw == null) m_Pw = await Playwright.CreateAsync();
-            if (m_Browser == null) m_Browser = await m_Pw.Chromium.LaunchAsync(s_BrowserTypeLaunchOpt);
-
-            if (m_BrowserContext == null)
-            {
-                m_BrowserContext = await m_Browser.NewContextAsync(s_BrowserNewContextOpt);
-                await m_BrowserContext.RouteAsync("**/*",
-                    async route =>
-                    {
-                        var t = route.Request.ResourceType;
-                        if (t is "image" or "media" or "font")
-                            await route.AbortAsync();
-                        else
-                            await route.ContinueAsync();
-                    });
-                m_BrowserContext.SetDefaultTimeout(5000); // 일반 동작(클릭/채우기)은 5초
-                m_BrowserContext.SetDefaultNavigationTimeout(30000); // 네비게이션은 30초로 별도 설정
-            }
 
             var page = await m_BrowserContext.NewPageAsync();
+            Log("NewPageAsync success");
             await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
+            Log("page.RouteAsync success");
             await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}", s_PageGotoOpt);
+            Log("page.GotoAsync success");
 
             // 팝업/쿠키 동의(있을 때만)
             // await TryClick(page, "button:has-text('동의')", 800);
@@ -146,6 +162,7 @@ public static class MobiRankBrowser
                 await TryClick(page, "div.select_box .selected", 1500); // 첫 번째 박스가 서버일 확률이 높음
                 var ok = await TryClick(page, $"li[data-searchtype='serverid'][data-serverid='{(int)server.Value}']", 2000);
                 await page.WaitForTimeoutAsync(600);
+                Log("select server success");
             }
 
             // 2) 클래스 선택 (옵션, 기본 전체 클래스)
@@ -153,27 +170,23 @@ public static class MobiRankBrowser
             if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
                 classId = cid;
 
-            if (classId != 0)
-            {
-                // 클래스 드롭다운은 기본 텍스트가 '전체 클래스' — 그 상자만 명시적으로 찾자
-                var classBox = page.Locator("div.select_box:has(.selected:has-text('전체 클래스'))").First;
-                // 혹시 이미 바뀐 상태(= selected가 다른 클래스명)일 수도 있으니 fallback도 준비
-                if (await classBox.CountAsync() == 0)
-                    classBox = page.Locator("div.select_box").Nth(1); // 2번째 select_box로 추정
+            
+            // 클래스 드롭다운은 기본 텍스트가 '전체 클래스' — 그 상자만 명시적으로 찾자
+            var classBox = page.Locator("div.select_box:has(.selected:has-text('전체 클래스'))").First;
+            // 혹시 이미 바뀐 상태(= selected가 다른 클래스명)일 수도 있으니 fallback도 준비
+            if (await classBox.CountAsync() == 0)
+                classBox = page.Locator("div.select_box").Nth(1); // 2번째 select_box로 추정
 
-                await SafeClick(classBox.Locator(".selected"), Log);
-                var ok = await SafeClick(classBox.Locator($"li[data-searchtype='classid'][data-classid='{classId}']"), Log);
-                await page.WaitForTimeoutAsync(600);
-            }
-            else
-            {
-                Log("Class: 전체 클래스(기본) 그대로 사용.");
-            }
+            await SafeClick(classBox.Locator(".selected"), Log);
+            var classClickResult = await SafeClick(classBox.Locator($"li[data-searchtype='classid'][data-classid='{classId}']"), Log);
+            await page.WaitForTimeoutAsync(600);
+            Log("select class success");
 
             // 3) 닉네임 검색
             await TryFill(page, "input[name='search']", nickname, 2000);
             await TryClick(page, "button[data-searchtype='search']", 2000);
             await page.WaitForTimeoutAsync(800); // 부분 렌더링 안정 대기
+            Log("send nickname success");
 
             // 4) 결과 파싱
             var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
@@ -218,9 +231,12 @@ public static class MobiRankBrowser
 
         public async ValueTask DisposeAsync()
         {
-            if (m_BrowserContext != null) await m_BrowserContext.DisposeAsync();
-            if (m_Browser != null) await m_Browser.DisposeAsync();
-            if (m_Pw != null) m_Pw.Dispose();
+            if (m_IsInited == false)
+                return;
+            
+            await m_BrowserContext.DisposeAsync();
+            await m_Browser.DisposeAsync();
+            m_Pw.Dispose();
         }
     }
 
@@ -266,7 +282,7 @@ public static class MobiRankBrowser
             for (var i = 0; i < BROWSER_COUNT; i ++)
             {
                 if (i >= list.Count)
-                    list.Add(new() { rankingIndex = rankingIndex });
+                    list.Add(new() { rankingIndex = rankingIndex, index = i });
 
                 if (list[i].isRunning) continue;
 
