@@ -72,8 +72,8 @@ public static class MobiRankBrowser
         WaitUntil = WaitUntilState.DOMContentLoaded,
         Timeout = 30000,
     };
-    private const int SELECT_TIMEOUT = 5000;
-    private const int SELECT_RENDER_WAIT_TIME = 5000; //무언가 선택했을 때 렌더링까지 대기하는 시간
+    private const int SELECT_TIMEOUT = 2000;
+    private const int SELECT_RENDER_WAIT_TIME = 2000; //무언가 선택했을 때 렌더링까지 대기하는 시간
 
     public class BrowserContainer : IAsyncDisposable
     {
@@ -182,10 +182,10 @@ public static class MobiRankBrowser
 
             
             // 3) 닉네임 검색
-            await TryFill(page, "input[name='search']", nickname, SELECT_TIMEOUT);
-            await TryClick(page, "button[data-searchtype='search']", SELECT_TIMEOUT);
+            var nicknameFillResult = await TryFill(page, "input[name='search']", nickname, SELECT_TIMEOUT);
+            var nicknameClickResult = await TryClick(page, "button[data-searchtype='search']", SELECT_TIMEOUT);
             await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME); // 부분 렌더링 안정 대기
-            Log("send nickname success");
+            Log($"send nickname - {nicknameFillResult}, {nicknameClickResult}");
 
             
             // 4) 결과 파싱
