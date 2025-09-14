@@ -45,16 +45,17 @@ public static class MobiRankBrowser
     private static readonly BrowserTypeLaunchOptions s_BrowserTypeLaunchOpt = new()
     {
         Headless = true,
-        Args = new[] {
-            "--no-sandbox",              // ★ 핵심: systemd 하드닝과 충돌 회피
-            "--disable-setuid-sandbox",  // 보조
+        Args = new[]
+        {
+            "--no-sandbox", // ★ 핵심: systemd 하드닝과 충돌 회피
+            "--disable-setuid-sandbox", // 보조
             "--disable-dev-shm-usage",
             "--no-default-browser-check",
             "--disable-background-networking",
             "--disable-features=Translate,BackForwardCache,AcceptCHFrame",
             "--mute-audio",
-            "--no-zygote",                // (선택) 프로세스 수 감축
-            "--renderer-process-limit=1",   // 렌더러 동시 수 최소화
+            "--no-zygote", // (선택) 프로세스 수 감축
+            "--renderer-process-limit=1", // 렌더러 동시 수 최소화
         },
     };
     private static readonly BrowserNewContextOptions s_BrowserNewContextOpt = new()
@@ -122,7 +123,7 @@ public static class MobiRankBrowser
             Action<string>? log = null)
         {
             m_IsRunning = true;
-            
+
             void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {rankingIndex}_{index}: {msg}");
 
             //Init!
@@ -154,40 +155,57 @@ public static class MobiRankBrowser
             await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}", s_PageGotoOpt);
             Log("page.GotoAsync success");
 
-            
-            // 1) 서버 선택
-            // 서버 드롭다운(현재 선택 텍스트가 서버명인 select_box)을 열고 서버 li 클릭
-            // 보통 서버/클래스 2개의 select_box가 있는데, 서버는 '칼릭스/데이안...'처럼 서버명이 보입니다.
-            await TryClick(page, "div.select_box .selected", SELECT_TIMEOUT); // 첫 번째 박스가 서버일 확률이 높음
-            var serverClickResult = await TryClick(page, $"li[data-searchtype='serverid'][data-serverid='{(int)server}']", 2000);
+
+            // -------------------- 서버 선택 --------------------
+            var serverBox = FindSelectBox(page, "server");
+
+            // server는 enum이라면 한글 표시명이 필요할 수 있음.
+            // 이미 로그에 '칼릭스'처럼 나오니 ToString()으로 충분할 가능성이 큼.
+            // 필요하면 별도 맵으로 표시명 확보:
+            var serverDisplay = server.ToString(); // 예: "칼릭스"
+            var serverId = (int)server;            // 예: 7
+
+            var serverOk = await SelectFromDropdownAsync(
+                page,
+                serverBox,
+                $"li[data-searchtype='serverid'][data-serverid='{serverId}']",
+                serverDisplay,                // 확인 텍스트. 표시명이 다르면 null로 두고 attr/class 검증만 해도 됨
+                SELECT_TIMEOUT,
+                Log
+            );
             await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
-            Log($"select server - {serverClickResult}");
+            Log($"select server - {serverOk}");
 
             
-            // 2) 클래스 선택
-            var classId = 0L;
+            // -------------------- 클래스 선택 --------------------
+            long classId = 0;
             if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
                 classId = cid;
 
-            // 클래스 드롭다운은 기본 텍스트가 '전체 클래스' — 그 상자만 명시적으로 찾자
-            var classBox = page.Locator("div.select_box:has(.selected:has-text('전체 클래스'))").First;
-            // 혹시 이미 바뀐 상태(= selected가 다른 클래스명)일 수도 있으니 fallback도 준비
-            if (await classBox.CountAsync() == 0)
-                classBox = page.Locator("div.select_box").Nth(1); // 2번째 select_box로 추정
+            // classBox 먼저 안정적으로 찾기
+            var classBox = FindSelectBox(page, "class");
 
-            await SafeClick(classBox.Locator(".selected"), Log);
-            var classClickResult = await SafeClick(classBox.Locator($"li[data-searchtype='classid'][data-classid='{classId}']"), Log);
+            // 표시명(검증용). 0이면 '전체 클래스'로 기대.
+            var classDisplay = classId == 0 ? "전체 클래스" : className?.Trim();
+            var classOk = await SelectFromDropdownAsync(
+                page,
+                classBox,
+                $"li[data-searchtype='classid'][data-classid='{classId}']",
+                classDisplay,                 // 표시명 검증. 필요 없다면 null
+                SELECT_TIMEOUT,
+                Log
+            );
             await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
-            Log($"select class - {classClickResult}");
+            Log($"select class - {classOk}");
 
-            
+
             // 3) 닉네임 검색
             var nicknameFillResult = await TryFill(page, "input[name='search']", nickname, SELECT_TIMEOUT);
             var nicknameClickResult = await TryClick(page, "button[data-searchtype='search']", SELECT_TIMEOUT);
             await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME); // 부분 렌더링 안정 대기
             Log($"send nickname - {nicknameFillResult}, {nicknameClickResult}");
 
-            
+
             // 4) 결과 파싱
             var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
             var normAll = Regex.Replace(allText ?? "", @"\\s+", " ").Trim(); // <- 실수 방지! 아래서 즉시 올바른 버전으로 다시 계산
@@ -233,7 +251,7 @@ public static class MobiRankBrowser
         {
             if (m_IsInited == false)
                 return;
-            
+
             await m_BrowserContext.DisposeAsync();
             await m_Browser.DisposeAsync();
             m_Pw.Dispose();
@@ -253,7 +271,7 @@ public static class MobiRankBrowser
 
             if (m_BrowserQueues[rankingIndex].Count < BROWSER_COUNT)
                 return false;
-        
+
             for (var i = 0; i < BROWSER_COUNT; i ++)
             {
                 if (m_BrowserQueues[rankingIndex][i].isRunning == false)
@@ -263,7 +281,7 @@ public static class MobiRankBrowser
 
         return true;
     }
-    
+
     public static async Task<MobiRankResult?> GetRankBySearchAsync(
         int rankingIndex,
         string nickname,
@@ -299,18 +317,34 @@ public static class MobiRankBrowser
     // ---------------- helpers ----------------
     private static async Task<bool> TryClick(IPage page, string selector, int timeoutMs = 1000)
     {
-        try { await page.Locator(selector).First.ClickAsync(new() { Timeout = timeoutMs }); return true; }
+        try
+        {
+            await page.Locator(selector).First.ClickAsync(new() { Timeout = timeoutMs });
+            return true;
+        }
         catch { return false; }
     }
     private static async Task<bool> TryFill(IPage page, string selector, string text, int timeoutMs = 1000)
     {
-        try { await page.Locator(selector).First.FillAsync(text, new() { Timeout = timeoutMs }); return true; }
+        try
+        {
+            await page.Locator(selector).First.FillAsync(text, new() { Timeout = timeoutMs });
+            return true;
+        }
         catch { return false; }
     }
     private static async Task<bool> SafeClick(ILocator locator, Action<string> log)
     {
-        try { await locator.First.ClickAsync(); return true; }
-        catch (Exception ex) { log($"Click failed: {ex.Message}"); return false; }
+        try
+        {
+            await locator.First.ClickAsync();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log($"Click failed: {ex.Message}");
+            return false;
+        }
     }
 
     private static string SliceAround(string text, string key, int back, int fwd)
@@ -318,7 +352,7 @@ public static class MobiRankBrowser
         int i = text.IndexOf(key, StringComparison.Ordinal);
         if (i < 0) return text;
         int start = Math.Max(0, i - back);
-        int end   = Math.Min(text.Length, i + fwd);
+        int end = Math.Min(text.Length, i + fwd);
         return text[start..end];
     }
 
@@ -328,7 +362,7 @@ public static class MobiRankBrowser
         var nicknameLoc = page.Locator($":text('{nickname}')");
 
         var candidates = page.Locator("li, div, article, section, tr")
-            .Filter(new() { Has = nicknameLoc })                  // 닉네임 포함
+            .Filter(new() { Has = nicknameLoc }) // 닉네임 포함
             .Filter(new() { HasTextString = "서버명" })
             .Filter(new() { HasTextString = "캐릭터명" })
             .Filter(new() { HasTextString = "클래스" })
@@ -343,7 +377,7 @@ public static class MobiRankBrowser
 
         // 여러 개면 텍스트 길이가 가장 짧은(=개별 항목일 확률이 높은) 것을 선택
         string? best = null;
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < count; i ++)
         {
             var t = await candidates.Nth(i).InnerTextAsync() ?? "";
             var norm = Regex.Replace(t, @"\s+", " ").Trim();
@@ -355,7 +389,7 @@ public static class MobiRankBrowser
 
         return best!;
     }
-    
+
     private static string SliceOneRecordFromPlain(string all, string nickname)
     {
         // 공백 정규화
@@ -375,5 +409,81 @@ public static class MobiRankBrowser
 
         var block = text.Substring(startRank, Math.Min(end - startRank, 600));
         return block;
+    }
+
+    // select_box를 "서버/클래스" 타입으로 안정적으로 찾기
+    private static ILocator FindSelectBox(IPage page, string type)
+    {
+        // 1순위: 내부에 해당 타입의 li가 실제로 존재하는 박스 매칭
+        var byType = type switch
+        {
+            "server" => page.Locator("div.select_box").Filter(new() { Has = page.Locator("li[data-searchtype='serverid']") }),
+            "class" => page.Locator("div.select_box").Filter(new() { Has = page.Locator("li[data-searchtype='classid']") }),
+            _ => page.Locator("div.select_box")
+        };
+
+        return byType.CountAsync().GetAwaiter().GetResult() > 0
+            ? byType.First
+            : // 2순위: 위치 휴리스틱(페이지 구조가 고정이라면)
+            (type == "server"
+                ? page.Locator("div.select_box").Nth(0)
+                : page.Locator("div.select_box").Nth(1));
+    }
+
+    // 공용 드롭다운 선택 루틴
+    private static async Task<bool> SelectFromDropdownAsync(
+        IPage page,
+        ILocator selectBox, // div.select_box
+        string optionCss, // 예: "li[data-searchtype='serverid'][data-serverid='7']"
+        string? expectSelectedText, // 선택 후 .selected에 포함될(기대) 텍스트. 검증 생략하려면 null
+        int timeoutMs,
+        Action<string> log)
+    {
+        // 1) 드롭다운 펼치기
+        await selectBox.Locator(".selected").ClickAsync(new() { Timeout = timeoutMs });
+
+        // 2) 옵션 목록 노출 대기(최소 하나의 항목이 보이는지)
+        var option = page.Locator(optionCss).First;
+        await option.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = timeoutMs });
+
+        // 3) 옵션 클릭
+        await option.ClickAsync(new() { Timeout = timeoutMs });
+
+        // 4) 렌더링 안정화 약간
+        await page.WaitForTimeoutAsync(150);
+
+        // 5) 선택 검증
+        // (A) 기대 텍스트가 있으면 .selected에 포함되는지 확인
+        if (!string.IsNullOrWhiteSpace(expectSelectedText))
+        {
+            var selText = (await selectBox.Locator(".selected").InnerTextAsync()).Trim();
+            var ok = selText.Contains(expectSelectedText!, StringComparison.OrdinalIgnoreCase);
+            log($"select verify (.selected contains): '{selText}' vs '{expectSelectedText}' -> {ok}");
+            if (ok) return true;
+        }
+
+        // (B) 아니면 해당 li가 data-selected="true" 또는 class="on"인지로 확인
+        try
+        {
+            var selectedAttr = await option.GetAttributeAsync("data-selected");
+            var cls = await option.GetAttributeAsync("class");
+            var ok = string.Equals(selectedAttr, "true", StringComparison.OrdinalIgnoreCase)
+                     || (cls?.Split(' ').Contains("on") ?? false);
+            log($"select verify (attr/class): data-selected={selectedAttr}, class={cls} -> {ok}");
+            return ok;
+        }
+        catch
+        {
+            // 최악의 경우 한 번 더 드롭다운을 열어 현재 표시 텍스트로 재검증
+            if (!string.IsNullOrWhiteSpace(expectSelectedText))
+            {
+                await selectBox.Locator(".selected").ClickAsync(new() { Timeout = 1000 });
+                var selText = (await selectBox.Locator(".selected").InnerTextAsync()).Trim();
+                var ok = selText.Contains(expectSelectedText!, StringComparison.OrdinalIgnoreCase);
+                log($"select re-verify: '{selText}' vs '{expectSelectedText}' -> {ok}");
+                return ok;
+            }
+            return false;
+        }
     }
 }
