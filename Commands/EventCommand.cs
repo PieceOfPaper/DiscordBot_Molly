@@ -8,7 +8,7 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
     [SlashCommand("진행중인이벤트", "현재 진행중인 이벤트를 보자.")]
     public async Task Command_CurrentEvents()
     {
-        if (MobiEventBrowser.IsFullRunning())
+        if (MobiEventBrowser.IsCachingRunning())
         {
             await DeferAsync(ephemeral: true);
             await ModifyOriginalResponseAsync(m => m.Content = "잠시 후에 다시 시도해주세요.");

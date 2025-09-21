@@ -223,56 +223,34 @@ public static class MobiEventBrowser
         }
     }
 
-    private const int BROWSER_COUNT = 1;
-    private static Dictionary<int, List<BrowserContainer>> m_BrowserQueues = new();
-    private static object m_BrowserLock = new();
+    private static BrowserContainer m_CacheBrowser = new(){ index = 0 };
+    private static List<MobiEventResult> m_CachedResults = new();
+    private static DateTime m_CacheDateTime;
+    private static object m_CacheLock = new();
 
-    public static bool IsFullRunning()
-    {
-        lock (m_BrowserLock)
-        {
-            if (m_BrowserQueues.ContainsKey(0) == false)
-                return false;
-
-            if (m_BrowserQueues[9].Count < BROWSER_COUNT)
-                return false;
-
-            for (var i = 0; i < BROWSER_COUNT; i ++)
-            {
-                if (m_BrowserQueues[0][i].isRunning == false)
-                    return false;
-            }
-        }
-
-        return true;
-    }
+    public static bool IsCachingRunning() => m_CacheBrowser.isRunning;
 
     public static async Task<List<MobiEventResult>?> GetCurrentEventsAsync(
         CancellationToken ct = default,
         Action<string>? log = null)
     {
-        BrowserContainer browserContainer = null;
-        lock (m_BrowserLock)
+        if ((MobiTime.now - m_CacheDateTime).TotalHours > 1)
         {
-            if (m_BrowserQueues.ContainsKey(0) == false)
-                m_BrowserQueues.Add(0, new());
-
-            var list = m_BrowserQueues[0];
-            for (var i = 0; i < BROWSER_COUNT; i ++)
-            {
-                if (i >= list.Count)
-                    list.Add(new() { index = i });
-
-                if (list[i].isRunning) continue;
-
-                browserContainer = list[i];
-                break;
-            }
+            await CacheAsync();
         }
+        return m_CachedResults;
+    }
 
-        if (browserContainer != null)
-            return await browserContainer.Run(ct, log);
-        return null;
+    public static async Task CacheAsync()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var results = await m_CacheBrowser.Run(cts.Token);
+        lock (m_CacheLock)
+        {
+            m_CacheDateTime = MobiTime.now;
+            m_CachedResults.Clear();
+            m_CachedResults.AddRange(results);
+        }
     }
 
     private static async Task<List<(string title, string href, string range)>> ExtractEventsOnCurrentPageAsync(IPage page)

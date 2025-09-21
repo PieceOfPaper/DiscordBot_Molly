@@ -61,6 +61,8 @@ class Program
     public async Task MainAsync()
     {
         Microsoft.Playwright.Program.Main(new[] { "install" });
+
+        await MobiEventBrowser.CacheAsync();
         
         m_Client.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
         m_InteractionService.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
