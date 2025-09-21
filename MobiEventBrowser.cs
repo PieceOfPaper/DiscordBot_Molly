@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
+using System.Text.Json;
 
 public record MobiEventResult(
     string eventName, string url, DateTime start, DateTime end
@@ -114,6 +115,8 @@ public static class MobiEventBrowser
                 // 1) 목록 진입
                 await page.GotoAsync(EVENTS_URL, s_PageGotoOpt);
                 Log("page.GotoAsync success");
+                await page.WaitForSelectorAsync(".board_list li, .list li, .article_list li, article", new() { Timeout = 8000 });
+                Log("page.WaitForSelectorAsync success");
 
                 // 2) '진행중' 탭 클릭 (있을 때만)
                 try
@@ -139,8 +142,15 @@ public static class MobiEventBrowser
                     ct.ThrowIfCancellationRequested();
                     Log($"extract page {p}");
 
+                    Log($"before extract: url={page.Url}");
+                    var samples = await page.EvaluateAsync<string[]>(@"
+                        () => Array.from(document.querySelectorAll('a[href*=""/News/Events""], a[href*=""/news/events""]'))
+                              .slice(0,3)
+                              .map(a => ((a.textContent||'').trim() + ' | ' + a.href))
+                        ");
+                    foreach (var s in samples) Log($"sample anchor: {s}");
                     var items = await ExtractEventsOnCurrentPageAsync(page);
-                    Log($"extract page {p} result: {items.Count}");
+                    Log($"extracted items={items.Count}");
 
                     foreach (var it in items)
                     {
@@ -245,44 +255,79 @@ public static class MobiEventBrowser
             return await browserContainer.Run(ct, log);
         return null;
     }
+
     private static async Task<List<(string title, string href, string range)>> ExtractEventsOnCurrentPageAsync(IPage page)
     {
-        var raw = await page.EvaluateAsync<List<JsEventDto>>("""
-                                                             () => {
-                                                               const items = [];
-                                                               const nodes = Array.from(document.querySelectorAll(
-                                                                 'li, article, .list li, .board_list li, .article_list li, .item, .card, .row > div'
-                                                               ));
-                                                               for (const el of nodes) {
-                                                                 const text = (el.textContent || "").trim();
-                                                                 if (!text) continue;
-                                                                 if (!text.includes("진행중")) continue;
+        var results = new List<(string title, string href, string range)>();
 
-                                                                 const a = el.querySelector('a[href*="/News/Events"], a[href*="/news/events"]');
-                                                                 const title = (a?.textContent || "").trim();
-                                                                 const href  = a?.href || "";
-                                                                 if (!title || !href) continue;
+        // 카드가 실제로 뜰 때까지 대기
+        await page.WaitForSelectorAsync("[data-threadid]", new() { Timeout = 10000 });
 
-                                                                 let range = "";
-                                                                 const lines = text.split("\n").map(s => s.trim()).filter(Boolean);
-                                                                 for (const line of lines) {
-                                                                   if (line.includes("~") || line.includes("까지") || line.includes("별도 안내 시까지") || line.includes("상시")) {
-                                                                     range = line;
-                                                                     break;
-                                                                   }
-                                                                 }
-                                                                 items.push({ title, href, range, fullText: text });
-                                                               }
-                                                               return items;
-                                                             }
-                                                             """);
+        // JS에서 배열을 만들어 JSON.stringfy로 문자열로 반환 (Playwright 제네릭 역직렬화 우회)
+        var json = await page.EvaluateAsync<string>(@"
+() => {
+  const items = [];
+  const cards = Array.from(document.querySelectorAll('[data-threadid]'));
 
-        var list = new List<(string title, string href, string range)>();
-        foreach (var r in raw)
-            list.Add((r.title, r.href, r.range));
-        return list;
+  for (const el of cards) {
+    const id = (el.getAttribute('data-threadid') || '').trim();
+    if (!/^\d+$/.test(id)) continue;
+
+    const href = new URL('/News/Events/' + id, location.href).href;
+
+    // 제목
+    let title = (el.querySelector('.title, .tit, .subject, h3, h4, strong, .txt_tit')?.textContent || '').trim();
+    if (!title) {
+      const lines = (el.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+      // ‘이벤트 공지/바로가기/진행중/종료’ 같은 잡텍스트는 제외
+      title = (lines.find(s => !/이벤트\s*공지|바로가기|진행중|종료|이벤트\s*종료일/.test(s)) || lines[0] || '').trim();
+    }
+    if (!title) continue;
+
+    // 기간 한 줄
+    let range = '';
+    const text = (el.innerText || '').trim();
+    for (const line of text.split('\n').map(s => s.trim()).filter(Boolean)) {
+      if (line.includes('~') || line.includes('까지') || line.includes('별도 안내 시까지') || line.includes('상시')) {
+        range = line;
+        break;
+      }
     }
 
+    items.push({ title, href, range });
+  }
+
+  return JSON.stringify(items);
+}
+");
+
+        if (string.IsNullOrEmpty(json))
+            return results;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var title = el.TryGetProperty("title", out var t) ? (t.GetString() ?? "") : "";
+                var href = el.TryGetProperty("href", out var h) ? (h.GetString() ?? "") : "";
+                var range = el.TryGetProperty("range", out var r) ? (r.GetString() ?? "") : "";
+
+                if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(href))
+                    results.Add((title, href, range));
+            }
+        }
+        catch (Exception)
+        {
+            // JSON 파싱 실패 시 빈 결과 반환
+        }
+
+        // 중복 제거 (URL 기준)
+        return results
+            .GroupBy(x => x.href)
+            .Select(g => g.First())
+            .ToList();
+    }
 
     private static bool TryParseRangeKst(string range, out DateTime startKst, out DateTime endKst, out bool isPerma)
     {
