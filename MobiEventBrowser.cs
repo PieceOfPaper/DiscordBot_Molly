@@ -226,6 +226,7 @@ public static class MobiEventBrowser
     private static BrowserContainer m_CacheBrowser = new(){ index = 0 };
     private static List<MobiEventResult> m_CachedResults = new();
     private static DateTime m_CacheDateTime;
+    private static string? m_CacheFingerprint;
     private static object m_CacheLock = new();
 
     public static bool IsCachingRunning() => m_CacheBrowser.isRunning;
@@ -234,19 +235,22 @@ public static class MobiEventBrowser
         CancellationToken ct = default,
         Action<string>? log = null)
     {
-        if ((MobiTime.now - m_CacheDateTime).TotalHours > 1)
+        var fingerPrint = await MobiEventFingerprint.ComputeAsync(ct, log);
+        if (m_CacheFingerprint == null || !m_CacheFingerprint.Equals(fingerPrint, StringComparison.Ordinal))
         {
-            await CacheAsync();
+            await CacheAsync(fingerPrint);
         }
+        
         return m_CachedResults;
     }
 
-    public static async Task CacheAsync()
+    public static async Task CacheAsync(string? fingerprint)
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var results = await m_CacheBrowser.Run(cts.Token);
         lock (m_CacheLock)
         {
+            m_CacheFingerprint = fingerprint;
             m_CacheDateTime = MobiTime.now;
             m_CachedResults.Clear();
             m_CachedResults.AddRange(results);
@@ -464,4 +468,5 @@ public static class MobiEventBrowser
 
         return href;
     }
+
 }

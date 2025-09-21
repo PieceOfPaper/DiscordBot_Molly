@@ -62,7 +62,8 @@ class Program
     {
         Microsoft.Playwright.Program.Main(new[] { "install" });
 
-        await MobiEventBrowser.CacheAsync();
+        var fingerPrint = await MobiEventFingerprint.ComputeAsync();
+        await MobiEventBrowser.CacheAsync(fingerPrint);
         
         m_Client.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
         m_InteractionService.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
