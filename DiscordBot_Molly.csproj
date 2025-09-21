@@ -17,4 +17,8 @@
     <PackageReference Include="Microsoft.Playwright" Version="1.55.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="assets\**\*.*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
