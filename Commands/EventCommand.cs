@@ -36,13 +36,15 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
 
             await ModifyOriginalResponseAsync(m => m.Content = 
                 $"🔎 진행중인 이벤트를 찾았습니다!");
-            
+
+            var dateTimeNow = MobiTime.now;
             var strBuilder = new System.Text.StringBuilder();
-            strBuilder.AppendLine($"{MobiTime.now:yyyy-MM-dd HH:mm:ss} 기준 진행중인 이벤트 입니다.");
+            strBuilder.AppendLine($"{dateTimeNow:yyyy-MM-dd HH:mm:ss} 기준 진행중인 이벤트 입니다.");
+            results.Sort((a, b) => a.end.CompareTo(b.end));
             foreach (var result in results)
             {
                 strBuilder.Append('\n');
-                strBuilder.Append($"- [D-{(int)Math.Floor((result.end - result.start).TotalDays)}] {result.eventName} ({result.url})");
+                strBuilder.Append($"- [D-{(int)Math.Floor((result.end - dateTimeNow).TotalDays)}] {result.eventName} ({result.url})");
             }
             await FollowupAsync(strBuilder.ToString(), ephemeral: false);
         }

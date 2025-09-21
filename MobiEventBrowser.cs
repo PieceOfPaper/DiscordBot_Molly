@@ -94,7 +94,7 @@ public static class MobiEventBrowser
             m_IsInited = true;
         }
 
-        public async Task<IEnumerable<MobiEventResult>> Run(
+        public async Task<List<MobiEventResult>> Run(
             CancellationToken ct = default,
             Action<string>? log = null)
         {
@@ -228,7 +228,7 @@ public static class MobiEventBrowser
         return true;
     }
 
-    public static async Task<IEnumerable<MobiEventResult>?> GetCurrentEventsAsync(
+    public static async Task<List<MobiEventResult>?> GetCurrentEventsAsync(
         CancellationToken ct = default,
         Action<string>? log = null)
     {
