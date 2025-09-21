@@ -139,7 +139,7 @@ public static class MobiEventBrowser
                 // 2) 전체 페이지 수 계산 (.pagination의 data-totalcount / 1페이지의 카드 수)
                 var (totalCount, itemsPerPage, totalPages) = await GetPaginationMetaAsync(page);
                 if (totalPages <= 0) totalPages = 1;
-                Log($@"[dbg] totalCount={totalCount}, itemsPerPage={itemsPerPage}, totalPages={totalPages}");
+                Log($@"totalCount={totalCount}, itemsPerPage={itemsPerPage}, totalPages={totalPages}");
 
                 // 3) pageno=1..totalPages 순회 (data-blockStart*를 그대로 써서 URL 생성)
                 for (int pageno = 1; pageno <= totalPages; pageno ++)
@@ -149,10 +149,10 @@ public static class MobiEventBrowser
                     if (pageno > 1)
                     {
                         var nextUrl = await BuildEventsPageUrlAsync(page, pageno);
-                        Log($@"[dbg] nav to p{pageno}: {nextUrl ?? "null"}");
+                        Log($@"nav to p{pageno}: {nextUrl ?? "null"}");
                         if (string.IsNullOrEmpty(nextUrl))
                         {
-                            Log($@"[dbg] cannot build url for p{pageno}, break.");
+                            Log($@"cannot build url for p{pageno}, break.");
                             break;
                         }
 
@@ -179,7 +179,7 @@ public static class MobiEventBrowser
 
                     // 1페이지든 이후 페이지든 동일 추출(data-threadid 기반)
                     var items = await ExtractEventsOnCurrentPageAsync(page);
-                    Log($@"[dbg] p{pageno} extracted items={items.Count}");
+                    Log($@"p{pageno} extracted items={items.Count}");
 
                     // 기간 파싱 → 진행중 필터링 → 결과 적재
                     foreach (var it in items)
