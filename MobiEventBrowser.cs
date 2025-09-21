@@ -6,7 +6,7 @@ using Microsoft.Playwright;
 using System.Text.Json;
 
 public record MobiEventResult(
-    string eventName, string url, DateTime start, DateTime end
+    string eventName, string url, DateTime start, DateTime end, bool isPerma
 );
 
 public static class MobiEventBrowser
@@ -94,9 +94,7 @@ public static class MobiEventBrowser
             m_IsInited = true;
         }
 
-        public async Task<List<MobiEventResult>> Run(
-            CancellationToken ct = default,
-            Action<string>? log = null)
+        public async Task<List<MobiEventResult>> Run(CancellationToken ct = default, Action<string>? log = null)
         {
             m_IsRunning = true;
             void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MobiEventBrowser] {index}: {msg}");
@@ -112,13 +110,15 @@ public static class MobiEventBrowser
                 await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
                 Log("page.RouteAsync success");
 
-                // 1) 목록 진입
+                // 1) 목록 진입 (1페이지)
                 await page.GotoAsync(EVENTS_URL, s_PageGotoOpt);
                 Log("page.GotoAsync success");
-                await page.WaitForSelectorAsync(".board_list li, .list li, .article_list li, article", new() { Timeout = 8000 });
+
+                // 목록 로드 보장 (data-threadid 카드 기준)
+                await page.WaitForSelectorAsync("[data-threadid]", new() { Timeout = 10000 });
                 Log("page.WaitForSelectorAsync success");
 
-                // 2) '진행중' 탭 클릭 (있을 때만)
+                // (선택) '진행중' 탭 클릭 – 페이지가 탭 구조일 때만 존재
                 try
                 {
                     var tab = page.Locator("a:has-text('진행중'), button:has-text('진행중')");
@@ -130,55 +130,74 @@ public static class MobiEventBrowser
                 }
                 catch
                 {
-                    /* 기본이 진행중일 수도 있음 */
+                    /* 기본이 진행중일 수 있음 */
                 }
 
                 var results = new List<MobiEventResult>();
                 var nowKst = MobiTime.now;
 
-                // 3) 1~5페이지 순회 (숫자 페이저)
-                for (int p = 1; p <= 5; p ++)
+                // 2) 전체 페이지 수 계산 (.pagination의 data-totalcount / 1페이지의 카드 수)
+                var (totalCount, itemsPerPage, totalPages) = await GetPaginationMetaAsync(page);
+                if (totalPages <= 0) totalPages = 1;
+                Log($@"[dbg] totalCount={totalCount}, itemsPerPage={itemsPerPage}, totalPages={totalPages}");
+
+                // 3) pageno=1..totalPages 순회 (data-blockStart*를 그대로 써서 URL 생성)
+                for (int pageno = 1; pageno <= totalPages; pageno ++)
                 {
                     ct.ThrowIfCancellationRequested();
-                    Log($"extract page {p}");
 
-                    Log($"before extract: url={page.Url}");
-                    var samples = await page.EvaluateAsync<string[]>(@"
-                        () => Array.from(document.querySelectorAll('a[href*=""/News/Events""], a[href*=""/news/events""]'))
-                              .slice(0,3)
-                              .map(a => ((a.textContent||'').trim() + ' | ' + a.href))
-                        ");
-                    foreach (var s in samples) Log($"sample anchor: {s}");
-                    var items = await ExtractEventsOnCurrentPageAsync(page);
-                    Log($"extracted items={items.Count}");
-
-                    foreach (var it in items)
+                    if (pageno > 1)
                     {
-                        if (TryParseRangeKst(it.range, out var startKst, out var endKst, out var isPerma))
+                        var nextUrl = await BuildEventsPageUrlAsync(page, pageno);
+                        Log($@"[dbg] nav to p{pageno}: {nextUrl ?? "null"}");
+                        if (string.IsNullOrEmpty(nextUrl))
                         {
-                            // 지금(KST) 기준으로 진행중만 수집. 상시는 end = DateTime.MaxValue로 반환
-                            bool ongoing = isPerma || (startKst <= nowKst && nowKst <= endKst);
-                            if (ongoing)
+                            Log($@"[dbg] cannot build url for p{pageno}, break.");
+                            break;
+                        }
+
+                        await page.GotoAsync(nextUrl, s_PageGotoOpt);
+                        await page.WaitForSelectorAsync("[data-threadid]", new() { Timeout = 10000 });
+
+                        // (선택) 탭이 유지되지 않는 레이아웃이면 다시 클릭
+                        try
+                        {
+                            var tab = page.Locator("a:has-text('진행중'), button:has-text('진행중')");
+                            if (await tab.CountAsync() > 0)
                             {
-                                results.Add(new MobiEventResult(
-                                    it.title,
-                                    it.href,
-                                    startKst,
-                                    isPerma ? DateTime.MaxValue : endKst
-                                ));
+                                await tab.First.ClickAsync();
+                                await page.WaitForTimeoutAsync(300);
                             }
+                        }
+                        catch
+                        {
+                            /* 무시 */
                         }
                     }
 
-                    // 다음 페이지 URL을 정밀 탐색 (href의 pageno= 값으로 판단)
-                    var nextHref = await GetNextPageHrefAsync(page, p + 1);
-                    if (string.IsNullOrEmpty(nextHref))
-                        break;
+                    Log($"extract page {pageno} (url={page.Url})");
 
-                    await page.GotoAsync(nextHref, s_PageGotoOpt);
+                    // 1페이지든 이후 페이지든 동일 추출(data-threadid 기반)
+                    var items = await ExtractEventsOnCurrentPageAsync(page);
+                    Log($@"[dbg] p{pageno} extracted items={items.Count}");
+
+                    // 기간 파싱 → 진행중 필터링 → 결과 적재
+                    foreach (var it in items)
+                    {
+                        if (TryParseRange(it.range, out var startDateTime, out var endDateTime, out var isPerma))
+                        {
+                            results.Add(new MobiEventResult(
+                                it.title,
+                                it.href,
+                                startDateTime,
+                                endDateTime,
+                                isPerma
+                            ));
+                        }
+                    }
                 }
 
-                // 4) (제목+URL) 기준 중복 제거
+                // 4) (제목+URL) 기준 중복 제거 후 반환
                 var dedup = results
                     .GroupBy(x => (x.eventName, x.url))
                     .Select(g => g.First())
@@ -192,7 +211,7 @@ public static class MobiEventBrowser
                 m_IsRunning = false;
             }
         }
-
+        
         public async ValueTask DisposeAsync()
         {
             if (m_IsInited == false)
@@ -329,12 +348,12 @@ public static class MobiEventBrowser
             .ToList();
     }
 
-    private static bool TryParseRangeKst(string range, out DateTime startKst, out DateTime endKst, out bool isPerma)
+    private static bool TryParseRange(string range, out DateTime startDateTime, out DateTime endDateTime, out bool isPerma)
     {
         // 기본값
         isPerma = false;
-        startKst = DateTime.MinValue;
-        endKst = DateTime.MaxValue;
+        startDateTime = DateTime.MinValue;
+        endDateTime = DateTime.MaxValue;
 
         if (string.IsNullOrWhiteSpace(range))
             return false;
@@ -344,10 +363,10 @@ public static class MobiEventBrowser
         {
             // 시작은 있으면 파싱, 없으면 오늘 00:00 KST
             var startSide = range.Split('~').FirstOrDefault() ?? "";
-            if (!TryParseKoreanDateTime(startSide, defaultHour: 0, defaultMinute: 0, out startKst))
-                startKst = MobiTime.now.Date;
+            if (!TryParseKoreanDateTime(startSide, defaultHour: 0, defaultMinute: 0, out startDateTime))
+                startDateTime = DateTime.MinValue;
             isPerma = true;
-            endKst = DateTime.MaxValue;
+            endDateTime = DateTime.MaxValue;
             return true;
         }
 
@@ -363,20 +382,20 @@ public static class MobiEventBrowser
         if (!TryParseKoreanDateTime(startSideStr,
                 defaultHour: (startSideStr.Contains("점검 후") ? 6 : 0),
                 defaultMinute: 0,
-                out startKst))
+                out startDateTime))
             return false;
 
         // 종료: 시간 없으면 23:59
-        if (!TryParseKoreanDateTime(endSideStr, defaultHour: 23, defaultMinute: 59, out endKst))
+        if (!TryParseKoreanDateTime(endSideStr, defaultHour: 23, defaultMinute: 59, out endDateTime))
             return false;
 
         return true;
     }
 
-    private static bool TryParseKoreanDateTime(string src, int defaultHour, int defaultMinute, out DateTime kst)
+    private static bool TryParseKoreanDateTime(string src, int defaultHour, int defaultMinute, out DateTime dateTime)
     {
         // 예: 2025.09.11(목) 오전 6시  /  2025.09.24(수) 오후 11시 59분  /  2025.09.24(수)
-        kst = DateTime.MinValue;
+        dateTime = DateTime.MinValue;
 
         var d = Regex.Match(src, @"(?<y>\d{4})\.(?<m>\d{2})\.(?<d>\d{2})");
         if (!d.Success) return false;
@@ -405,45 +424,65 @@ public static class MobiEventBrowser
             }
         }
 
-        // KST 의미의 Unspecified DateTime (비교/정렬에 충분)
-        kst = new DateTime(y, mo, da, h, min, 0, DateTimeKind.Unspecified);
+        dateTime = new DateTime(y, mo, da, h, min, 0, DateTimeKind.Unspecified);
         return true;
     }
     
-    private static async Task<string?> GetNextPageHrefAsync(IPage page, int nextPageNo)
+    // .pagination의 data-*와 현재 페이지의 카드 수로 총 페이지수를 계산
+    private static async Task<(int totalCount, int itemsPerPage, int totalPages)> GetPaginationMetaAsync(IPage page)
     {
-        // /News/Events 경로이면서 pageno=nextPageNo 인 a[href]를 전역에서 찾는다.
-        // (상단 메뉴 등 다른 링크를 배제하기 위해 pathname과 쿼리를 모두 검사)
-        var href = await page.EvaluateAsync<string?>("""
-                                                     (pageNo) => {
-                                                       const anchors = Array.from(document.querySelectorAll('a[href]'));
-                                                       // 1) 전체 a[href] 중에서 정확히 pageno=pageNo & /News/Events 인 링크
-                                                       for (const a of anchors) {
-                                                         const raw = a.getAttribute('href');
-                                                         if (!raw) continue;
-                                                         try {
-                                                           const u = new URL(raw, location.href);
-                                                           if (!u.pathname.includes('/News/Events')) continue;
-                                                           const pn = u.searchParams.get('pageno');
-                                                           if (pn === String(pageNo)) return u.href;
-                                                         } catch (e) {}
-                                                       }
-                                                       // 2) 페이저 컨테이너 내부 우선 탐색 (보수적 보강)
-                                                       const pagers = document.querySelectorAll('.paging, .pagination, .board_paging, .page_list, .pager, nav[class*="paging"]');
-                                                       for (const pager of pagers) {
-                                                         const as = pager.querySelectorAll('a[href*="pageno="]');
-                                                         for (const a of as) {
-                                                           try {
-                                                             const u = new URL(a.getAttribute('href'), location.href);
-                                                             if (!u.pathname.includes('/News/Events')) continue;
-                                                             const pn = u.searchParams.get('pageno');
-                                                             if (pn === String(pageNo)) return u.href;
-                                                           } catch (e) {}
-                                                         }
-                                                       }
-                                                       return null;
-                                                     }
-                                                     """, nextPageNo);
+        // JSON 문자열로 받아와서 C#에서 파싱(Playwright의 제네릭 역직렬화 우회)
+        var json = await page.EvaluateAsync<string>(@"
+() => {
+  const pag = document.querySelector('.pagination[data-pagingtype=""thread""]');
+  const total = pag ? parseInt(pag.getAttribute('data-totalcount') || '0') : 0;
+  const per   = document.querySelectorAll('[data-threadid]').length || 10;
+  const pages = (per > 0 && total > 0) ? Math.ceil(total / per) : 1;
+  return JSON.stringify({ total, per, pages });
+}
+");
+        int total = 0, per = 10, pages = 1;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            total = doc.RootElement.GetProperty("total").GetInt32();
+            per = doc.RootElement.GetProperty("per").GetInt32();
+            pages = doc.RootElement.GetProperty("pages").GetInt32();
+        }
+        catch
+        {
+            /* keep defaults */
+        }
+
+        if (pages <= 0) pages = 1;
+        return (total, per, pages);
+    }
+    
+    // 현재 페이지의 .pagination data-attrs와 location.href를 기반으로 target 페이지의 URL을 생성
+    private static async Task<string?> BuildEventsPageUrlAsync(IPage page, int targetPageNo)
+    {
+        var href = await page.EvaluateAsync<string?>(@"
+(pageNo) => {
+  const pag = document.querySelector('.pagination[data-pagingtype=""thread""]');
+  if (!pag) return null;
+
+  const blockStartNo  = pag.getAttribute('data-blockstartno')  || '';
+  const blockStartKey = pag.getAttribute('data-blockstartkey') || '';
+
+  const u = new URL(location.href);
+  // 확실히 /News/Events 로 고정
+  if (!u.pathname.includes('/News/Events')) u.pathname = '/News/Events';
+
+  // 기존 headlineId, directionType 유지
+  // pageno 교체 + blockStartNo/Key 추가
+  u.searchParams.set('pageno', String(pageNo));
+  if (blockStartNo)  u.searchParams.set('blockStartNo', blockStartNo);
+  if (blockStartKey) u.searchParams.set('blockStartKey', blockStartKey);
+
+  return u.href;
+}
+",
+            targetPageNo);
 
         return href;
     }

@@ -1,3 +1,4 @@
+using Discord;
 using Discord.Interactions;
 
 namespace DiscordBot_Molly.Commands;
@@ -39,14 +40,20 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
 
             var dateTimeNow = MobiTime.now;
             var strBuilder = new System.Text.StringBuilder();
-            strBuilder.AppendLine($"{dateTimeNow:yyyy-MM-dd HH:mm:ss} 기준 진행중인 이벤트 입니다.");
+            strBuilder.Append($"> {dateTimeNow:yyyy-MM-dd HH:mm:ss} 기준 진행중인 이벤트 입니다.");
             results.Sort((a, b) => a.end.CompareTo(b.end));
             foreach (var result in results)
             {
                 strBuilder.Append('\n');
-                strBuilder.Append($"- [D-{(int)Math.Floor((result.end - dateTimeNow).TotalDays)}] {result.eventName} ({result.url})");
+                if (result.isPerma) strBuilder.Append($"- **[별도 안내 시 까지]** [{result.eventName}]({result.url})");
+                else
+                {
+                    var remainTimespan = result.end.Date - dateTimeNow.Date;
+                    var remainDay = (int)Math.Floor(remainTimespan.TotalDays);
+                    strBuilder.Append($"- **[D-{remainDay}]** [{result.eventName}]({result.url})");
+                }
             }
-            await FollowupAsync(strBuilder.ToString(), ephemeral: false);
+            await FollowupAsync(strBuilder.ToString(), ephemeral: false, flags: MessageFlags.SuppressEmbeds);
         }
         catch (TaskCanceledException)
         {
