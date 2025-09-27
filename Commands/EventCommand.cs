@@ -1,10 +1,25 @@
+using System.Text.Json.Serialization;
 using Discord;
 using Discord.Interactions;
 
 namespace DiscordBot_Molly.Commands;
 
+public sealed class EventAlertSetting
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("channelId")]
+    public ulong ChannelId { get; set; }
+
+    [JsonPropertyName("hoursBefore")]
+    public int HoursBefore { get; set; } = 24;
+}
+
 public class EventCommand : InteractionModuleBase<SocketInteractionContext>
 {
+    public static readonly LocalStorage<EventAlertSetting> s_AlertSettingStorage = new();
+    
     [SlashCommand("진행중인이벤트", "현재 진행중인 이벤트를 보자.")]
     public async Task Command_CurrentEvents()
     {
@@ -59,5 +74,53 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
         {
             await ModifyOriginalResponseAsync(m => m.Content = "⏱️ 작업이 제한 시간(60초)을 초과했어요.");
         }
+    }
+    
+    [SlashCommand("이벤트마감알림등록", "이 채널로 이벤트 마감 알림을 받도록 등록합니다.")]
+    public async Task Command_RegistEventExpireAlert([Summary("시간", "마감 몇 시간 전에 알림할지 (기본 24)")] int? hours = null)
+    {
+        var guildId = Context.Interaction.GuildId;
+        if (guildId is null)
+        {
+            await RespondAsync("DM에서는 사용할 수 없어요.", ephemeral: true);
+            return;
+        }
+        
+        var channelId = Context.Interaction.ChannelId;
+        if (channelId is null)
+        {
+            await RespondAsync("채널 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요.", ephemeral: true);
+            return;
+        }
+
+        var hoursBefore = (hours is >= 1 and <= 240) ? hours.Value : 24;
+
+        var settings = new EventAlertSetting
+        {
+            Enabled = true,
+            ChannelId = channelId.Value,
+            HoursBefore = hoursBefore
+        };
+        await s_AlertSettingStorage.SaveAsync(guildId.Value, settings);
+
+        await RespondAsync(
+            $"이 채널(<#{channelId}>)에 **{hoursBefore}시간 전** 알림을 등록했어요.",
+            ephemeral: false);
+    }
+
+    [SlashCommand("이벤트마감알림해제", "이 길드의 이벤트 마감 알림을 비활성화합니다.")]
+    public async Task Command_UnregistEventExpireAlert()
+    {
+        var guildId = Context.Interaction.GuildId;
+        if (guildId is null)
+        {
+            await RespondAsync("DM에서는 사용할 수 없어요.", ephemeral: true);
+            return;
+        }
+        
+        var current = await s_AlertSettingStorage.LoadAsync(guildId.Value).ConfigureAwait(false) ?? new EventAlertSetting();
+        current.Enabled = false;
+        await s_AlertSettingStorage.SaveAsync(guildId.Value, current).ConfigureAwait(false);
+        await RespondAsync("이벤트 마감 알림을 비활성화했어요.", ephemeral: false);
     }
 }
