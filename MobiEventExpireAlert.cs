@@ -113,10 +113,21 @@ public static class MobiEventExpireAlert
 
     private static async Task SendEventExpireAlertMessage(ulong guildId, TimeSpan timeSpan, EventExpireAlertInfo info, CancellationToken cancellationToken = default)
     {
+        Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - guildId:{guildId}, timeSpan:{timeSpan}");
         await Task.Delay(timeSpan, cancellationToken);
         
-        var ch = await Program.instance.client.GetChannelAsync(info.setting.ChannelId).ConfigureAwait(false) as IMessageChannel;
-        if (ch is null) return;
+        var ch = await Program.instance.client.GetChannelAsync(info.setting.ChannelId).ConfigureAwait(false);
+        if (ch is null)
+        {
+            Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - not found channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
+            return;
+        }
+        
+        if (ch is not IMessageChannel)
+        {
+            Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - is not message channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
+            return;
+        }
 
         foreach (var result in info.results)
         {
@@ -130,7 +141,7 @@ public static class MobiEventExpireAlert
             if (!string.IsNullOrWhiteSpace(result.url))
                 eb.WithUrl(result.url);
 
-            await ch.SendMessageAsync(embed: eb.Build());
+            await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build());
         }
     }
 }
