@@ -244,9 +244,9 @@ public static class MobiEventBrowser
         return m_CachedResults;
     }
 
-    public static async Task CacheAsync(string? fingerprint)
+    public static async Task CacheAsync(string? fingerprint, long seconds = 600)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
         var results = await m_CacheBrowser.Run(cts.Token);
         lock (m_CacheLock)
         {
