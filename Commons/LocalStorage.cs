@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -93,4 +94,18 @@ public sealed class LocalStorage<T>
     }
 
     private string GetFilePath(ulong guildId) => Path.Combine(m_RootDir, $"{guildId}.json");
+
+    public List<ulong> GetAllGuildIds()
+    {
+        var list = new List<ulong>();
+        var filePaths = Directory.GetFiles(m_RootDir, "*.json");
+        foreach (var filePath in filePaths)
+        {
+            ulong guildId = 0;
+            var fileName =  Path.GetFileNameWithoutExtension(filePath);
+            if (ulong.TryParse(fileName, NumberStyles.Number, CultureInfo.InvariantCulture, out guildId))
+                list.Add(guildId);
+        }
+        return list;
+    }
 }

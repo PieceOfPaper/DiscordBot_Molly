@@ -6,10 +6,18 @@ using Microsoft.Extensions.Configuration;
 class Program
 {
     private readonly DiscordSocketClient m_Client;
+    public DiscordSocketClient client => m_Client;
+    
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
 
-    static Task Main() => new Program().MainAsync();
+    private static Program s_instance;
+    public static Program instance => s_instance;
+    private static Task Main()
+    {
+        s_instance = new Program();
+        return s_instance.MainAsync();
+    }
 
     public Program()
     {
@@ -77,6 +85,8 @@ class Program
         await m_InteractionService.AddModulesAsync(typeof(Program).Assembly, null);
         await m_Client.LoginAsync(TokenType.Bot, token);
         await m_Client.StartAsync();
+
+        await MobiEventExpireAlert.RegistEventExpireAlertAll();
         await Task.Delay(-1);
     }
 }
