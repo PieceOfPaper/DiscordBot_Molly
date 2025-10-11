@@ -14,6 +14,9 @@ public class SimpleCommand :  InteractionModuleBase<SocketInteractionContext>
     [SlashCommand("홀리몰리", "충격적이다.")]
     public async Task Command_HollyMolly() => await ProcessImageCommand("hollymolly.png");
 
+    [SlashCommand("개발자", "누가 만들었나.")]
+    public async Task Command_Developer()  =>  await RespondAsync($"칼릭스 서버 종잇장.");
+
 
     private async Task ProcessImageCommand(string fileName)
     {
