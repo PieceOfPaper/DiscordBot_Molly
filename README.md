@@ -37,6 +37,7 @@
 - .NET 9 SDK
 - Discord Bot 토큰
 - Playwright(Chromium) 설치 권장
+- Linux/컨테이너 환경: tzdata 설치 권장(타임존 데이터)
 
 ## 빠른 시작
 1. 패키지 복원
