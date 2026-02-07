@@ -204,7 +204,6 @@ public static class MobiEventBrowser
                                 endDateTime,
                                 isPerma
                             ));
-                            Log($"title:{it.title}, thumbnail:{it.thumbnailUrl}");
                         }
                         else
                         {
