@@ -194,6 +194,10 @@ public static class MobiEventBrowser
                                 isPerma
                             ));
                         }
+                        else
+                        {
+                            Log($"추가 실퍠 - title:{it.title}, range:{it.range}, href:{it.href}");
+                        }
                     }
                 }
 
@@ -379,7 +383,7 @@ public static class MobiEventBrowser
         // 예: 2025.09.11(목) 오전 6시  /  2025.09.24(수) 오후 11시 59분  /  2025.09.24(수)
         dateTime = DateTime.MinValue;
 
-        var d = Regex.Match(src, @"(?<y>\d{4})\.(?<m>\d{2})\.(?<d>\d{2})");
+        var d = Regex.Match(src, @"(?<y>\d{4})\.(?<m>\d{1,2})\.(?<d>\d{1,2})");
         if (!d.Success) return false;
 
         int y = int.Parse(d.Groups["y"].Value);
