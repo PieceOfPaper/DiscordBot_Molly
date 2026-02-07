@@ -11,6 +11,9 @@ public sealed class EventExpireAlertSetting
 
     [JsonPropertyName("hoursBefore")]
     public int HoursBefore { get; set; } = 24;
+
+    [JsonPropertyName("lastAlertAtKst")]
+    public DateTime? LastAlertAtKst { get; set; }
 }
 
 public sealed class EventExpireAlertInfo
@@ -157,6 +160,9 @@ public static class MobiEventExpireAlert
         {
             if (result.isPerma) continue;
             if (result.end < dateTimeNow) continue; //지나간 것은 잊어라.
+            var alertTimeKst = result.end - TimeSpan.FromHours(setting.HoursBefore);
+            if (setting.LastAlertAtKst.HasValue && setting.LastAlertAtKst.Value >= alertTimeKst)
+                continue; //이미 알림을 보냈던 시간대면 스킵.
             var timeSpan = result.end - dateTimeNow;
             if (groupedResults.ContainsKey(timeSpan) == false)
                 groupedResults.Add(timeSpan, new());
@@ -215,6 +221,9 @@ public static class MobiEventExpireAlert
 
             await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build());
         }
+
+        info.setting.LastAlertAtKst = MobiTime.now;
+        await s_ExpireAlertSettingStorage.SaveAsync(guildId, info.setting).ConfigureAwait(false);
     }
 
     private static string FormatRemaining(TimeSpan remaining)
