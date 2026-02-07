@@ -134,7 +134,7 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
         }
 
         var setting = await MobiEventExpireAlert.LoadSetting(guildId.Value);
-        if (setting.Enabled == false)
+        if (setting == null || !setting.Enabled)
         {
             await RespondAsync("현재 이벤트 마감 알림 비활성화 상태입니다.", ephemeral: true);
             return;
