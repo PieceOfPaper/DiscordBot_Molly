@@ -6,7 +6,7 @@ using Microsoft.Playwright;
 using System.Text.Json;
 
 public record MobiEventResult(
-    string eventName, string url, DateTime start, DateTime end, bool isPerma
+    string eventName, string url, string thumbnailUrl, DateTime start, DateTime end, bool isPerma
 );
 
 public static class MobiEventBrowser
@@ -55,6 +55,8 @@ public static class MobiEventBrowser
         WaitUntil = WaitUntilState.DOMContentLoaded,
         Timeout = 30000,
     };
+    private static readonly byte[] s_TransparentPng1x1 =
+        Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=");
 
     public class BrowserContainer : IAsyncDisposable
     {
@@ -82,7 +84,16 @@ public static class MobiEventBrowser
                 async route =>
                 {
                     var t = route.Request.ResourceType;
-                    if (t is "image" or "media" or "font")
+                    if (t is "image")
+                    {
+                        await route.FulfillAsync(new()
+                        {
+                            Status = 200,
+                            BodyBytes = s_TransparentPng1x1,
+                            ContentType = "image/png",
+                        });
+                    }
+                    else if (t is "media" or "font")
                         await route.AbortAsync();
                     else
                         await route.ContinueAsync();
@@ -107,8 +118,7 @@ public static class MobiEventBrowser
 
             try
             {
-                await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
-                Log("page.RouteAsync success");
+                Log("page.RouteAsync skipped (context handler active)");
 
                 // 1) 목록 진입 (1페이지)
                 await page.GotoAsync(EVENTS_URL, s_PageGotoOpt);
@@ -189,10 +199,12 @@ public static class MobiEventBrowser
                             results.Add(new MobiEventResult(
                                 it.title,
                                 it.href,
+                                it.thumbnailUrl,
                                 startDateTime,
                                 endDateTime,
                                 isPerma
                             ));
+                            Log($"title:{it.title}, thumbnail:{it.thumbnailUrl}");
                         }
                         else
                         {
@@ -261,9 +273,9 @@ public static class MobiEventBrowser
         }
     }
 
-    private static async Task<List<(string title, string href, string range)>> ExtractEventsOnCurrentPageAsync(IPage page)
+    private static async Task<List<(string title, string href, string range, string thumbnailUrl)>> ExtractEventsOnCurrentPageAsync(IPage page)
     {
-        var results = new List<(string title, string href, string range)>();
+        var results = new List<(string title, string href, string range, string thumbnailUrl)>();
 
         // 카드가 실제로 뜰 때까지 대기
         await page.WaitForSelectorAsync("[data-threadid]", new() { Timeout = 10000 });
@@ -299,7 +311,17 @@ public static class MobiEventBrowser
       }
     }
 
-    items.push({ title, href, range });
+    // 썸네일
+    let thumb = '';
+    const img = el.querySelector('.thumbnail img, img');
+    if (img) {
+      const src = img.getAttribute('src') || img.getAttribute('data-src') || img.getAttribute('data-original') || '';
+      if (src) {
+        try { thumb = new URL(src, location.href).href; } catch { thumb = src; }
+      }
+    }
+
+    items.push({ title, href, range, thumbnailUrl: thumb });
   }
 
   return JSON.stringify(items);
@@ -317,9 +339,10 @@ public static class MobiEventBrowser
                 var title = el.TryGetProperty("title", out var t) ? (t.GetString() ?? "") : "";
                 var href = el.TryGetProperty("href", out var h) ? (h.GetString() ?? "") : "";
                 var range = el.TryGetProperty("range", out var r) ? (r.GetString() ?? "") : "";
+                var thumb = el.TryGetProperty("thumbnailUrl", out var th) ? (th.GetString() ?? "") : "";
 
                 if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(href))
-                    results.Add((title, href, range));
+                    results.Add((title, href, range, thumb));
             }
         }
         catch (Exception)

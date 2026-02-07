@@ -203,6 +203,8 @@ public static class MobiEventExpireAlert
 
             if (!string.IsNullOrWhiteSpace(result.url))
                 eb.WithUrl(result.url);
+            if (!string.IsNullOrWhiteSpace(result.thumbnailUrl))
+                eb.WithImageUrl(result.thumbnailUrl);
 
             await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build());
         }
