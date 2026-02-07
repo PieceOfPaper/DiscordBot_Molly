@@ -6,7 +6,8 @@ namespace DiscordBot_Molly.Commands;
 public class EventCommand : InteractionModuleBase<SocketInteractionContext>
 {
     [SlashCommand("진행중인이벤트", "현재 진행중인 이벤트를 보자.")]
-    public async Task Command_CurrentEvents()
+    public async Task Command_CurrentEvents(
+        [Summary("마감미정", "마감일 미정(별도 안내 시 까지) 이벤트를 포함할지 여부 (기본 포함)")] bool includePerma = false)
     {
         if (MobiEventBrowser.IsCachingRunning())
         {
@@ -41,13 +42,16 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
             var dateTimeNow = MobiTime.now;
             var strBuilder = new System.Text.StringBuilder();
             strBuilder.Append($"> {dateTimeNow:yyyy-MM-dd HH:mm:ss} 기준 진행중인 이벤트 입니다.");
+            var appendedCount = 0;
             results.Sort((a, b) => a.end.CompareTo(b.end));
             foreach (var result in results)
             {
                 if (result.isPerma)
                 {
+                    if (includePerma == false) continue;
                     strBuilder.Append('\n');
                     strBuilder.Append($"- **[별도 안내 시 까지]** [{result.eventName}]({result.url})");
+                    appendedCount++;
                 }
                 else
                 {
@@ -56,7 +60,13 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
                     var remainDay = (int)Math.Floor(remainTimespan.TotalDays);
                     strBuilder.Append('\n');
                     strBuilder.Append($"- **[D-{remainDay}]** [{result.eventName}]({result.url})");
+                    appendedCount++;
                 }
+            }
+            if (appendedCount == 0)
+            {
+                await ModifyOriginalResponseAsync(m => m.Content = "조건에 맞는 진행중 이벤트가 없어요.");
+                return;
             }
             var texts = SplitIntoDiscordChunks(strBuilder.ToString());
             foreach (var text in texts)
