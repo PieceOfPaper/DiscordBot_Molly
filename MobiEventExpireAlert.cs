@@ -24,7 +24,70 @@ public static class MobiEventExpireAlert
 {
     private static readonly LocalStorage<EventExpireAlertSetting> s_ExpireAlertSettingStorage = new();
     private static readonly Dictionary<ulong, List<EventExpireAlertInfo>> s_EventExpireAlertInfos = new();
+    
+    private static Task s_UpdateTask = null;
+    private static CancellationTokenSource s_UpdateTaskCancellationTokenSource = null;
 
+
+    public static void RunUpdateTask()
+    {
+        if (s_UpdateTaskCancellationTokenSource != null)
+        {
+            s_UpdateTaskCancellationTokenSource.Cancel();
+            s_UpdateTaskCancellationTokenSource = null;
+        }
+
+        s_UpdateTaskCancellationTokenSource = new();
+        s_UpdateTask = Task.Run(async () =>
+        {
+            var token = s_UpdateTaskCancellationTokenSource.Token;
+            while (!token.IsCancellationRequested)
+            {
+                var nowKst = MobiTime.now;
+                var nextRunKst = GetNextUpdateTimeKst(nowKst);
+                var delay = nextRunKst - nowKst;
+                if (delay < TimeSpan.Zero)
+                    delay = TimeSpan.Zero;
+
+                Console.WriteLine($"[MobiEventExpireAlert] Next update at {nextRunKst:yyyy-MM-dd HH:mm:ss} (KST)");
+
+                try
+                {
+                    await Task.Delay(delay, token).ConfigureAwait(false);
+                }
+                catch (TaskCanceledException)
+                {
+                    break;
+                }
+
+                if (token.IsCancellationRequested)
+                    break;
+
+                try
+                {
+                    await RegistEventExpireAlertAll().ConfigureAwait(false);
+                    Console.WriteLine("[MobiEventExpireAlert] Update completed");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[MobiEventExpireAlert] Update failed: {ex.Message}");
+                }
+            }
+        }, s_UpdateTaskCancellationTokenSource.Token);
+    }
+
+    private static DateTime GetNextUpdateTimeKst(DateTime nowKst)
+    {
+        var today = nowKst.Date;
+        var nine = today.AddHours(9);
+        var twentyOne = today.AddHours(21);
+
+        if (nowKst < nine)
+            return nine;
+        if (nowKst < twentyOne)
+            return twentyOne;
+        return today.AddDays(1).AddHours(9);
+    }
 
     public static async Task<EventExpireAlertSetting> LoadSetting(ulong guildId) => await s_ExpireAlertSettingStorage.LoadAsync(guildId).ConfigureAwait(false);
     

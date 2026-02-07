@@ -87,6 +87,7 @@ class Program
         await m_Client.StartAsync();
 
         await MobiEventExpireAlert.RegistEventExpireAlertAll();
+        MobiEventExpireAlert.RunUpdateTask();
         await Task.Delay(-1);
     }
 }
