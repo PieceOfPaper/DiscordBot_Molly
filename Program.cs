@@ -68,8 +68,6 @@ class Program
 
     public async Task MainAsync()
     {
-        Microsoft.Playwright.Program.Main(new[] { "install" });
-
         var fingerPrint = await MobiEventFingerprint.ComputeAsync();
         await MobiEventBrowser.CacheAsync(fingerPrint);
         

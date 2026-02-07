@@ -44,12 +44,18 @@
 dotnet restore
 ```
 
-2. Discord 토큰 등록
+2. Playwright(Chromium) 설치
+```bash
+dotnet tool restore
+dotnet playwright install --with-deps
+```
+
+3. Discord 토큰 등록
 ```bash
 dotnet user-secrets set "Discord:Token" "YOUR_TOKEN"
 ```
 
-3. 실행
+4. 실행
 ```bash
 dotnet run
 ```
