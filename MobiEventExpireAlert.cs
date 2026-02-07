@@ -162,6 +162,8 @@ public static class MobiEventExpireAlert
         foreach (var kayPair in groupedResults)
         {
             var timeSpan = kayPair.Key - TimeSpan.FromHours(setting.HoursBefore);
+            if (timeSpan < TimeSpan.Zero)
+                timeSpan = TimeSpan.Zero;
             var cts = new CancellationTokenSource();
             var info = new EventExpireAlertInfo()
             {
@@ -177,7 +179,8 @@ public static class MobiEventExpireAlert
     private static async Task SendEventExpireAlertMessage(ulong guildId, TimeSpan timeSpan, EventExpireAlertInfo info, CancellationToken cancellationToken = default)
     {
         Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - guildId:{guildId}, timeSpan:{timeSpan}");
-        await Task.Delay(timeSpan, cancellationToken);
+        if (timeSpan > TimeSpan.Zero)
+            await Task.Delay(timeSpan, cancellationToken);
         
         var ch = await Program.instance.client.GetChannelAsync(info.setting.ChannelId).ConfigureAwait(false);
         if (ch is null)
