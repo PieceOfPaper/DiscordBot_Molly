@@ -82,9 +82,9 @@ public static class MobiRankBrowser
         public int index = 0;
 
         private bool m_IsInited = false;
-        private IPlaywright m_Pw;
-        private IBrowser m_Browser;
-        private IBrowserContext m_BrowserContext;
+        private IPlaywright m_Pw = null!;
+        private IBrowser m_Browser = null!;
+        private IBrowserContext m_BrowserContext = null!;
 
         private bool m_IsRunning = false;
         public bool isRunning => m_IsRunning;
@@ -276,7 +276,7 @@ public static class MobiRankBrowser
         CancellationToken ct = default,
         Action<string>? log = null)
     {
-        BrowserContainer browserContainer = null;
+        BrowserContainer? browserContainer = null;
         lock (m_BrowserLock)
         {
             if (m_BrowserQueues.ContainsKey(rankingIndex) == false)
@@ -499,8 +499,8 @@ public static class MobiRankBrowser
         {
             var box = boxes.Nth(i);
 
-            // 1) 드롭다운 펼치기 (광고/서드파티 네비게이션에 영향 안 받게 NoWaitAfter)
-            await box.Locator(".selected").ClickAsync(new() { Timeout = timeoutMs, NoWaitAfter = true });
+            // 1) 드롭다운 펼치기 (예상치 못한 네비게이션에 영향 받지 않도록 짧은 타임아웃 사용)
+            await box.Locator(".selected").ClickAsync(new() { Timeout = timeoutMs });
 
             // 2) 올바른 타입의 항목이 나타나는지 짧게 확인
             var pattern = $"li[data-searchtype='{dataType}']";
@@ -517,7 +517,7 @@ public static class MobiRankBrowser
 
             // 3) 원하는 값 클릭
             var option = page.Locator($"li[data-searchtype='{dataType}'][data-{dataType}='{value}']").First;
-            await option.ClickAsync(new() { Timeout = timeoutMs, NoWaitAfter = true });
+            await option.ClickAsync(new() { Timeout = timeoutMs });
 
             // 4) 약간의 안정화
             await page.WaitForTimeoutAsync(150);

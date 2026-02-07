@@ -11,7 +11,7 @@ class Program
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
 
-    private static Program s_instance;
+    private static Program s_instance = null!;
     public static Program instance => s_instance;
     private static Task Main()
     {

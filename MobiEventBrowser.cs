@@ -63,9 +63,9 @@ public static class MobiEventBrowser
         public int index = 0;
 
         private bool m_IsInited = false;
-        private IPlaywright m_Pw;
-        private IBrowser m_Browser;
-        private IBrowserContext m_BrowserContext;
+        private IPlaywright m_Pw = null!;
+        private IBrowser m_Browser = null!;
+        private IBrowserContext m_BrowserContext = null!;
 
         private bool m_IsRunning = false;
         public bool isRunning => m_IsRunning;
