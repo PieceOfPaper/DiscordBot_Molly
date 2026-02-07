@@ -68,6 +68,14 @@ class Program
 
     public async Task MainAsync()
     {
+        var appCts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            appCts.Cancel();
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, __) => appCts.Cancel();
+
         var fingerPrint = await MobiEventFingerprint.ComputeAsync();
         await MobiEventBrowser.CacheAsync(fingerPrint);
         
@@ -85,7 +93,14 @@ class Program
         await m_Client.StartAsync();
 
         await MobiEventExpireAlert.RegistEventExpireAlertAll();
-        MobiEventExpireAlert.RunUpdateTask();
-        await Task.Delay(-1);
+        MobiEventExpireAlert.RunUpdateTask(appCts.Token);
+        try
+        {
+            await Task.Delay(Timeout.Infinite, appCts.Token);
+        }
+        catch (TaskCanceledException)
+        {
+            // 정상 종료
+        }
     }
 }

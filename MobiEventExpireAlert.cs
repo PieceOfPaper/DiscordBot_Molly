@@ -29,7 +29,7 @@ public static class MobiEventExpireAlert
     private static CancellationTokenSource s_UpdateTaskCancellationTokenSource = null;
 
 
-    public static void RunUpdateTask()
+    public static void RunUpdateTask(CancellationToken appToken = default)
     {
         if (s_UpdateTaskCancellationTokenSource != null)
         {
@@ -37,7 +37,7 @@ public static class MobiEventExpireAlert
             s_UpdateTaskCancellationTokenSource = null;
         }
 
-        s_UpdateTaskCancellationTokenSource = new();
+        s_UpdateTaskCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(appToken);
         s_UpdateTask = Task.Run(async () =>
         {
             var token = s_UpdateTaskCancellationTokenSource.Token;
