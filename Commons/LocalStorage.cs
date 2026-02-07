@@ -32,6 +32,8 @@ public sealed class LocalStorage<T>
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             WriteIndented = true
         };
+        
+        Console.WriteLine($"[LocalStorage<{typeof(T).Name}>] Initialize - {m_RootDir}");
     }
 
     public async Task SaveAsync(ulong guildId, T settings, CancellationToken ct = default)
