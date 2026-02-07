@@ -37,7 +37,9 @@ class Program
         m_Client.Ready += async () =>
         {
             // 개발 초기에는 길드 명령(즉시 반영). 운영은 글로벌 명령(전파 수분~1시간)
-            ulong guildId = 0; // TODO: 테스트 서버(길드) ID로 교체하면 즉시 등록
+            // 환경변수/설정: Discord:GuildId (환경변수는 Discord__GuildId)
+            var guildIdRaw = m_Config["Discord:GuildId"];
+            _ = ulong.TryParse(guildIdRaw, out var guildId);
             if (guildId != 0)
                 await m_InteractionService.RegisterCommandsToGuildAsync(guildId);
             else

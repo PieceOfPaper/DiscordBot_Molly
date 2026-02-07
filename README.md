@@ -56,14 +56,28 @@ dotnet playwright install --with-deps
 dotnet user-secrets set "Discord:Token" "YOUR_TOKEN"
 ```
 
-4. 실행
+4. (선택) 테스트 길드 ID 등록
+```powershell
+# Windows PowerShell
+setx Discord__GuildId "TEST_GUILD_ID"
+```
+```bash
+# macOS/Linux
+export Discord__GuildId="TEST_GUILD_ID"
+```
+
+5. 실행
 ```bash
 dotnet run
 ```
 
 ## 설정
 - `Discord:Token`  
-  `user-secrets` 또는 환경변수로 설정 가능합니다.
+  `user-secrets`로 설정합니다.
+- `Discord:GuildId`  
+  테스트 길드 ID(선택). 설정 시 길드에만 슬래시 명령을 등록(즉시 반영).  
+  비어 있거나 0이면 글로벌 등록(전파 지연 가능).  
+  환경변수로는 `Discord__GuildId` 사용.
 - `MOLLY_DATA_DIR`  
   이벤트 마감 알림 설정 저장 위치(기본: 실행 폴더).
 
@@ -74,4 +88,4 @@ dotnet run
 
 ## 참고
 - `assets/` 폴더의 이미지 파일은 실행 시 출력 디렉터리로 복사됩니다.
-- 길드 테스트 시 `Program.cs`의 `guildId`를 설정하면 슬래시 명령이 즉시 등록됩니다.
+- 길드 테스트는 `Discord:GuildId`로 설정하면 슬래시 명령이 즉시 등록됩니다.
