@@ -200,9 +200,10 @@ public static class MobiEventExpireAlert
 
         foreach (var result in info.results)
         {
+            var remainingText = FormatRemaining(result.end - MobiTime.now);
             var eb = new EmbedBuilder()
                 .WithTitle($"⏰ 이벤트 마감 알림 - {result.eventName}")
-                .WithDescription($"이벤트 종료까지 {info.setting.HoursBefore}시간 남았습니다.\n종료 시간: {result.end:yyyy-MM-dd HH:mm:ss}")
+                .WithDescription($"이벤트 종료까지 {remainingText} 남았습니다.\n종료 시간: {result.end:yyyy-MM-dd HH:mm:ss}")
                 .WithColor(Color.Orange)
                 .WithFooter("몰리 • 이벤트 마감 알림")
                 .WithCurrentTimestamp();
@@ -214,5 +215,28 @@ public static class MobiEventExpireAlert
 
             await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build());
         }
+    }
+
+    private static string FormatRemaining(TimeSpan remaining)
+    {
+        if (remaining < TimeSpan.Zero)
+            remaining = TimeSpan.Zero;
+
+        var days = remaining.Days;
+        var hours = remaining.Hours;
+        var minutes = remaining.Minutes;
+        var seconds = remaining.Seconds;
+
+        var parts = new List<string>();
+        if (days > 0)
+            parts.Add($"{days}일");
+        if (hours > 0)
+            parts.Add($"{hours}시간");
+        if (minutes > 0)
+            parts.Add($"{minutes}분");
+        if (days == 0 && hours == 0 && minutes == 0)
+            parts.Add($"{seconds}초");
+
+        return parts.Count == 0 ? "0초" : string.Join(" ", parts);
     }
 }
