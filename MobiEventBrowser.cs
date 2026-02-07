@@ -344,8 +344,9 @@ public static class MobiEventBrowser
         if (string.IsNullOrWhiteSpace(range))
             return false;
 
-        // 상시/무기한
-        if (range.Contains("별도 안내 시까지") || range.Contains("상시"))
+        // 상시/무기한 (공백 변형 대응)
+        var normalizedRange = Regex.Replace(range, @"\s+", "");
+        if (normalizedRange.Contains("별도안내시까지") || normalizedRange.Contains("상시"))
         {
             // 시작은 있으면 파싱, 없으면 오늘 00:00 KST
             var startSide = range.Split('~').FirstOrDefault() ?? "";
