@@ -2,6 +2,7 @@
 using Discord.Interactions;
 using Discord.WebSocket;
 using Microsoft.Extensions.Configuration;
+using System.IO;
 
 class Program
 {
@@ -70,6 +71,8 @@ class Program
 
     public async Task MainAsync()
     {
+        MobiShop.LoadTable();
+        
         var appCts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
         {
