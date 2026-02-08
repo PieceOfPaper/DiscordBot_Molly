@@ -4,6 +4,7 @@ namespace DiscordBot_Molly.Commands;
 
 public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
 {
+    private const int RANKING_TIMEOUT_MS = 60_000;
     [SlashCommand("전투력랭킹", "캐릭터의 전투력 랭킹을 가져옵니다.")]
     public async Task Command_Rank1(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
@@ -78,9 +79,10 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
         // DiscordSocketConfig.UseInteractionSnowflakeDate = false 로도 완화 가능 (부트스트랩시 적용)
 
         // 2) 진행중 메시지 갱신
-        await ModifyOriginalResponseAsync(m => m.Content = "🔎 검색을 시작했어요... (최대 60초)");
+        var timeoutSeconds = RANKING_TIMEOUT_MS / 1000;
+        await ModifyOriginalResponseAsync(m => m.Content = $"🔎 검색을 시작했어요... (최대 {timeoutSeconds}초)");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(RANKING_TIMEOUT_MS));
         try
         {
             var result = await MobiRankBrowser.GetRankBySearchAsync(rankingIndex, nickname, server, className, cts.Token);
@@ -122,7 +124,7 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
         }
         catch (TaskCanceledException)
         {
-            await ModifyOriginalResponseAsync(m => m.Content = "⏱️ 작업이 제한 시간(60초)을 초과했어요.");
+            await ModifyOriginalResponseAsync(m => m.Content = $"⏱️ 작업이 제한 시간({timeoutSeconds}초)을 초과했어요.");
         }
     }
 }

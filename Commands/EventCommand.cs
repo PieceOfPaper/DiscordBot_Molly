@@ -5,6 +5,7 @@ namespace DiscordBot_Molly.Commands;
 
 public class EventCommand : InteractionModuleBase<SocketInteractionContext>
 {
+    private const int EVENT_TIMEOUT_MS = 60_000;
     [SlashCommand("진행중인이벤트", "현재 진행중인 이벤트를 보자.")]
     public async Task Command_CurrentEvents(
         [Summary("마감미정", "마감일 미정(별도 안내 시 까지) 이벤트를 포함할지 여부 (기본 포함)")] bool includePerma = false)
@@ -23,9 +24,10 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
         // DiscordSocketConfig.UseInteractionSnowflakeDate = false 로도 완화 가능 (부트스트랩시 적용)
 
         // 2) 진행중 메시지 갱신
-        await ModifyOriginalResponseAsync(m => m.Content = "🔎 검색을 시작했어요... (최대 60초)");
+        var timeoutSeconds = EVENT_TIMEOUT_MS / 1000;
+        await ModifyOriginalResponseAsync(m => m.Content = $"🔎 검색을 시작했어요... (최대 {timeoutSeconds}초)");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(EVENT_TIMEOUT_MS));
         try
         {
             var results = await MobiEventBrowser.GetCurrentEventsAsync(cts.Token);
@@ -74,7 +76,7 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
         }
         catch (TaskCanceledException)
         {
-            await ModifyOriginalResponseAsync(m => m.Content = "⏱️ 작업이 제한 시간(60초)을 초과했어요.");
+            await ModifyOriginalResponseAsync(m => m.Content = $"⏱️ 작업이 제한 시간({timeoutSeconds}초)을 초과했어요.");
         }
     }
     
