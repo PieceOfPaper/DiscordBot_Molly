@@ -25,6 +25,13 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
         [Summary("클래스이름", "클래스 이름 입력 (미입력시 모든 클래스)")] string? className = null)
         => await ProcessCommand(3, nickname, server, className);
 
+    [SlashCommand("종합랭킹", "캐릭터의 종합 랭킹을 가져옵니다.")]
+    public async Task Command_Rank4(
+        [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
+        [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
+        [Summary("클래스이름", "클래스 이름 입력 (미입력시 전체)")] string? className = null)
+        => await ProcessCommand(4, nickname, server, className);
+
     private async Task ProcessCommand(int rankingIndex, string nickname, MobiServer server, string? className = null)
     {
         if (string.IsNullOrWhiteSpace(nickname))
@@ -56,6 +63,10 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
                 keyword = "생활력";
                 keywordEmoji = "🌱️";
                 break;
+            case 4:
+                keyword = "종합";
+                keywordEmoji = "👑";
+                break;
         }
         
         if (server == 0) server = MobiServer.칼릭스; //기본값 설정
@@ -83,7 +94,24 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
             await ModifyOriginalResponseAsync(m => m.Content = 
                 $"🔎 {server}서버 {nickname}의 {keyword} 랭킹을 찾았습니다!");
             
-            if (string.IsNullOrWhiteSpace(className) || className == "전체 클래스")
+            if (rankingIndex == 4)
+            {
+                var totalScore = result.TotalScore ?? result.Power;
+                var combatText = result.Combat?.ToString("n0") ?? "?";
+                var charmText = result.Charm?.ToString("n0") ?? "?";
+                var lifeText = result.Life?.ToString("n0") ?? "?";
+
+                var rankScope = (string.IsNullOrWhiteSpace(className) || className == "전체 클래스")
+                    ? "전체"
+                    : className;
+
+                await FollowupAsync(
+                    $"🏆 [{result.ServerName}] {rankScope} {result.Rank:n0}위\n" +
+                    $"👤 {nickname}\n" +
+                    $"👑 점수: {totalScore:n0}점 = ⚔{combatText} + 💕{charmText} + 🌱{lifeText}",
+                    ephemeral: false);
+            }
+            else if (string.IsNullOrWhiteSpace(className) || className == "전체 클래스")
             {
                 await FollowupAsync($"🏆 [{result.ServerName}] 전체 {result.Rank:n0}위\n👤 {nickname} ({result.ClassName})\n{keywordEmoji}️ {keyword}：{result.Power:n0}", ephemeral: false);
             }

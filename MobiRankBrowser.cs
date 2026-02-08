@@ -6,7 +6,14 @@ using Microsoft.Playwright;
 public enum MobiServer { 데이안=1, 아이라, 던컨, 알리사, 메이븐, 라사, 칼릭스 }
 
 public record MobiRankResult(
-    int Rank, int Power, string ServerName, string ClassName
+    int Rank,
+    int Power,
+    string ServerName,
+    string ClassName,
+    int? TotalScore = null,
+    int? Combat = null,
+    int? Charm = null,
+    int? Life = null
 );
 
 public static class MobiRankBrowser
@@ -141,6 +148,9 @@ public static class MobiRankBrowser
                 case 3:
                     keyword = "생활력";
                     break;
+                case 4:
+                    keyword = "점수";
+                    break;
             }
 
             if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
@@ -191,7 +201,6 @@ public static class MobiRankBrowser
             await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME); // 부분 렌더링 안정 대기
             Log($"send nickname - {nicknameFillResult}, {nicknameClickResult}");
 
-
             // 4) 결과 파싱
             var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
             var normAll = Regex.Replace(allText ?? "", @"\\s+", " ").Trim(); // <- 실수 방지! 아래서 즉시 올바른 버전으로 다시 계산
@@ -212,6 +221,12 @@ public static class MobiRankBrowser
                 ? SliceAround(normAll, nickname, 500, 800) // 최후 폴백
                 : block;
 
+            (int? Total, int? Combat, int? Charm, int? Life) overall = (null, null, null, null);
+            if (rankingIndex == 4)
+            {
+                overall = await ExtractOverallScoresAsync(page, nickname);
+            }
+
             var rankMatch = Regex.Match(targetText, @"([\d,]+)\s*위");
             var powerMatch = Regex.Match(targetText, @$"{keyword}\s*([\d,]+)");
             var serverMatch = Regex.Match(targetText, @"서버명\s*([^\s]+)");
@@ -224,6 +239,30 @@ public static class MobiRankBrowser
                 string classSel = classMatch.Success ? classMatch.Groups[1].Value : (classId == 0 ? "전체 클래스" : (className ?? "-"));
                 await page.CloseAsync();
                 m_IsRunning = false;
+                if (rankingIndex == 4)
+                {
+                    int? ParseScore(string label, string? icon = null)
+                    {
+                        var m = Regex.Match(targetText, @$"{label}\s*([\d,]+)");
+                        if (m.Success)
+                            return int.Parse(m.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
+                        if (!string.IsNullOrWhiteSpace(icon))
+                        {
+                            var mi = Regex.Match(targetText, @$"{Regex.Escape(icon)}\s*([\d,]+)");
+                            if (mi.Success)
+                                return int.Parse(mi.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
+                        }
+                        return null;
+                    }
+
+                    var totalScore = ParseScore("점수") ?? overall.Total;
+                    var combat = ParseScore("전투력", "⚔") ?? overall.Combat;
+                    var charm = ParseScore("매력", "💕") ?? overall.Charm;
+                    var life = ParseScore("생활력", "🌱") ?? overall.Life;
+
+                    return new MobiRankResult(rank, power, serverName, classSel, totalScore, combat, charm, life);
+                }
+
                 return new MobiRankResult(rank, power, serverName, classSel);
             }
 
@@ -395,6 +434,55 @@ public static class MobiRankBrowser
 
         var block = text.Substring(startRank, Math.Min(end - startRank, 600));
         return block;
+    }
+
+    private static int? ExtractKoreanNumber(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var m = Regex.Match(s, @"([\d,]+)");
+        if (!m.Success) return null;
+        return int.Parse(m.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<(int? Total, int? Combat, int? Charm, int? Life)> ExtractOverallScoresAsync(IPage page, string nickname)
+    {
+        try
+        {
+            var item = page.Locator("li.item").Filter(new() { Has = page.Locator($"dd[data-charactername='{nickname}']") });
+            if (await item.CountAsync() == 0)
+            {
+                item = page.Locator("li.item").Filter(new() { Has = page.Locator($"dd:has-text('{nickname}')") });
+            }
+
+            if (await item.CountAsync() == 0)
+                return (null, null, null, null);
+
+            var root = item.First;
+
+            var dt = root.Locator("dt").Filter(new() { HasTextString = "종합" });
+            if (await dt.CountAsync() == 0)
+                return (null, null, null, null);
+
+            var dtText = await dt.First.InnerTextAsync();
+            var total = ExtractKoreanNumber(dtText);
+
+            var dl = dt.First.Locator("xpath=..");
+            var dd = dl.Locator("dd").First;
+
+            int? combat = null;
+            int? charm = null;
+            int? life = null;
+
+            try { combat = ExtractKoreanNumber(await dd.Locator("span.type_1").InnerTextAsync()); } catch { }
+            try { charm = ExtractKoreanNumber(await dd.Locator("span.type_3").InnerTextAsync()); } catch { }
+            try { life = ExtractKoreanNumber(await dd.Locator("span.type_2").InnerTextAsync()); } catch { }
+
+            return (total, combat, charm, life);
+        }
+        catch
+        {
+            return (null, null, null, null);
+        }
     }
 
     // select_box를 "서버/클래스" 타입으로 안정적으로 찾기
