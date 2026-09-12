@@ -19,12 +19,14 @@ public sealed class SpeedQuizService
     private readonly ConcurrentDictionary<ulong, Session> sessions = new();
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
     private readonly Action<string> log;
+    private readonly TimeProvider clock;
     private readonly CancellationTokenSource stopping = new();
 
-    public SpeedQuizService(Func<TimeSpan, CancellationToken, Task>? delay = null, Action<string>? log = null)
+    public SpeedQuizService(Func<TimeSpan, CancellationToken, Task>? delay = null, Action<string>? log = null, TimeProvider? clock = null)
     {
         this.delay = delay ?? ((duration, ct) => Task.Delay(duration, ct));
         this.log = log ?? Console.WriteLine;
+        this.clock = clock ?? TimeProvider.System;
     }
 
     public async Task<QuizStartResult> StartAsync(ulong guildId, QuizTopic topic, IReadOnlyList<QuizQuestion> questions,
@@ -74,6 +76,7 @@ public sealed class SpeedQuizService
     {
         if (!sessions.TryGetValue(guildId, out var session)) return false;
         session.ForceEnd = true;
+        Volatile.Read(ref session.Round)?.Close();
         session.Stop.Cancel();
         return true;
     }
@@ -97,7 +100,7 @@ public sealed class SpeedQuizService
         var scores = new Dictionary<ulong, int>();
         try
         {
-            await RunCountdownAsync(room, introMessageId, introTitle, introDescription, StartDelaySeconds, new TaskCompletionSource<ulong?>().Task, ct, "시작까지");
+            await QuizCountdown.RunAsync(room, introMessageId, introTitle, introDescription, StartDelaySeconds, "시작까지", delay, ct, clock);
             for (var i = 0; i < questions.Length; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -105,35 +108,37 @@ public sealed class SpeedQuizService
                 var questionTitle = $"🧩 문제 {i + 1}/{questions.Length}";
                 var questionDescription = $"⏱️ 남은 시간: **{seconds}초**\n\n{question.Prompt}";
                 var messageId = await room.SendEmbedAsync(questionTitle, questionDescription, 0x3498DB, ct);
-                var round = new QuizRound(question.Answer, messageId, TimeSpan.FromSeconds(seconds));
+                var round = new QuizRound(question.Answer, messageId, TimeSpan.FromSeconds(seconds), clock);
                 Volatile.Write(ref session.Round, round);
                 using var timerStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var timeout = delay(TimeSpan.FromSeconds(seconds), timerStop.Token);
+                var countdown = QuizCountdown.RunAsync(room, messageId, questionTitle, question.Prompt, seconds, "남은 시간", delay, timerStop.Token, clock);
                 try
                 {
-                    var timeout = delay(TimeSpan.FromSeconds(seconds), timerStop.Token);
-                    var countdown = RunCountdownAsync(room, messageId, questionTitle, question.Prompt, seconds, round.Completion, timerStop.Token);
-                    await Task.WhenAny(round.Completion, timeout);
-                    ct.ThrowIfCancellationRequested();
-                    round.Close();
-                    var winner = await round.Completion;
-                    if (winner is ulong userId) scores[userId] = scores.GetValueOrDefault(userId) + 1;
-                    Volatile.Write(ref session.Round, null);
-                    var outcome = winner is ulong id ? $"🎉 <@{id}>님 정답! {round.ElapsedSeconds:0.0}초 만에 맞혀 1점을 얻었습니다." : "⏰ 아무도 맞추지 못했어요.";
-                    var next = "";
-                    var scoreText = i + 1 < questions.Length ? $"\n{FormatScores(scores)}" : "";
-                    var resultTitle = "📣 문제 결과";
-                    var resultDescription = $"{outcome}\n\n✅ 정답: {question.Answer}{scoreText}{next}";
-                    var resultMessageId = await room.SendEmbedAsync(resultTitle, resultDescription, winner is ulong ? 0x57F287u : 0xED4245u, ct);
-                    if (i + 1 < questions.Length)
-                        await RunCountdownAsync(room, resultMessageId, resultTitle, resultDescription, BetweenQuestionsSeconds, new TaskCompletionSource<ulong?>().Task, ct, "다음 문제까지");
+                    await Task.WhenAny(round.Completion, timeout, countdown);
                 }
                 finally
                 {
+                    // 취소나 Embed 수정 실패보다 먼저 이미 확정된 정답을 반영합니다.
                     round.Close();
+                    var awarded = await round.Completion;
+                    if (awarded is ulong userId) scores[userId] = scores.GetValueOrDefault(userId) + 1;
                     Volatile.Write(ref session.Round, null);
                     await timerStop.CancelAsync();
+                    try { await countdown; }
+                    catch (OperationCanceledException) when (timerStop.IsCancellationRequested) { }
+                    try { await timeout; }
+                    catch (OperationCanceledException) when (timerStop.IsCancellationRequested) { }
                 }
-                if (i + 1 < questions.Length) await delay(TimeSpan.FromSeconds(BetweenQuestionsSeconds), ct);
+                ct.ThrowIfCancellationRequested();
+                var winner = await round.Completion;
+                var outcome = winner is ulong id ? $"🎉 <@{id}>님 정답! {round.ElapsedSeconds:0.0}초 만에 맞혀 1점을 얻었습니다." : "⏰ 아무도 맞추지 못했어요.";
+                var scoreText = i + 1 < questions.Length ? $"\n{FormatScores(scores)}" : "";
+                var resultTitle = "📣 문제 결과";
+                var resultDescription = $"{outcome}\n\n✅ 정답: {question.Answer}{scoreText}";
+                var resultMessageId = await room.SendEmbedAsync(resultTitle, resultDescription, winner is ulong ? 0x57F287u : 0xED4245u, ct);
+                if (i + 1 < questions.Length)
+                    await QuizCountdown.RunAsync(room, resultMessageId, resultTitle, resultDescription, BetweenQuestionsSeconds, "다음 문제까지", delay, ct, clock);
             }
             var winners = scores.Count == 0 ? "정답자가 없어 우승자가 없습니다." :
                 $"{(scores.Count(x => x.Value == scores.Values.Max()) > 1 ? "공동 우승" : "우승")}: " +
@@ -147,7 +152,9 @@ public sealed class SpeedQuizService
                 var winners = scores.Count == 0 ? "정답자가 없어 우승자가 없습니다." :
                     $"{(scores.Count(x => x.Value == scores.Values.Max()) > 1 ? "공동 우승" : "현재 우승")}: " +
                     string.Join(", ", scores.Where(x => x.Value == scores.Values.Max()).Select(x => $"<@{x.Key}>")) + $" ({scores.Values.Max()}점)";
-                await room.SendEmbedAsync("🛑 스피드퀴즈 강제 종료", $"관리자에 의해 퀴즈가 종료되었습니다.\n\n🏆 {winners}\n\n📊 {FormatScores(scores)}", 0xE74C3C, CancellationToken.None);
+                using var finalTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try { await room.SendEmbedAsync("🛑 스피드퀴즈 강제 종료", $"종료 요청으로 퀴즈가 종료되었습니다.\n\n🏆 {winners}\n\n📊 {FormatScores(scores)}", 0xE74C3C, finalTimeout.Token); }
+                catch (Exception ex) { log($"[스피드퀴즈] 최종 결과 전송 실패: {ex.Message}"); }
             }
             else await ReportFailureAsync(session, "스피드퀴즈가 중단되었습니다. 새 게임은 /스피드퀴즈로 시작해주세요.");
         }
@@ -157,34 +164,6 @@ public sealed class SpeedQuizService
             await ReportFailureAsync(session, "메시지를 전송하지 못해 스피드퀴즈를 종료했습니다. 채널 권한을 확인해주세요.");
         }
         finally { Release(guildId, session); }
-    }
-
-    private async Task RunCountdownAsync(IQuizRoom room, ulong messageId, string title, string body, int seconds, Task<ulong?> completed, CancellationToken ct, string label = "남은 시간")
-    {
-        var elapsed = 0;
-        while (!ct.IsCancellationRequested && !completed.IsCompleted && elapsed < seconds)
-        {
-            var remainingBefore = seconds - elapsed;
-            if (remainingBefore <= 3)
-            {
-                for (var number = remainingBefore; number >= 1 && !completed.IsCompleted; number--)
-                {
-                    await room.EditEmbedAsync(messageId, title, $"🚨 {label}: **{number}초**\n\n{body}", 0xE67E22, ct);
-                    if (number > 1) await delay(TimeSpan.FromSeconds(1), ct);
-                }
-                return;
-            }
-            var step = 1;
-            await delay(TimeSpan.FromSeconds(step), ct);
-            if (completed.IsCompleted || ct.IsCancellationRequested) return;
-            elapsed += step;
-            var remaining = seconds - elapsed;
-            if (remaining > 3)
-            {
-                await room.EditEmbedAsync(messageId, title, $"⏱️ {label}: **{remaining}초**\n\n{body}", 0x95A5A6, ct);
-            }
-            else return;
-        }
     }
 
     public static string FormatScores(IReadOnlyDictionary<ulong, int> scores)

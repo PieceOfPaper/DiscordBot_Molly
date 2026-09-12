@@ -45,6 +45,12 @@ public sealed class RuneCatalog
     public async Task<bool> RefreshAsync(CancellationToken ct = default)
     {
         await gate.WaitAsync(ct);
+        try { return await RefreshLockedAsync(ct); }
+        finally { gate.Release(); }
+    }
+
+    private async Task<bool> RefreshLockedAsync(CancellationToken ct)
+    {
         try
         {
             var csv = await source.FetchCsvAsync(ct);
@@ -62,16 +68,20 @@ public sealed class RuneCatalog
             log($"[룬] 갱신 실패, 기존 {Current.Items.Count}개 유지: {ex.Message}");
             return false;
         }
-        finally { gate.Release(); }
     }
 
     public async Task<bool> EnsureFreshAsync(TimeSpan maxAge, CancellationToken ct = default)
     {
         if (maxAge < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(maxAge));
-        var loadedAt = Current.LoadedAt;
-        if (loadedAt != DateTimeOffset.MinValue && DateTimeOffset.UtcNow - loadedAt < maxAge)
-            return true;
-        return await RefreshAsync(ct);
+        await gate.WaitAsync(ct);
+        try
+        {
+            var loadedAt = Current.LoadedAt;
+            if (loadedAt != DateTimeOffset.MinValue && DateTimeOffset.UtcNow - loadedAt < maxAge)
+                return true;
+            return await RefreshLockedAsync(ct);
+        }
+        finally { gate.Release(); }
     }
 
     private async Task SaveCacheAsync(string csv, CancellationToken ct)

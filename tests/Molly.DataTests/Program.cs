@@ -82,7 +82,19 @@ try
 {
     var source = new FakeSource(valid);
     var catalog = new RuneCatalog(source, dir, _ => { });
-    await catalog.InitializeAsync();
+    await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => catalog.EnsureFreshAsync(TimeSpan.FromMinutes(10))));
+    Check(source.Calls == 1, "동시 최초 요청은 한 번만 갱신");
+    await catalog.EnsureFreshAsync(TimeSpan.FromMinutes(10));
+    Check(source.Calls == 1, "유효 캐시는 갱신 생략");
+    var freshCache = Directory.GetFiles(Path.Combine(dir, "runes"), "*.csv").Single();
+    File.SetLastWriteTimeUtc(freshCache, DateTime.UtcNow.AddMinutes(-11));
+    source.Fail = true;
+    var stale = new RuneCatalog(source, dir, _ => { });
+    await stale.InitializeAsync();
+    source.Fail = false;
+    var beforeRefresh = source.Calls;
+    await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => stale.EnsureFreshAsync(TimeSpan.FromMinutes(10))));
+    Check(source.Calls == beforeRefresh + 1, "만료 캐시 동시 요청도 한 번만 갱신");
     var original = catalog.Current;
     source.Csv = header;
     Check(!await catalog.RefreshAsync() && ReferenceEquals(original, catalog.Current), "검증 실패 시 스냅샷 유지");
@@ -117,17 +129,20 @@ using var http = new HttpClient(new StubHandler());
 var httpSource = new GoogleSheetsRuneSource(http);
 try { await httpSource.FetchCsvAsync(default); throw new Exception("HTML 허용"); }
 catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거부"); }
-Console.WriteLine("모든 오프라인 데이터 테스트 통과");
+await QuizFlowTests.RunAsync();
+Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 sealed class FakeSource(string csv) : IRuneSource
 {
     public string CacheKey => "test-source";
     public string Csv { get; set; } = csv;
     public bool Fail { get; set; }
+    public int Calls;
     public int MaximumConcurrent { get; private set; }
     private int active;
     public async Task<string> FetchCsvAsync(CancellationToken ct)
     {
+        Interlocked.Increment(ref Calls);
         MaximumConcurrent = Math.Max(MaximumConcurrent, Interlocked.Increment(ref active));
         try
         {

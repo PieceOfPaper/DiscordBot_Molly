@@ -11,7 +11,8 @@ public sealed class QuizRound
     private readonly ulong questionMessageId;
     private readonly TaskCompletionSource<ulong?> completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task<ulong?> Completion => completed.Task;
-    public double ElapsedSeconds => clock.GetElapsedTime(started).TotalSeconds;
+    private double? finishedSeconds;
+    public double ElapsedSeconds { get { lock (gate) return finishedSeconds ?? clock.GetElapsedTime(started).TotalSeconds; } }
 
     public QuizRound(string answer, ulong questionMessageId, TimeSpan limit, TimeProvider? clock = null)
     {
@@ -34,6 +35,7 @@ public sealed class QuizRound
                 return false;
             }
             if (QuizQuestions.NormalizeAnswer(text) != answer) return false;
+            finishedSeconds = clock.GetElapsedTime(started).TotalSeconds;
             return completed.TrySetResult(userId);
         }
     }
