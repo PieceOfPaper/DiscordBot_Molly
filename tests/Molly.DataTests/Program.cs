@@ -1,5 +1,6 @@
 using System.Net;
 using Molly.Runes;
+using Molly.Quiz;
 
 const string header = "시즌,등급,분류,이름,효과\r\n";
 const string valid = header + "2,전설,무기,테스트,효과";
@@ -59,6 +60,22 @@ Check(resultText.Contains("3개") && resultText.Contains("시즌 1 · 신화 · 
 var longText = new string('가', 1899) + "😀" + new string('나', 4000) + "\n마지막";
 var messages = RuneSearch.SplitMessages(longText);
 Check(messages.All(x => x.Length is > 0 and <= 1900 && !char.IsHighSurrogate(x[^1])) && string.Concat(messages) == longText, "긴 결과 누락 없이 분할 및 이모지 보존");
+var quizPool = RuneCsvReader.Parse(header +
+    "2,전설,무기,첫 룬,효과 1\n2,전설,방어구,두 룬,효과 2\n1,신화,장신구,이전 시즌,효과 3", DateTimeOffset.UtcNow);
+var picked = QuizQuestions.Pick(QuizTopic.Season2RuneEffect, quizPool.Items, 2);
+Check(picked.Count == 2 && picked.All(x => x.Answer is "첫 룬" or "두 룬"), "시즌2 유효 룬만 출제");
+Check(QuizQuestions.NormalizeAnswer(" 첫  룬 ") == QuizQuestions.NormalizeAnswer("첫룬"), "퀴즈 정답 띄어쓰기 무시");
+Check(QuizQuestions.NormalizeAnswer("ABC") == QuizQuestions.NormalizeAnswer("abc"), "퀴즈 정답 영문 대소문자 무시");
+Check(QuizQuestions.Pick(QuizTopic.Season2RuneEffect, quizPool.Items, 99).Count == 2, "출제 가능 수만큼 자동 조정");
+var plusName = RuneCsvReader.Parse(header + "2,전설,무기,폭염+,효과", DateTimeOffset.UtcNow);
+Check(QuizQuestions.Pick(QuizTopic.Season2RuneEffect, plusName.Items, 1)[0].Answer == "폭염", "정답 표시에서 플러스 제거");
+var round = new QuizRound("두 룬", 100, TimeSpan.FromSeconds(30));
+Check(round.Submit(1, 99, "두 룬") == false, "문제 이전 메시지 무시");
+Check(round.Submit(1, 101, " 두룬 "), "정답 선착순 처리");
+Check(round.Submit(2, 102, "두 룬") == false, "한 문제 한 명만 정답 처리");
+round.Close();
+var normalized = QuizQuestions.NormalizeAnswer("두 룬");
+Check(normalized == "두룬", "퀴즈 정답 정규화");
 
 var dir = Path.Combine(Path.GetTempPath(), "molly-data-tests-" + Guid.NewGuid().ToString("N"));
 try

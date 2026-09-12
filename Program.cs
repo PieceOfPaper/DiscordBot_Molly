@@ -4,12 +4,15 @@ using Discord.WebSocket;
 using Microsoft.Extensions.Configuration;
 using System.IO;
 using Molly.Runes;
+using Molly.Quiz;
+using DiscordBot_Molly.Commands;
 
 class Program
 {
     private readonly DiscordSocketClient m_Client;
     public DiscordSocketClient client => m_Client;
     public RuneCatalog Runes { get; private set; } = null!;
+    public SpeedQuizService Quizzes { get; } = new();
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -31,12 +34,23 @@ class Program
 
         m_Client = new DiscordSocketClient(new DiscordSocketConfig
         {
-            GatewayIntents = GatewayIntents.Guilds, // 슬래시 커맨드만 필요하다면 이 정도로 시작
+            GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMessages | GatewayIntents.MessageContent,
             AlwaysDownloadUsers = false,
             MessageCacheSize = 0, // 필요 시 10~50 등 소량만
         });
         
         m_InteractionService = new InteractionService(m_Client.Rest);
+        m_Client.MessageReceived += message =>
+        {
+            if (!message.Author.IsBot && message.Source == MessageSource.User && message.Channel is SocketTextChannel channel)
+                Quizzes.Submit(channel.Guild.Id, channel.Id, message.Author.Id, message.Id, message.Content);
+            return Task.CompletedTask;
+        };
+        m_Client.ChannelDestroyed += channel =>
+        {
+            Quizzes.CancelChannel(channel.Id);
+            return Task.CompletedTask;
+        };
         m_Client.Ready += async () =>
         {
             // 개발 초기에는 길드 명령(즉시 반영). 운영은 글로벌 명령(전파 수분~1시간)
@@ -52,20 +66,34 @@ class Program
         {
             try
             {
+                var commandName = inter is SocketSlashCommand slash ? slash.CommandName : "(명령 아님)";
+                Console.WriteLine($"[Discord] interaction 수신 type={inter.Type} name={commandName} id={inter.Id}");
+                if (inter is SocketSlashCommand slashCommand)
+                    Console.WriteLine($"[Discord] 수신 옵션: {string.Join(", ", slashCommand.Data.Options.Select(o => $"{o.Name}={o.Value}"))}");
+                Console.WriteLine($"[Discord] 로컬 슬래시 명령: {string.Join(", ", m_InteractionService.SlashCommands.Select(x => x.Name))}");
                 var ctx = new SocketInteractionContext(m_Client, inter);
                 var result = await m_InteractionService.ExecuteCommandAsync(ctx, null);
+                Console.WriteLine($"[Discord] interaction 처리 결과 success={result.IsSuccess} reason={result.ErrorReason}");
 
                 if (!result.IsSuccess)
                 {
                     // 에러 응답(에페메랄)
                     if (inter.Type == InteractionType.ApplicationCommand)
-                        await inter.RespondAsync($"에러: {result.ErrorReason}", ephemeral: true);
+                    {
+                        if (inter.HasResponded) await inter.FollowupAsync($"에러: {result.ErrorReason}", ephemeral: true);
+                        else await inter.RespondAsync($"에러: {result.ErrorReason}", ephemeral: true);
+                    }
                 }
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"[Discord] interaction 처리 예외: {ex}");
                 // 예외가 나도 Interaction에 응답은 해줘야 함(중복 응답 방지 주의)
-                try { await inter.RespondAsync($"예외 발생: {ex.Message}", ephemeral: true); }
+                try
+                {
+                    if (inter.HasResponded) await inter.FollowupAsync($"예외 발생: {ex.Message}", ephemeral: true);
+                    else await inter.RespondAsync($"예외 발생: {ex.Message}", ephemeral: true);
+                }
                 catch { }
             }
         };
@@ -111,7 +139,14 @@ class Program
             if (string.IsNullOrWhiteSpace(token))
                 throw new Exception("Discord 토큰이 비었습니다. user-secrets 설정을 확인하세요.");
 
-            await m_InteractionService.AddModulesAsync(typeof(Program).Assembly, null);
+            var loadedModules = await m_InteractionService.AddModulesAsync(typeof(Program).Assembly, null);
+            if (!loadedModules.Any(x => x.Name == nameof(SpeedQuizCommand)))
+            {
+                var speedQuizModule = await m_InteractionService.AddModuleAsync<SpeedQuizCommand>(null);
+                Console.WriteLine($"[Discord] SpeedQuizCommand 명시적 로딩: {speedQuizModule.Name}");
+            }
+            Console.WriteLine($"[Discord] Interaction 모듈 로딩: {loadedModules.Count()}개 / " +
+                string.Join(", ", loadedModules.Select(x => x.Name)));
             await m_Client.LoginAsync(TokenType.Bot, token);
             await m_Client.StartAsync();
 
@@ -130,6 +165,7 @@ class Program
         finally
         {
             await appCts.CancelAsync();
+            await Quizzes.StopAsync();
             await runeUpdates;
         }
     }
