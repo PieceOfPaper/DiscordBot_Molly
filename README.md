@@ -38,7 +38,7 @@
 ## 요구 사항
 - .NET 10 SDK
 - Discord Bot 토큰
-- Playwright(Chromium) 설치 권장
+- Playwright Chromium 설치 필수(실제 봇 실행 시 필요, 빌드만 할 때는 불필요)
 - Linux/컨테이너 환경: tzdata 설치 권장(타임존 데이터)
 
 ## 빠른 시작
@@ -48,10 +48,19 @@ dotnet restore
 ```
 
 2. Playwright(Chromium) 설치
+
+아래 명령은 PowerShell 7(`pwsh`)이 필요합니다. `dotnet restore`나 `dotnet build`만으로는 브라우저가 설치되지 않습니다.
 ```bash
 dotnet build
 pwsh bin/Debug/net10.0/playwright.ps1 install chromium
 ```
+
+Apple Silicon Mac에서 `pwsh`가 없다면, 위 `dotnet build` 후 빌드에 포함된 도구로 설치할 수 있습니다(프로젝트 루트에서 실행):
+```bash
+bin/Debug/net10.0/.playwright/node/darwin-arm64/node bin/Debug/net10.0/.playwright/package/cli.js install chromium
+```
+
+다운로드가 오류 없이 완료된 뒤 다음 단계로 진행하세요. `Executable doesn't exist ... chromium_headless_shell-...` 오류는 필요한 브라우저가 없다는 뜻입니다. Playwright 패키지 버전을 변경했다면 다시 빌드하고 설치 명령도 다시 실행하세요. 설치는 봇을 실행할 동일한 OS 사용자 계정에서 수행해야 합니다.
 
 3. Discord 토큰 등록
 ```bash
@@ -114,6 +123,8 @@ bash scripts/setup.sh
 ```
 
 스크립트는 .NET 10 SDK가 없으면 `.tools/dotnet`에 설치하고, 빌드 검증까지 수행합니다.
+기본 실행은 Chromium을 설치하지 않습니다. 실제 봇 실행 전에는 빠른 시작의 브라우저 설치 단계를 별도로 수행하세요.
+PowerShell 7(`pwsh`)이 있다면 `INSTALL_PLAYWRIGHT=1 bash scripts/setup.sh`로 빌드 검증과 Chromium 설치를 함께 수행할 수 있습니다.
 최초 설치·패키지 복원에는 네트워크가 필요합니다. 이후 변경 검증 명령은 다음과 같습니다.
 
 ```bash
@@ -136,7 +147,7 @@ export PATH="$DOTNET_ROOT:$PATH"
 - 이 저장소에는 환경 준비 스크립트가 포함되어 있으며, 계정의 Codex 환경 설정 자체는 별도로 지정해야 합니다.
 
 ### 실제 실행에 필요한 추가 준비
-Playwright 브라우저 설치에는 PowerShell 7의 `pwsh`가 필요합니다.
+아래 Playwright 설치 스크립트에는 PowerShell 7의 `pwsh`가 필요합니다. `pwsh`가 없는 Apple Silicon Mac은 빠른 시작의 대체 명령을 사용하세요.
 Release 빌드 후:
 ```bash
 pwsh bin/Release/net10.0/playwright.ps1 install chromium
