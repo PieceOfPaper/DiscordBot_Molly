@@ -36,7 +36,7 @@
 - 칼릭스
 
 ## 요구 사항
-- .NET 9 SDK
+- .NET 10 SDK
 - Discord Bot 토큰
 - Playwright(Chromium) 설치 권장
 - Linux/컨테이너 환경: tzdata 설치 권장(타임존 데이터)
@@ -49,8 +49,8 @@ dotnet restore
 
 2. Playwright(Chromium) 설치
 ```bash
-dotnet tool restore
-dotnet playwright install --with-deps
+dotnet build
+pwsh bin/Debug/net10.0/playwright.ps1 install chromium
 ```
 
 3. Discord 토큰 등록
@@ -97,3 +97,52 @@ dotnet run
 ## 참고
 - `assets/` 폴더의 이미지 파일은 실행 시 출력 디렉터리로 복사됩니다.
 - 길드 테스트는 `Discord:GuildId`로 설정하면 슬래시 명령이 즉시 등록됩니다.
+
+## 자동 검증과 Codex 개발 환경
+
+- `main` push, pull request, 수동 실행 시 GitHub Actions CI가 실행됩니다.
+- CI는 .NET 10 Release 빌드·publish 및 이미지/CSV/Playwright 설치 스크립트의 배포 포함 여부를 검사합니다.
+- Discord 접속·외부 페이지 수집·기능 테스트는 이 검증에 포함되지 않습니다.
+- SDK는 `global.json`의 .NET 10 안정 버전을 사용합니다. Discord.Net은 3.20.1로 고정했습니다.
+
+### 로컬 Mac / Codex CLI
+.NET 10 SDK를 설치한 뒤 프로젝트를 갱신하고 검증하세요.
+
+```bash
+git pull --ff-only
+bash scripts/setup.sh
+```
+
+스크립트는 .NET 10 SDK가 없으면 `.tools/dotnet`에 설치하고, 빌드 검증까지 수행합니다.
+최초 설치·패키지 복원에는 네트워크가 필요합니다. 이후 변경 검증 명령은 다음과 같습니다.
+
+```bash
+bash scripts/verify.sh
+```
+
+스크립트가 설치한 SDK를 터미널에서 직접 사용하려면:
+```bash
+export DOTNET_ROOT="$PWD/.tools/dotnet"
+export PATH="$DOTNET_ROOT:$PATH"
+```
+시스템에 SDK를 설치했다면 위 환경변수 설정은 필요 없습니다.
+
+### Codex 클라우드 환경
+- 이 저장소를 작업 대상으로 연결합니다.
+- 환경의 setup 명령: `bash scripts/setup.sh`
+- 준비 단계에서 dot.net, Microsoft SDK 다운로드 호스트 및 NuGet 접근이 필요합니다.
+- 일반 코드·빌드 작업에는 Discord 토큰과 Chromium이 필요하지 않습니다.
+- Codex는 루트 `AGENTS.md`를 개발 지침으로 사용합니다.
+- 이 저장소에는 환경 준비 스크립트가 포함되어 있으며, 계정의 Codex 환경 설정 자체는 별도로 지정해야 합니다.
+
+### 실제 실행에 필요한 추가 준비
+Playwright 브라우저 설치에는 PowerShell 7의 `pwsh`가 필요합니다.
+Release 빌드 후:
+```bash
+pwsh bin/Release/net10.0/playwright.ps1 install chromium
+```
+Linux에서 브라우저 시스템 라이브러리가 부족하면 관리자 권한으로
+`pwsh bin/Release/net10.0/playwright.ps1 install --with-deps chromium`을 실행하세요.
+
+실제 실행은 기존 빠른 시작의 토큰·테스트 서버 설정을 따르세요.
+저장 경로는 예를 들어 `MOLLY_DATA_DIR="$PWD/.molly-data"`로 지정할 수 있습니다.

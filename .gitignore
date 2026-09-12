@@ -482,3 +482,11 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Local SDK, verification output and private runtime data
+.tools/
+artifacts/
+.env
+.env.*
+!.env.example
+.molly-data/
