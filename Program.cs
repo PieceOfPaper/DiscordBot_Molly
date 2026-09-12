@@ -117,7 +117,6 @@ class Program
             m_Config["GoogleSheets:RuneSheetId"] ?? "0"),
             Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
         await Runes.InitializeAsync(appCts.Token);
-        var runeUpdates = Runes.RunUpdatesAsync(TimeSpan.FromMinutes(10), appCts.Token);
         try
         {
             try
@@ -166,7 +165,6 @@ class Program
         {
             await appCts.CancelAsync();
             await Quizzes.StopAsync();
-            await runeUpdates;
         }
     }
 }

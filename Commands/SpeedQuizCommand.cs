@@ -51,6 +51,7 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
         Console.WriteLine($"[스피드퀴즈] 초기 응답 완료 guild={Context.Guild.Id}");
         try
         {
+            await Program.instance.Runes.EnsureFreshAsync(TimeSpan.FromMinutes(10));
             var questions = QuizQuestions.Pick(selectedTopic.Value, Program.instance.Runes.Current.Items, count);
             var result = await Program.instance.Quizzes.StartAsync(Context.Guild.Id, selectedTopic.Value, questions, seconds,
                 async ct =>

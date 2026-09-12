@@ -65,6 +65,15 @@ public sealed class RuneCatalog
         finally { gate.Release(); }
     }
 
+    public async Task<bool> EnsureFreshAsync(TimeSpan maxAge, CancellationToken ct = default)
+    {
+        if (maxAge < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(maxAge));
+        var loadedAt = Current.LoadedAt;
+        if (loadedAt != DateTimeOffset.MinValue && DateTimeOffset.UtcNow - loadedAt < maxAge)
+            return true;
+        return await RefreshAsync(ct);
+    }
+
     private async Task SaveCacheAsync(string csv, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
@@ -81,13 +90,4 @@ public sealed class RuneCatalog
         }
     }
 
-    public async Task RunUpdatesAsync(TimeSpan interval, CancellationToken ct)
-    {
-        using var timer = new PeriodicTimer(interval);
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct)) await RefreshAsync(ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-    }
 }

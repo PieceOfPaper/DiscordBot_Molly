@@ -16,6 +16,7 @@ public class RuneCommand : InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
+        await Program.instance.Runes.EnsureFreshAsync(TimeSpan.FromMinutes(10));
         var table = Program.instance.Runes.Current;
         if (table.Items.Count == 0)
         {
