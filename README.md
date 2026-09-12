@@ -25,6 +25,7 @@
 | `/생활력랭킹` | 생활력 랭킹 조회 | `캐릭터이름`(필수), `서버`(기본: 칼릭스), `클래스이름` |
 | `/종합랭킹` | 종합 랭킹 조회 | `캐릭터이름`(필수), `서버`(기본: 칼릭스), `클래스이름` |
 | `/상점검색` | 아이템 기준 상점/공유상점/교환상점 검색 | `아이템`(필수) |
+| `/룬` | 이름에 검색어가 포함된 모든 룬과 효과 조회 | `이름`(필수, 예: `분노`) |
 
 ## 지원 서버
 - 데이안
@@ -103,6 +104,43 @@ dotnet run
 - 이벤트 마감 알림은 KST 기준 **09:00 / 21:00**에 갱신됩니다.
 - 이벤트 목록은 페이지 해시를 비교하여 변경 시에만 갱신합니다.
 
+## 룬 테이블 연동
+
+기본 데이터 원본은 [디스코드봇_몰리_테이블의 룬 탭](https://docs.google.com/spreadsheets/d/19kRuVIlZ1LEhU5lixEjRqYvZKbdGnXk0tjY6qznSRf0/edit?gid=0)입니다.
+봇이 Google Sheets CSV를 직접 읽으므로, 해당 문서는 **링크가 있는 사용자에게 보기 허용** 상태여야 합니다. 별도의 Google 토큰이나 PowerShell, Playwright는 필요하지 않습니다. 봇은 시트를 수정하지 않습니다.
+
+- 첫 행에 `시즌`, `등급`, `분류`, `이름`, `효과` 헤더를 유지하세요. 열 순서는 바꿔도 됩니다.
+- 시즌은 양의 정수, 등급은 `신화`·`전설`, 분류는 `무기`·`방어구`·`앰블럼`·`장신구`를 사용합니다.
+- ID 열은 현재 시트에 없습니다. `시즌·등급·분류·이름` 조합으로 식별하며, 같은 조합의 중복 행은 갱신 오류로 처리합니다.
+- 효과가 빈 행은 경고를 남기고 제외합니다. 쉼표·따옴표·셀 안 줄바꿈은 보존합니다.
+- 시작 시 로컬 캐시를 읽고 시트를 갱신하며, 실행 중 10분마다 다시 읽습니다. Google 측 CSV 반영 지연이 있을 수 있습니다.
+- 통신 오류, 잘못된 헤더/값, 중복 행, 유효 데이터 0개 또는 캐시 저장 실패 시 마지막 정상본을 유지합니다. 최초 실행에 원본과 캐시가 모두 없으면 빈 상태로 시작하고 다음 갱신 때 재시도합니다.
+- 캐시는 `MOLLY_DATA_DIR`(미설정 시 실행 파일 폴더) 아래 `runes/`에 원본별로 저장합니다. 이벤트 초기 수집 오류도 다른 기능의 시작을 중단시키지 않습니다.
+
+다른 문서나 탭을 사용하려면 user-secrets의 `GoogleSheets:SpreadsheetId`, `GoogleSheets:RuneSheetId` 또는 환경변수 `GoogleSheets__SpreadsheetId`, `GoogleSheets__RuneSheetId`를 설정하세요. 탭 ID는 URL의 숫자 `gid`이며 현재 기본값은 `0`입니다.
+
+향후 명령에서는 한 번 읽은 스냅샷을 작업 동안 사용합니다:
+
+```csharp
+var table = Program.instance.Runes.Current;
+var seasonRunes = table.Items.Where(r => r.Season == 2).ToArray();
+var found = table.ByKey.TryGetValue(
+    new Molly.Runes.RuneKey(2, "전설", "무기", "눈부신 잔영"), out var rune);
+```
+
+`Items.Count == 0`이면 데이터 준비 중 안내를 제공하세요. `LoadedAt`은 현재 정상본의 로딩 시각입니다. 필요하면 `Runes.RefreshAsync(ct)`로 직접 갱신할 수 있습니다. 공급 경로는 `IRuneSource`로 분리되어 있습니다.
+
+Discord에서 `/룬`을 선택하고 `이름` 옵션에 `분노`를 입력하면 이름에 해당 텍스트가 포함된 모든 룬의 이름·시즌·등급·분류·효과를 보여줍니다. 검색어는 필수이며 공백만 입력할 수 없습니다. 앞뒤 공백은 제거하고 이름 내부의 공백은 그대로 비교합니다. 결과가 길면 나눠 보내며, 5개 메시지를 초과하는 결과는 전체 내용을 텍스트 파일로 제공합니다.
+
+봇 로그인·알림 없이 데이터만 확인하는 명령:
+
+```bash
+# 오프라인 회귀 테스트 (verify.sh에도 포함)
+dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release
+# 실제 시트 다운로드와 파싱만 확인 (네트워크 필요, CI에서는 실행하지 않음)
+dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --live
+```
+
 ## 참고
 - `assets/` 폴더의 이미지 파일은 실행 시 출력 디렉터리로 복사됩니다.
 - 길드 테스트는 `Discord:GuildId`로 설정하면 슬래시 명령이 즉시 등록됩니다.
@@ -110,8 +148,8 @@ dotnet run
 ## 자동 검증과 Codex 개발 환경
 
 - `main` push, pull request, 수동 실행 시 GitHub Actions CI가 실행됩니다.
-- CI는 .NET 10 Release 빌드·publish 및 이미지/CSV/Playwright 설치 스크립트의 배포 포함 여부를 검사합니다.
-- Discord 접속·외부 페이지 수집·기능 테스트는 이 검증에 포함되지 않습니다.
+- CI는 .NET 10 Release 빌드·오프라인 데이터 회귀 테스트·publish 및 이미지/CSV/Playwright 설치 스크립트의 배포 포함 여부를 검사합니다.
+- Discord 접속·외부 페이지 수집·실제 Google Sheets 접속은 이 검증에 포함되지 않습니다.
 - SDK는 `global.json`의 .NET 10 안정 버전을 사용합니다. Discord.Net은 3.20.1로 고정했습니다.
 
 ### 로컬 Mac / Codex CLI

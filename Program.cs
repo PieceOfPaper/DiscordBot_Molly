@@ -1,13 +1,15 @@
-﻿using Discord;
+using Discord;
 using Discord.Interactions;
 using Discord.WebSocket;
 using Microsoft.Extensions.Configuration;
 using System.IO;
+using Molly.Runes;
 
 class Program
 {
     private readonly DiscordSocketClient m_Client;
     public DiscordSocketClient client => m_Client;
+    public RuneCatalog Runes { get; private set; } = null!;
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -81,31 +83,54 @@ class Program
         };
         AppDomain.CurrentDomain.ProcessExit += (_, __) => appCts.Cancel();
 
-        var fingerPrint = await MobiEventFingerprint.ComputeAsync();
-        await MobiEventBrowser.CacheAsync(fingerPrint);
-        
-        m_Client.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
-        m_InteractionService.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
-
-        // 터미널에 입력
-        // dotnet user-secrets set "Discord:Token" "여기에_봇_토큰"
-        var token = m_Config["Discord:Token"];
-        if (string.IsNullOrWhiteSpace(token))
-            throw new Exception("Discord 토큰이 비었습니다. user-secrets 설정을 확인하세요.");
-
-        await m_InteractionService.AddModulesAsync(typeof(Program).Assembly, null);
-        await m_Client.LoginAsync(TokenType.Bot, token);
-        await m_Client.StartAsync();
-
-        await MobiEventExpireAlert.RegistEventExpireAlertAll();
-        MobiEventExpireAlert.RunUpdateTask(appCts.Token);
+        using var runeHttp = new HttpClient();
+        Runes = new RuneCatalog(new GoogleSheetsRuneSource(runeHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
+            m_Config["GoogleSheets:RuneSheetId"] ?? "0"),
+            Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
+        await Runes.InitializeAsync(appCts.Token);
+        var runeUpdates = Runes.RunUpdatesAsync(TimeSpan.FromMinutes(10), appCts.Token);
         try
         {
-            await Task.Delay(Timeout.Infinite, appCts.Token);
+            try
+            {
+                var fingerPrint = await MobiEventFingerprint.ComputeAsync();
+                await MobiEventBrowser.CacheAsync(fingerPrint);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[이벤트] 초기 수집 실패, 다른 기능은 계속 시작합니다: {ex.Message}");
+            }
+
+            m_Client.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
+            m_InteractionService.Log += m => { Console.WriteLine(m.ToString()); return Task.CompletedTask; };
+
+            // 터미널에 입력
+            // dotnet user-secrets set "Discord:Token" "여기에_봇_토큰"
+            var token = m_Config["Discord:Token"];
+            if (string.IsNullOrWhiteSpace(token))
+                throw new Exception("Discord 토큰이 비었습니다. user-secrets 설정을 확인하세요.");
+
+            await m_InteractionService.AddModulesAsync(typeof(Program).Assembly, null);
+            await m_Client.LoginAsync(TokenType.Bot, token);
+            await m_Client.StartAsync();
+
+            try { await MobiEventExpireAlert.RegistEventExpireAlertAll(); }
+            catch (Exception ex) { Console.WriteLine($"[이벤트] 초기 알림 등록 실패: {ex.Message}"); }
+            MobiEventExpireAlert.RunUpdateTask(appCts.Token);
+            try
+            {
+                await Task.Delay(Timeout.Infinite, appCts.Token);
+            }
+            catch (TaskCanceledException)
+            {
+                // 정상 종료
+            }
         }
-        catch (TaskCanceledException)
+        finally
         {
-            // 정상 종료
+            await appCts.CancelAsync();
+            await runeUpdates;
         }
     }
 }

@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
     <None Include="assets\**\*.*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

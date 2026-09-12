@@ -1,0 +1,129 @@
+using System.Net;
+using Molly.Runes;
+
+const string header = "시즌,등급,분류,이름,효과\r\n";
+const string valid = header + "2,전설,무기,테스트,효과";
+if (args.Length == 2 && args[0] == "--csv")
+{
+    var table = RuneCsvReader.Parse(await File.ReadAllTextAsync(args[1]), DateTimeOffset.UtcNow);
+    Console.WriteLine($"실제 CSV: {table.Items.Count}개, 경고 {table.Warnings.Count}개");
+    foreach (var warning in table.Warnings) Console.WriteLine(warning);
+    return;
+}
+if (args.SequenceEqual(new[] { "--live" }))
+{
+    using var client = new HttpClient();
+    var table = RuneCsvReader.Parse(await new GoogleSheetsRuneSource(client).FetchCsvAsync(default), DateTimeOffset.UtcNow);
+    Console.WriteLine($"실제 Google Sheets HTTP 로딩: {table.Items.Count}개, 경고 {table.Warnings.Count}개");
+    return;
+}
+void Check(bool value, string name)
+{
+    if (!value) throw new Exception(name);
+    Console.WriteLine("PASS " + name);
+}
+void Reject(string csv, string name)
+{
+    try { RuneCsvReader.Parse(csv, DateTimeOffset.UtcNow); }
+    catch (Exception ex) when (ex is InvalidDataException or Microsoft.VisualBasic.FileIO.MalformedLineException)
+    { Console.WriteLine("PASS " + name); return; }
+    throw new Exception(name);
+}
+var parsed = RuneCsvReader.Parse("\uFEFF이름,효과,분류,등급,시즌\r\n테스트,\"첫 줄, \"\"인용\"\"\r\n둘째 줄\",무기,전설,2", DateTimeOffset.UtcNow);
+Check(parsed.Items[0].Effect == "첫 줄, \"인용\"\r\n둘째 줄", "열 재배치·BOM·쉼표·따옴표·여러 줄 효과");
+Reject("<html>로그인</html>", "HTML 거부");
+Reject(header, "빈 테이블 거부");
+Reject(valid + "\n2,전설,무기,테스트,다른 효과", "중복 키 거부");
+Reject(header + "시즌,전설,무기,이름,효과", "잘못된 시즌 거부");
+Reject(header + "2,전설,오타,이름,효과", "분류 오타 거부");
+Reject(header + "2,희귀,무기,이름,효과", "허용하지 않은 등급 거부");
+Reject(valid + ",여분", "열 수 불일치 거부");
+Reject(header + "2,전설,무기,이름,\"닫히지 않음", "깨진 CSV 거부");
+var partial = RuneCsvReader.Parse(valid + "\n2,전설,방어구,두 영웅,", DateTimeOffset.UtcNow);
+Check(partial.Items.Count == 1 && partial.Warnings.Count == 1, "미작성 효과 제외와 경고");
+var seasons = RuneCsvReader.Parse(valid + "\n1,전설,무기,테스트,이전 효과", DateTimeOffset.UtcNow);
+Check(seasons.ByKey.Count == 2, "시즌별 동일 이름 분리");
+
+var searchTable = RuneCsvReader.Parse(header + "2,전설,무기,거대한 분노,효과\n2,전설,방어구,분노의 힘,효과\n1,신화,장신구,분노,효과\n2,전설,무기,평온,분노가 증가한다", DateTimeOffset.UtcNow);
+Check(RuneSearch.Find(searchTable, " 분노 ").Count == 3, "이름 부분 일치 전체 검색 및 앞뒤 공백 제거");
+Check(RuneSearch.Find(searchTable, "분노".Normalize(System.Text.NormalizationForm.FormD)).Count == 3, "한글 유니코드 정규화 검색");
+Check(RuneSearch.Find(searchTable, "없는이름").Count == 0, "검색 결과 없음");
+foreach (var empty in new string?[] { null, "", " ", "\t\r\n", "　" })
+{
+    try { RuneSearch.Find(searchTable, empty); throw new Exception("빈 검색어 허용"); }
+    catch (ArgumentException) { }
+}
+Console.WriteLine("PASS 누락·빈 문자열·공백 검색어 거부");
+var resultText = RuneSearch.Format(RuneSearch.Find(searchTable, "분노"));
+Check(resultText.Contains("3개") && resultText.Contains("시즌 1 · 신화 · 장신구") && !resultText.Contains("평온"), "검색 결과 상세 정보와 이름만 검색");
+var longText = new string('가', 1899) + "😀" + new string('나', 4000) + "\n마지막";
+var messages = RuneSearch.SplitMessages(longText);
+Check(messages.All(x => x.Length is > 0 and <= 1900 && !char.IsHighSurrogate(x[^1])) && string.Concat(messages) == longText, "긴 결과 누락 없이 분할 및 이모지 보존");
+
+var dir = Path.Combine(Path.GetTempPath(), "molly-data-tests-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var source = new FakeSource(valid);
+    var catalog = new RuneCatalog(source, dir, _ => { });
+    await catalog.InitializeAsync();
+    var original = catalog.Current;
+    source.Csv = header;
+    Check(!await catalog.RefreshAsync() && ReferenceEquals(original, catalog.Current), "검증 실패 시 스냅샷 유지");
+    source.Fail = true;
+    Check(!await catalog.RefreshAsync() && ReferenceEquals(original, catalog.Current), "통신 실패 시 스냅샷 유지");
+    var restarted = new RuneCatalog(source, dir, _ => { });
+    await restarted.InitializeAsync();
+    Check(restarted.Current.Items.Count == 1, "재시작 후 오프라인 캐시 복구");
+    using var cts = new CancellationTokenSource();
+    cts.Cancel();
+    try { await catalog.RefreshAsync(cts.Token); throw new Exception("취소 미전파"); }
+    catch (OperationCanceledException) { Console.WriteLine("PASS 취소 전파"); }
+    source.Fail = false;
+    source.Csv = valid.Replace("테스트", "새 룬");
+    await Task.WhenAll(Enumerable.Range(0, 5).Select(_ => catalog.RefreshAsync()));
+    Check(source.MaximumConcurrent == 1 && catalog.Current.Items[0].Name == "새 룬", "동시 갱신 직렬화 및 전체 교체");
+    Check(original.Items[0].Name == "테스트", "기존 독자 스냅샷 불변");
+    var cache = Directory.GetFiles(Path.Combine(dir, "runes"), "*.csv").Single();
+    await File.WriteAllTextAsync(cache, "broken");
+    source.Fail = true;
+    var broken = new RuneCatalog(source, dir, _ => { });
+    await broken.InitializeAsync();
+    Check(broken.Current.Items.Count == 0, "손상 캐시와 통신 실패 시 안전한 빈 상태");
+    var blockedDir = Path.Combine(dir, "file");
+    await File.WriteAllTextAsync(blockedDir, "not a directory");
+    source.Fail = false;
+    var unwritable = new RuneCatalog(source, blockedDir, _ => { });
+    Check(!await unwritable.RefreshAsync() && unwritable.Current.Items.Count == 0, "저장 실패 시 새 데이터 미공개");
+}
+finally { Directory.Delete(dir, recursive: true); }
+using var http = new HttpClient(new StubHandler());
+var httpSource = new GoogleSheetsRuneSource(http);
+try { await httpSource.FetchCsvAsync(default); throw new Exception("HTML 허용"); }
+catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거부"); }
+Console.WriteLine("모든 오프라인 데이터 테스트 통과");
+
+sealed class FakeSource(string csv) : IRuneSource
+{
+    public string CacheKey => "test-source";
+    public string Csv { get; set; } = csv;
+    public bool Fail { get; set; }
+    public int MaximumConcurrent { get; private set; }
+    private int active;
+    public async Task<string> FetchCsvAsync(CancellationToken ct)
+    {
+        MaximumConcurrent = Math.Max(MaximumConcurrent, Interlocked.Increment(ref active));
+        try
+        {
+            await Task.Delay(10, ct);
+            if (Fail) throw new HttpRequestException("offline");
+            return Csv;
+        }
+        finally { Interlocked.Decrement(ref active); }
+    }
+}
+sealed class StubHandler : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent("<html>Login</html>", System.Text.Encoding.UTF8, "text/html") });
+}
