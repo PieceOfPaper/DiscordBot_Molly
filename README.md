@@ -205,3 +205,8 @@ Linux에서 브라우저 시스템 라이브러리가 부족하면 관리자 권
 
 실제 실행은 기존 빠른 시작의 토큰·테스트 서버 설정을 따르세요.
 저장 경로는 예를 들어 `MOLLY_DATA_DIR="$PWD/.molly-data"`로 지정할 수 있습니다.
+
+
+## AWS Lightsail 배포
+
+Ubuntu 24.04 최초 설정, 512MB 인스턴스의 스왑, Playwright 권한 문제, systemd 운영 및 GitHub Actions 자동 배포는 [AWS Lightsail 배포 및 운영](docs/lightsail-deployment.md)을 참고하세요.

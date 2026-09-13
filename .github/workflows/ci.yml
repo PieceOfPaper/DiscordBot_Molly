@@ -24,3 +24,82 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Verify
         run: bash scripts/verify.sh
+      - name: Publish Lightsail artifact
+        if: github.event_name != 'pull_request'
+        run: >-
+          dotnet publish DiscordBot_Molly.csproj
+          --configuration Release
+          --runtime linux-x64
+          --self-contained true
+          --output artifacts/lightsail
+      - name: Archive Lightsail artifact
+        if: github.event_name != 'pull_request'
+        run: tar -C artifacts/lightsail -czf artifacts/molly-linux-x64.tar.gz .
+      - name: Upload Lightsail artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: molly-linux-x64
+          path: artifacts/molly-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy to Lightsail
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.LIGHTSAIL_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: molly-linux-x64
+          path: artifacts
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.LIGHTSAIL_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.LIGHTSAIL_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.LIGHTSAIL_HOST }}
+          DEPLOY_USER: ${{ vars.LIGHTSAIL_USER }}
+        run: |
+          test -n "$DEPLOY_KEY"
+          test -n "$KNOWN_HOSTS"
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/molly_lightsail
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/molly_lightsail
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Upload release
+        env:
+          DEPLOY_HOST: ${{ vars.LIGHTSAIL_HOST }}
+          DEPLOY_USER: ${{ vars.LIGHTSAIL_USER }}
+          DEPLOY_PORT: ${{ vars.LIGHTSAIL_PORT }}
+        run: |
+          scp -P "${DEPLOY_PORT:-22}" -i ~/.ssh/molly_lightsail \
+            artifacts/molly-linux-x64.tar.gz \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/molly-${GITHUB_SHA}.tar.gz"
+          scp -P "${DEPLOY_PORT:-22}" -i ~/.ssh/molly_lightsail \
+            scripts/deploy-lightsail.sh \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/deploy-molly.sh"
+      - name: Activate release
+        env:
+          DEPLOY_HOST: ${{ vars.LIGHTSAIL_HOST }}
+          DEPLOY_USER: ${{ vars.LIGHTSAIL_USER }}
+          DEPLOY_PORT: ${{ vars.LIGHTSAIL_PORT }}
+        run: |
+          ssh -p "${DEPLOY_PORT:-22}" -i ~/.ssh/molly_lightsail \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo bash /tmp/deploy-molly.sh /tmp/molly-${GITHUB_SHA}.tar.gz ${GITHUB_SHA}"
+      - name: Show service status
+        if: always()
+        env:
+          DEPLOY_HOST: ${{ vars.LIGHTSAIL_HOST }}
+          DEPLOY_USER: ${{ vars.LIGHTSAIL_USER }}
+          DEPLOY_PORT: ${{ vars.LIGHTSAIL_PORT }}
+        run: |
+          ssh -p "${DEPLOY_PORT:-22}" -i ~/.ssh/molly_lightsail \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "sudo systemctl status molly --no-pager --lines=30"
