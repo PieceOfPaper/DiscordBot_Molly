@@ -6,7 +6,7 @@ namespace Molly.Runes;
 
 public sealed record RuneKey(int Season, string Grade, string Category, string Name);
 
-public sealed record RuneData(int Season, string Grade, string Category, string Name, string Effect)
+public sealed record RuneData(int Season, string Grade, string Category, string Class, string Name, string Effect)
 {
     public RuneKey Key => new(Season, Grade, Category, Name);
 }
@@ -42,9 +42,9 @@ public static class RuneCsvReader
         parser.SetDelimiters(",");
         var headers = parser.ReadFields() ?? throw new InvalidDataException("룬 테이블 헤더가 없습니다.");
         headers = headers.Select(x => x.Trim()).ToArray();
-        string[] required = ["시즌", "등급", "분류", "이름", "효과"];
+        string[] required = ["시즌", "등급", "분류", "클래스", "이름", "효과"];
         if (headers.Distinct(StringComparer.Ordinal).Count() != headers.Length || required.Any(x => !headers.Contains(x)))
-            throw new InvalidDataException("룬 테이블에 중복 헤더가 있거나 필수 헤더(시즌·등급·분류·이름·효과)가 없습니다.");
+            throw new InvalidDataException("룬 테이블에 중복 헤더가 있거나 필수 헤더(시즌·등급·분류·클래스·이름·효과)가 없습니다.");
         var indexes = required.Select(x => Array.IndexOf(headers, x)).ToArray();
         var items = new List<RuneData>();
         var warnings = new List<string>();
@@ -59,9 +59,9 @@ public static class RuneCsvReader
             var values = indexes.Select(i => fields[i].Trim()).ToArray();
             if (!int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var season) || season < 1)
                 throw new InvalidDataException($"룬 CSV {line}행의 시즌은 양의 정수여야 합니다.");
-            if (values[1] is not ("신화" or "전설") || values[2] is not ("무기" or "방어구" or "앰블럼" or "장신구") || values[3].Length == 0)
+            if (values[1] is not ("신화" or "전설") || values[2] is not ("무기" or "방어구" or "앰블럼" or "장신구") || values[4].Length == 0)
                 throw new InvalidDataException($"룬 CSV {line}행의 등급·분류·이름을 확인하세요.");
-            var item = new RuneData(season, values[1], values[2], values[3], values[4]);
+            var item = new RuneData(season, values[1], values[2], values[3], values[4], values[5]);
             if (!keys.Add(item.Key))
                 throw new InvalidDataException($"룬 CSV {line}행에 같은 시즌·등급·분류·이름이 중복됩니다.");
             if (item.Effect.Length == 0)

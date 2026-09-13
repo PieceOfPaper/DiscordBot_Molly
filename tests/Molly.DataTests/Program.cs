@@ -2,8 +2,8 @@ using System.Net;
 using Molly.Runes;
 using Molly.Quiz;
 
-const string header = "시즌,등급,분류,이름,효과\r\n";
-const string valid = header + "2,전설,무기,테스트,효과";
+const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
+const string valid = header + "2,전설,무기,전사,테스트,효과";
 if (args.Length == 2 && args[0] == "--csv")
 {
     var table = RuneCsvReader.Parse(await File.ReadAllTextAsync(args[1]), DateTimeOffset.UtcNow);
@@ -30,22 +30,23 @@ void Reject(string csv, string name)
     { Console.WriteLine("PASS " + name); return; }
     throw new Exception(name);
 }
-var parsed = RuneCsvReader.Parse("\uFEFF이름,효과,분류,등급,시즌\r\n테스트,\"첫 줄, \"\"인용\"\"\r\n둘째 줄\",무기,전설,2", DateTimeOffset.UtcNow);
-Check(parsed.Items[0].Effect == "첫 줄, \"인용\"\r\n둘째 줄", "열 재배치·BOM·쉼표·따옴표·여러 줄 효과");
+var parsed = RuneCsvReader.Parse("\uFEFF이름,효과,분류,등급,시즌,클래스\r\n테스트,\"첫 줄, \"\"인용\"\"\r\n둘째 줄\",무기,전설,2,전사", DateTimeOffset.UtcNow);
+Check(parsed.Items[0].Effect == "첫 줄, \"인용\"\r\n둘째 줄" && parsed.Items[0].Class == "전사", "열 재배치·BOM·쉼표·따옴표·여러 줄 효과·클래스");
 Reject("<html>로그인</html>", "HTML 거부");
 Reject(header, "빈 테이블 거부");
-Reject(valid + "\n2,전설,무기,테스트,다른 효과", "중복 키 거부");
-Reject(header + "시즌,전설,무기,이름,효과", "잘못된 시즌 거부");
-Reject(header + "2,전설,오타,이름,효과", "분류 오타 거부");
-Reject(header + "2,희귀,무기,이름,효과", "허용하지 않은 등급 거부");
+Reject(valid + "\n2,전설,무기,전사,테스트,다른 효과", "중복 키 거부");
+Reject(header + "시즌,전설,무기,전사,이름,효과", "잘못된 시즌 거부");
+Reject(header + "2,전설,오타,전사,이름,효과", "분류 오타 거부");
+Reject(header + "2,희귀,무기,전사,이름,효과", "허용하지 않은 등급 거부");
+Reject("시즌,등급,분류,이름,효과\n2,전설,무기,이름,효과", "클래스 헤더 누락 거부");
 Reject(valid + ",여분", "열 수 불일치 거부");
 Reject(header + "2,전설,무기,이름,\"닫히지 않음", "깨진 CSV 거부");
-var partial = RuneCsvReader.Parse(valid + "\n2,전설,방어구,두 영웅,", DateTimeOffset.UtcNow);
+var partial = RuneCsvReader.Parse(valid + "\n2,전설,방어구,전사,두 영웅,", DateTimeOffset.UtcNow);
 Check(partial.Items.Count == 1 && partial.Warnings.Count == 1, "미작성 효과 제외와 경고");
-var seasons = RuneCsvReader.Parse(valid + "\n1,전설,무기,테스트,이전 효과", DateTimeOffset.UtcNow);
+var seasons = RuneCsvReader.Parse(valid + "\n1,전설,무기,전사,테스트,이전 효과", DateTimeOffset.UtcNow);
 Check(seasons.ByKey.Count == 2, "시즌별 동일 이름 분리");
 
-var searchTable = RuneCsvReader.Parse(header + "2,전설,무기,거대한 분노,효과\n2,전설,방어구,분노의 힘,효과\n1,신화,장신구,분노,효과\n2,전설,무기,평온,분노가 증가한다", DateTimeOffset.UtcNow);
+var searchTable = RuneCsvReader.Parse(header + "2,전설,무기,전사,거대한 분노,효과\n2,전설,방어구,궁수,분노의 힘,효과\n1,신화,장신구,,분노,효과\n2,전설,무기,전사,평온,분노가 증가한다", DateTimeOffset.UtcNow);
 Check(RuneSearch.Find(searchTable, " 분노 ").Count == 3, "이름 부분 일치 전체 검색 및 앞뒤 공백 제거");
 Check(RuneSearch.Find(searchTable, "분노".Normalize(System.Text.NormalizationForm.FormD)).Count == 3, "한글 유니코드 정규화 검색");
 Check(RuneSearch.Find(searchTable, "없는이름").Count == 0, "검색 결과 없음");
@@ -56,18 +57,24 @@ foreach (var empty in new string?[] { null, "", " ", "\t\r\n", "　" })
 }
 Console.WriteLine("PASS 누락·빈 문자열·공백 검색어 거부");
 var resultText = RuneSearch.Format(RuneSearch.Find(searchTable, "분노"));
-Check(resultText.Contains("3개") && resultText.Contains("시즌 1 · 신화 · 장신구") && !resultText.Contains("평온"), "검색 결과 상세 정보와 이름만 검색");
+Check(resultText.Contains("3개") && resultText.Contains("시즌 1 · 신화 · 장신구") && resultText.Contains("· 전사") && !resultText.Contains("평온"), "검색 결과 상세 정보와 클래스·이름만 검색");
 var longText = new string('가', 1899) + "😀" + new string('나', 4000) + "\n마지막";
 var messages = RuneSearch.SplitMessages(longText);
 Check(messages.All(x => x.Length is > 0 and <= 1900 && !char.IsHighSurrogate(x[^1])) && string.Concat(messages) == longText, "긴 결과 누락 없이 분할 및 이모지 보존");
 var quizPool = RuneCsvReader.Parse(header +
-    "2,전설,무기,첫 룬,효과 1\n2,전설,방어구,두 룬,효과 2\n1,신화,장신구,이전 시즌,효과 3", DateTimeOffset.UtcNow);
+    "2,전설,무기,전사,첫 룬,효과 1\n2,전설,방어구,궁수,두 룬,효과 2\n2,신화,장신구,마법사,장신구 룬,효과 3\n2,신화,장신구,,클래스 없음,효과 4\n1,신화,장신구,마법사,이전 시즌,효과 5", DateTimeOffset.UtcNow);
 var picked = QuizQuestions.Pick(QuizTopic.Season2RuneEffect, quizPool.Items, 2);
-Check(picked.Count == 2 && picked.All(x => x.Answer is "첫 룬" or "두 룬"), "시즌2 유효 룬만 출제");
+Check(picked.Count == 2 && picked.All(x => x.Answer is "첫 룬" or "두 룬" or "장신구 룬" or "클래스 없음"), "시즌2 유효 룬만 출제");
 Check(QuizQuestions.NormalizeAnswer(" 첫  룬 ") == QuizQuestions.NormalizeAnswer("첫룬"), "퀴즈 정답 띄어쓰기 무시");
 Check(QuizQuestions.NormalizeAnswer("ABC") == QuizQuestions.NormalizeAnswer("abc"), "퀴즈 정답 영문 대소문자 무시");
-Check(QuizQuestions.Pick(QuizTopic.Season2RuneEffect, quizPool.Items, 99).Count == 2, "출제 가능 수만큼 자동 조정");
-var plusName = RuneCsvReader.Parse(header + "2,전설,무기,폭염+,효과", DateTimeOffset.UtcNow);
+Check(QuizQuestions.Pick(QuizTopic.Season2RuneEffect, quizPool.Items, 99).Count == 4, "출제 가능 수만큼 자동 조정");
+var accessoryEffect = QuizQuestions.Pick(QuizTopic.Season2AccessoryRuneEffect, quizPool.Items, 99);
+Check(accessoryEffect.Count == 2 && accessoryEffect.All(x => x.Answer is "장신구 룬" or "클래스 없음"), "시즌2 장신구 룬 효과로 이름 출제");
+var nonAccessoryEffect = QuizQuestions.Pick(QuizTopic.Season2NonAccessoryRuneEffect, quizPool.Items, 99);
+Check(nonAccessoryEffect.Count == 2 && nonAccessoryEffect.All(x => x.Answer is "첫 룬" or "두 룬"), "시즌2 장신구를 제외한 룬 효과로 이름 출제");
+var accessoryClass = QuizQuestions.Pick(QuizTopic.Season2AccessoryRuneNameClass, quizPool.Items, 99);
+Check(accessoryClass.Count == 1 && accessoryClass[0] == new QuizQuestion("장신구 룬", "마법사"), "클래스가 있는 시즌2 장신구 룬 이름으로 클래스 출제");
+var plusName = RuneCsvReader.Parse(header + "2,전설,무기,전사,폭염+,효과", DateTimeOffset.UtcNow);
 Check(QuizQuestions.Pick(QuizTopic.Season2RuneEffect, plusName.Items, 1)[0].Answer == "폭염", "정답 표시에서 플러스 제거");
 var round = new QuizRound("두 룬", 100, TimeSpan.FromSeconds(30));
 Check(round.Submit(1, 99, "두 룬") == false, "문제 이전 메시지 무시");

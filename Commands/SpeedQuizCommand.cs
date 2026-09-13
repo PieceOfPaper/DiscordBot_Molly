@@ -22,7 +22,10 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
         [Choice("시즌2룬효과로이름", "시즌2룬효과로이름")]
         [Choice("시즌2무기룬효과로이름", "시즌2무기룬효과로이름")]
         [Choice("시즌2방어구룬효과로이름", "시즌2방어구룬효과로이름")]
-        [Choice("시즌2앰블럼룬효과로이름", "시즌2앰블럼룬효과로이름")] string topic,
+        [Choice("시즌2앰블럼룬효과로이름", "시즌2앰블럼룬효과로이름")]
+        [Choice("시즌2장신구룬효과로이름", "시즌2장신구룬효과로이름")]
+        [Choice("시즌2장신구룬빼고효과로이름", "시즌2장신구룬빼고효과로이름")]
+        [Choice("시즌2장신구룬이름으로클래스", "시즌2장신구룬이름으로클래스")] string topic,
         [Summary("문제수", "출제할 문제 수 (기본 10개)"), MinValue(1)] int count = 10,
         [Summary("제한시간", "문제 하나당 제한시간 (기본 30초)"), MinValue(1)] int seconds = 30,
         [Summary("자음표시", "문제에 자음 힌트를 표시할지 여부 (기본 false)")] bool showConsonants = false)
@@ -34,11 +37,14 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
             "시즌2무기룬효과로이름" => QuizTopic.Season2WeaponRuneEffect,
             "시즌2방어구룬효과로이름" => QuizTopic.Season2ArmorRuneEffect,
             "시즌2앰블럼룬효과로이름" => QuizTopic.Season2EmblemRuneEffect,
+            "시즌2장신구룬효과로이름" => QuizTopic.Season2AccessoryRuneEffect,
+            "시즌2장신구룬빼고효과로이름" => QuizTopic.Season2NonAccessoryRuneEffect,
+            "시즌2장신구룬이름으로클래스" => QuizTopic.Season2AccessoryRuneNameClass,
             _ => (QuizTopic?)null
         };
         if (selectedTopic is null)
         {
-            await RespondAsync("문제종목을 선택해주세요. 현재 네 가지 시즌2 룬 종목을 지원합니다.", ephemeral: true);
+            await RespondAsync("문제종목을 선택해주세요. 현재 일곱 가지 시즌2 룬 종목을 지원합니다.", ephemeral: true);
             return;
         }
         if (count < 1 || seconds < 1)

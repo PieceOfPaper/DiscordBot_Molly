@@ -15,7 +15,9 @@ public static class RuneSearch
 
     public static string Format(IReadOnlyList<RuneData> results)
         => $"룬 검색 결과: {results.Count}개\n\n" + string.Join("\n\n", results.Select(r =>
-            $"{r.Name} · 시즌 {r.Season} · {r.Grade} · {r.Category}\n{r.Effect}"));
+            $"{r.Name} · 시즌 {r.Season} · {r.Grade} · {r.Category}" +
+            (string.IsNullOrWhiteSpace(r.Class) ? string.Empty : $" · {r.Class}") +
+            $"\n{r.Effect}"));
 
     public static IReadOnlyList<string> SplitMessages(string text)
     {
