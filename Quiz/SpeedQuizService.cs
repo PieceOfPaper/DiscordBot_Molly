@@ -7,7 +7,6 @@ public interface IQuizRoom
     ulong Id { get; }
     Task<ulong> SendAsync(string text, CancellationToken ct);
     Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct);
-    Task EditEmbedAsync(ulong messageId, string title, string description, uint color, CancellationToken ct);
 }
 
 public sealed record QuizStartResult(bool Started, ulong ChannelId);
@@ -53,9 +52,9 @@ public sealed class SpeedQuizService
             session.RoomReady.TrySetResult(session.Room.Id);
             var introTitle = "🎮 스피드퀴즈 참가 안내";
             var introDescription = $"📚 {description}\n\n🔢 문제수: {selected.Length}개\n⏱️ 문제당 제한시간: {seconds}초\n🏆 가장 먼저 맞힌 한 명에게 1점\n🔤 띄어쓰기와 영문 대소문자는 구분하지 않습니다.";
-            var introMessageId = await session.Room.SendEmbedAsync(introTitle, introDescription, 0x5865F2, ct);
+            await session.Room.SendEmbedAsync(introTitle, introDescription, 0x5865F2, ct);
             await announce(session.Room.Id, ct);
-            _ = RunAsync(guildId, session, selected, seconds, introMessageId, introTitle, introDescription, showConsonants);
+            _ = RunAsync(guildId, session, selected, seconds, showConsonants);
             return new(true, session.Room.Id);
         }
         catch
@@ -93,14 +92,14 @@ public sealed class SpeedQuizService
         await Task.WhenAll(sessions.Values.Select(s => s.Done.Task));
     }
 
-    private async Task RunAsync(ulong guildId, Session session, QuizQuestion[] questions, int seconds, ulong introMessageId, string introTitle, string introDescription, bool showConsonants)
+    private async Task RunAsync(ulong guildId, Session session, QuizQuestion[] questions, int seconds, bool showConsonants)
     {
         var ct = session.Stop.Token;
         var room = session.Room!;
         var scores = new Dictionary<ulong, int>();
         try
         {
-            await QuizCountdown.RunAsync(room, introMessageId, introTitle, introDescription, StartDelaySeconds, "시작까지", delay, ct, clock);
+            await QuizCountdown.RunAsync(room, StartDelaySeconds, "스피드퀴즈 시작까지", false, delay, ct, clock);
             for (var i = 0; i < questions.Length; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -113,7 +112,7 @@ public sealed class SpeedQuizService
                 Volatile.Write(ref session.Round, round);
                 using var timerStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var timeout = delay(TimeSpan.FromSeconds(seconds), timerStop.Token);
-                var countdown = QuizCountdown.RunAsync(room, messageId, questionTitle, body, seconds, "남은 시간", delay, timerStop.Token, clock);
+                var countdown = QuizCountdown.RunAsync(room, seconds, $"문제 {i + 1} 남은 시간", true, delay, timerStop.Token, clock);
                 try
                 {
                     await Task.WhenAny(round.Completion, timeout, countdown);
@@ -137,9 +136,9 @@ public sealed class SpeedQuizService
                 var scoreText = i + 1 < questions.Length ? $"\n{FormatScores(scores)}" : "";
                 var resultTitle = "📣 문제 결과";
                 var resultDescription = $"{outcome}\n\n✅ 정답: {question.Answer}{scoreText}";
-                var resultMessageId = await room.SendEmbedAsync(resultTitle, resultDescription, winner is ulong ? 0x57F287u : 0xED4245u, ct);
+                await room.SendEmbedAsync(resultTitle, resultDescription, winner is ulong ? 0x57F287u : 0xED4245u, ct);
                 if (i + 1 < questions.Length)
-                    await QuizCountdown.RunAsync(room, resultMessageId, resultTitle, resultDescription, BetweenQuestionsSeconds, "다음 문제까지", delay, ct, clock);
+                    await QuizCountdown.RunAsync(room, BetweenQuestionsSeconds, "다음 문제까지", false, delay, ct, clock);
             }
             var winners = scores.Count == 0 ? "정답자가 없어 우승자가 없습니다." :
                 $"{(scores.Count(x => x.Value == scores.Values.Max()) > 1 ? "공동 우승" : "우승")}: " +

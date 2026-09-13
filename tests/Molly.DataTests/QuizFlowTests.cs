@@ -8,18 +8,24 @@ internal static class QuizFlowTests
         Assert(QuizQuestions.ConsonantHint("폭염+!") == "ㅍㅇ", "초성 힌트 특수문자 제거");
         Assert(QuizQuestions.ConsonantHint("까  쌍").Normalize() == "ㄲ  ㅆ", "쌍자음 및 연속 공백 보존");
         Assert(QuizQuestions.ConsonantHint("폭염".Normalize(System.Text.NormalizationForm.FormD)) == "ㅍㅇ", "분해된 한글 초성 변환");
-        foreach (var seconds in new[] { 1, 2, 3, 10, 30 })
-        {
-            var clock = new Clock();
-            var room = new Room(clock);
-            await QuizCountdown.RunAsync(room, 1, "안내", "본문", seconds, "남은 시간", clock.Delay, default, clock);
-            Assert(clock.Seconds == seconds, $"{seconds}초 전체 대기");
-            Assert(room.Edits.Count == seconds + 1 && room.Edits[^1].Contains("**0초**"), "모든 초와 0초 표시");
-        }
+        var normalClock = new Clock();
+        var normalRoom = new Room(normalClock);
+        await QuizCountdown.RunAsync(normalRoom, 30, "시작까지", false, normalClock.Delay, default, normalClock);
+        Assert(normalClock.Seconds == 30, "5초 단위 카운트다운도 전체 시간 대기");
+        Assert(normalRoom.Messages.SequenceEqual(new[] { "⏱️ **시작까지 30초**", "⏱️ **시작까지 25초**", "⏱️ **시작까지 20초**", "⏱️ **시작까지 15초**", "⏱️ **시작까지 10초**", "⏱️ **시작까지 5초**" }), "시작·문제 사이 알림은 5초 단위 일반 메시지");
+
+        var dramaticClock = new Clock();
+        var dramaticRoom = new Room(dramaticClock);
+        await QuizCountdown.RunAsync(dramaticRoom, 10, "문제 1 남은 시간", true, dramaticClock.Delay, default, dramaticClock);
+        Assert(dramaticClock.Seconds == 10, "문제 카운트다운 전체 시간 대기");
+        Assert(dramaticRoom.Messages.Count == 5 && dramaticRoom.Messages.Take(2).All(x => x.Contains("초")) &&
+               dramaticRoom.Messages.Skip(2).All(x => x.Contains("마지막")), "문제만 마지막 3초 강조 메시지");
+        Assert(dramaticRoom.Messages[^1] == "🚨🚨 **마지막 1초!** 🚨🚨", "마지막 1초 한 줄 긴장감 강조");
+
         var lagClock = new Clock();
-        var lagRoom = new Room(lagClock) { Edit = _ => lagClock.Advance(.25) };
-        await QuizCountdown.RunAsync(lagRoom, 1, "문제", "본문", 10, "남은 시간", lagClock.Delay, default, lagClock);
-        Assert(lagClock.Seconds == 10.25, "메시지 지연 누적 없이 마감 시각 유지");
+        var lagRoom = new Room(lagClock) { Send = _ => lagClock.Advance(.25) };
+        await QuizCountdown.RunAsync(lagRoom, 10, "남은 시간", false, lagClock.Delay, default, lagClock);
+        Assert(lagClock.Seconds == 10, "메시지 전송 지연 누적 없이 마감 시각 유지");
 
         var raceClock = new Clock();
         var round = new QuizRound("정답", 1, TimeSpan.FromSeconds(30), raceClock);
@@ -36,9 +42,9 @@ internal static class QuizFlowTests
             var service = new SpeedQuizService((duration, ct) => duration.TotalSeconds == 6
                 ? Task.Delay(Timeout.Infinite, ct) : clock.Delay(duration, ct), clock: clock);
             var submitted = false;
-            room.Edit = title =>
+            room.Send = text =>
             {
-                if (force && title.StartsWith("🧩") && !submitted)
+                if (force && text.Contains("문제 1 남은 시간") && !submitted)
                 {
                     submitted = service.Submit(1, room.Id, 42, 999, "정답");
                     service.ForceStop(1);
@@ -56,13 +62,13 @@ internal static class QuizFlowTests
             await service.StopAsync();
         }
         var failureClock = new Clock();
-        var failureRoom = new Room(failureClock) { Edit = title => { if (title.StartsWith("🧩")) throw new IOException("edit failed"); } };
+        var failureRoom = new Room(failureClock) { Send = _ => throw new IOException("send failed") };
         var errors = new List<string>();
         var failedService = new SpeedQuizService((duration, ct) => duration.TotalSeconds == 6 ? Task.Delay(Timeout.Infinite, ct) : failureClock.Delay(duration, ct), errors.Add, failureClock);
         await failedService.StartAsync(2, QuizTopic.Season2RuneEffect, new[] { new QuizQuestion("효과", "정답") }, 6,
             _ => Task.FromResult<IQuizRoom>(failureRoom), (_, _) => Task.CompletedTask);
         await failedService.StopAsync();
-        Assert(errors.Any(x => x.Contains("edit failed")), "Embed 수정 실패 관찰 및 종료");
+        Assert(errors.Any(x => x.Contains("send failed")), "카운트다운 메시지 전송 실패 관찰 및 종료");
     }
 
     private static void Assert(bool condition, string name)
@@ -89,26 +95,25 @@ internal static class QuizFlowTests
     private sealed class Room(Clock clock) : IQuizRoom
     {
         public ulong Id => 50;
-        public List<string> Edits = new();
+        public List<string> Messages = new();
         public List<double> QuestionTimes = new();
-        public Action<string>? Edit;
+        public Action<string>? Send;
         public string Final = "";
         public TaskCompletionSource Finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private ulong id;
-        public Task<ulong> SendAsync(string text, CancellationToken ct) => Task.FromResult(++id);
+        public Task<ulong> SendAsync(string text, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Messages.Add(text);
+            Send?.Invoke(text);
+            return Task.FromResult(++id);
+        }
         public Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             if (title.StartsWith("🧩")) QuestionTimes.Add(clock.Seconds);
             if (title.Contains("종료")) { Final = description; Finished.TrySetResult(); }
             return Task.FromResult(++id);
-        }
-        public Task EditEmbedAsync(ulong messageId, string title, string description, uint color, CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            Edits.Add(description);
-            Edit?.Invoke(title);
-            return Task.CompletedTask;
         }
     }
 }

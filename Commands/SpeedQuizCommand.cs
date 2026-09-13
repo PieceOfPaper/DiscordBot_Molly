@@ -123,15 +123,4 @@ internal sealed class DiscordQuizRoom(ITextChannel channel) : IQuizRoom
         return message.Id;
     }
 
-    public async Task EditEmbedAsync(ulong messageId, string title, string description, uint color, CancellationToken ct)
-    {
-        var embed = new EmbedBuilder()
-            .WithTitle(title)
-            .WithDescription(description)
-            .WithColor(new Color(color))
-            .WithTimestamp(DateTimeOffset.UtcNow)
-            .Build();
-        await channel.ModifyMessageAsync(messageId, m => m.Embed = embed,
-            options: new RequestOptions { CancelToken = ct });
-    }
 }
