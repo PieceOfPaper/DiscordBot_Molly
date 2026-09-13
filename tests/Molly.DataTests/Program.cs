@@ -84,6 +84,24 @@ round.Close();
 var normalized = QuizQuestions.NormalizeAnswer("두 룬");
 Check(normalized == "두룬", "퀴즈 정답 정규화");
 
+var consonantCsv = new ConsonantCsvData(
+    "이름,지역\n알 수 없는 NPC,\n글리니스,던바튼",
+    "이름,분류,대륙\n던바튼,마을,울라\n티르 코네일,마을,울라",
+    "이름,계열\n전사,전사\n마법사,마법");
+var consonantTable = ConsonantCsvReader.Parse(consonantCsv, DateTimeOffset.UtcNow);
+Check(consonantTable.Npcs.Count == 2 && consonantTable.Regions.Count == 2 && consonantTable.Classes.Count == 2, "NPC·지역·클래스 CSV 검증");
+var npcQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Npc, quizPool.Items, consonantTable, 10);
+Check(npcQuestions.Count == 2 && npcQuestions.Any(q => q.Prompt.Contains("종류: **NPC**") && q.Prompt.Contains("지역: 불명")) && npcQuestions.All(q => q.Prompt.Contains("자음:")), "NPC 자음·지역 힌트와 불명 처리");
+var regionQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Region, quizPool.Items, consonantTable, 10);
+Check(regionQuestions.All(q => q.Prompt.Contains("종류: **지역**") && q.Prompt.Contains("분류: 마을")), "지역 자음·분류 힌트");
+var classQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Class, quizPool.Items, consonantTable, 10);
+Check(classQuestions.All(q => q.Prompt.Contains("종류: **클래스**") && !q.Prompt.Contains("💡 힌트")), "클래스 자음과 힌트 없음");
+var runeQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Season2WeaponRune, quizPool.Items, consonantTable, 10);
+Check(runeQuestions.Count == 1 && runeQuestions[0].Prompt.Contains("무기룬"), "시즌2 무기룬 자음 힌트");
+var mixedQuestions = QuizQuestions.PickConsonant(ConsonantTopic.NpcClassRegion, quizPool.Items, consonantTable, 99);
+Check(mixedQuestions.Count == 6 && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("NPC")) && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("클래스")) && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("지역")), "NPC·클래스·지역 혼합 출제");
+RejectConsonants(new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions, consonantCsv.Classes), "NPC 이름 중복 거부");
+
 var dir = Path.Combine(Path.GetTempPath(), "molly-data-tests-" + Guid.NewGuid().ToString("N"));
 try
 {
@@ -130,6 +148,13 @@ try
     source.Fail = false;
     var unwritable = new RuneCatalog(source, blockedDir, _ => { });
     Check(!await unwritable.RefreshAsync() && unwritable.Current.Items.Count == 0, "저장 실패 시 새 데이터 미공개");
+
+    var consonantSource = new FakeConsonantSource(consonantCsv);
+    var consonantCatalog = new ConsonantCatalog(consonantSource, dir, _ => { });
+    await consonantCatalog.InitializeAsync();
+    var consonantOriginal = consonantCatalog.Current;
+    consonantSource.Csv = new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions, consonantCsv.Classes);
+    Check(!await consonantCatalog.RefreshAsync() && ReferenceEquals(consonantOriginal, consonantCatalog.Current), "자음퀴즈 시트 검증 실패 시 정상 스냅샷 유지");
 }
 finally { Directory.Delete(dir, recursive: true); }
 using var http = new HttpClient(new StubHandler());
@@ -138,6 +163,13 @@ try { await httpSource.FetchCsvAsync(default); throw new Exception("HTML 허용"
 catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거부"); }
 await QuizFlowTests.RunAsync();
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
+
+void RejectConsonants(ConsonantCsvData csv, string name)
+{
+    try { ConsonantCsvReader.Parse(csv, DateTimeOffset.UtcNow); }
+    catch (InvalidDataException) { Console.WriteLine("PASS " + name); return; }
+    throw new Exception(name);
+}
 
 sealed class FakeSource(string csv) : IRuneSource
 {
@@ -165,4 +197,14 @@ sealed class StubHandler : HttpMessageHandler
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
         { Content = new StringContent("<html>Login</html>", System.Text.Encoding.UTF8, "text/html") });
+}
+sealed class FakeConsonantSource(ConsonantCsvData csv) : IConsonantSource
+{
+    public string CacheKey => "test-consonant-source";
+    public ConsonantCsvData Csv { get; set; } = csv;
+    public Task<ConsonantCsvData> FetchAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(Csv);
+    }
 }

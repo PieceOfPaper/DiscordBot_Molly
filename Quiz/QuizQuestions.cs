@@ -17,6 +17,42 @@ public sealed record QuizQuestion(string Prompt, string Answer);
 
 public static class QuizQuestions
 {
+    public static IReadOnlyList<QuizQuestion> PickConsonant(ConsonantTopic topic, IEnumerable<RuneData> runes, ConsonantTable table, int count)
+    {
+        if (count < 1) throw new ArgumentException("문제수는 최소 1개입니다.");
+        var questions = topic switch
+        {
+            ConsonantTopic.Season2Rune => runes.Where(r => r.Season == 2).Select(CreateRuneQuestion),
+            ConsonantTopic.Season2WeaponRune => runes.Where(r => r.Season == 2 && r.Category == "무기").Select(CreateRuneQuestion),
+            ConsonantTopic.Season2ArmorRune => runes.Where(r => r.Season == 2 && r.Category == "방어구").Select(CreateRuneQuestion),
+            ConsonantTopic.Season2EmblemRune => runes.Where(r => r.Season == 2 && r.Category == "앰블럼").Select(CreateRuneQuestion),
+            ConsonantTopic.Season2AccessoryRune => runes.Where(r => r.Season == 2 && r.Category == "장신구").Select(CreateRuneQuestion),
+            ConsonantTopic.Season2NonAccessoryRune => runes.Where(r => r.Season == 2 && r.Category != "장신구").Select(CreateRuneQuestion),
+            ConsonantTopic.Npc => table.Npcs.Select(n => CreateQuestion("NPC", n.Name, $"지역: {(string.IsNullOrWhiteSpace(n.Region) ? "불명" : n.Region)}")),
+            ConsonantTopic.Class => table.Classes.Select(c => CreateQuestion("클래스", c.Name, null)),
+            ConsonantTopic.Region => table.Regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}")),
+            ConsonantTopic.NpcClassRegion => table.Npcs.Select(n => CreateQuestion("NPC", n.Name, $"지역: {(string.IsNullOrWhiteSpace(n.Region) ? "불명" : n.Region)}"))
+                .Concat(table.Classes.Select(c => CreateQuestion("클래스", c.Name, null)))
+                .Concat(table.Regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}"))),
+            _ => throw new ArgumentException("지원하지 않는 자음퀴즈 문제종목입니다.")
+        };
+        var pool = questions.Where(q => !string.IsNullOrWhiteSpace(q.Answer) && !string.IsNullOrWhiteSpace(ConsonantHint(q.Answer))).ToArray();
+        if (pool.Length == 0) throw new ArgumentException("현재 출제 가능한 문제가 없습니다.");
+        Random.Shared.Shuffle(pool);
+        return Array.AsReadOnly(pool[..Math.Min(count, pool.Length)]);
+    }
+
+    private static QuizQuestion CreateRuneQuestion(RuneData rune)
+        => CreateQuestion("룬", rune.Name.TrimEnd('+').Trim(), $"{rune.Category}룬");
+
+    private static QuizQuestion CreateQuestion(string kind, string answer, string? hint)
+    {
+        var lines = new List<string> { $"종류: **{kind}**" };
+        if (hint is not null) lines.Add($"💡 힌트: {hint}");
+        lines.Add($"🔤 자음: **{ConsonantHint(answer)}**");
+        return new(string.Join('\n', lines), answer.TrimEnd('+').Trim());
+    }
+
     public static string Description(QuizTopic topic) => topic switch
     {
         QuizTopic.Season2RuneEffect => "시즌2룬효과로이름: 시즌 2 룬의 효과를 보고 룬 이름을 맞혀주세요.",
@@ -69,4 +105,18 @@ public static class QuizQuestions
         }
         return hint.ToString();
     }
+}
+
+public enum ConsonantTopic
+{
+    Season2Rune,
+    Season2WeaponRune,
+    Season2ArmorRune,
+    Season2EmblemRune,
+    Season2AccessoryRune,
+    Season2NonAccessoryRune,
+    Npc,
+    Class,
+    Region,
+    NpcClassRegion
 }

@@ -81,6 +81,15 @@ internal static class QuizFlowTests
         Assert(lockFailureRoom.Messages.Any(x => x.Contains("채널 자동 잠금에 실패")) && lockFailureErrors.Any(x => x.Contains("종료 채널 잠금 실패")),
             "채널 잠금 실패는 종료 결과와 분리해 안내");
         await lockFailureService.StopAsync();
+
+        var exclusiveService = new SpeedQuizService((_, ct) => Task.Delay(Timeout.Infinite, ct));
+        var exclusiveRoom = new Room(new Clock());
+        await exclusiveService.StartAsync(4, QuizTopic.Season2RuneEffect, new[] { new QuizQuestion("효과", "정답") }, 1,
+            _ => Task.FromResult<IQuizRoom>(exclusiveRoom), (_, _) => Task.CompletedTask, 99);
+        var blocked = await exclusiveService.StartAsync(4, "자음퀴즈", "자음을 보고 맞혀주세요.", new[] { new QuizQuestion("종류: **NPC**\n🔤 자음: **ㄷ**", "답") }, 1,
+            _ => Task.FromResult<IQuizRoom>(new Room(new Clock())), (_, _) => Task.CompletedTask, 99);
+        Assert(!blocked.Started && blocked.ChannelId == exclusiveRoom.Id, "길드 내 스피드퀴즈·자음퀴즈 동시 진행 차단");
+        await exclusiveService.StopAsync();
     }
 
     private static void Assert(bool condition, string name)

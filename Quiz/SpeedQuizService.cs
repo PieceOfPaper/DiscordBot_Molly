@@ -33,9 +33,14 @@ public sealed class SpeedQuizService
     public async Task<QuizStartResult> StartAsync(ulong guildId, QuizTopic topic, IReadOnlyList<QuizQuestion> questions,
         int seconds, Func<CancellationToken, Task<IQuizRoom>> createRoom,
         Func<ulong, CancellationToken, Task> announce, ulong returnChannelId, bool showConsonants = false)
+        => await StartAsync(guildId, "스피드퀴즈", QuizQuestions.Description(topic), questions, seconds, createRoom, announce, returnChannelId, showConsonants);
+
+    public async Task<QuizStartResult> StartAsync(ulong guildId, string quizName, string description, IReadOnlyList<QuizQuestion> questions,
+        int seconds, Func<CancellationToken, Task<IQuizRoom>> createRoom,
+        Func<ulong, CancellationToken, Task> announce, ulong returnChannelId, bool showConsonants = false)
     {
         if (seconds < 1 || questions.Count < 1) throw new ArgumentException("문제수와 제한시간은 최소 1입니다.");
-        var description = QuizQuestions.Description(topic);
+        if (string.IsNullOrWhiteSpace(quizName) || string.IsNullOrWhiteSpace(description)) throw new ArgumentException("퀴즈 정보를 확인하세요.");
         // 호출자가 원본 목록을 바꾸거나 Sheets가 갱신되어도 진행 중 문제는 고정합니다.
         var selected = questions.ToArray();
         var session = new Session(stopping.Token);
@@ -52,11 +57,11 @@ public sealed class SpeedQuizService
             ct.ThrowIfCancellationRequested();
             session.Room = await createRoom(ct);
             session.RoomReady.TrySetResult(session.Room.Id);
-            var introTitle = "🎮 스피드퀴즈 참가 안내";
+            var introTitle = $"🎮 {quizName} 참가 안내";
             var introDescription = $"📚 {description}\n\n🔢 문제수: {selected.Length}개\n⏱️ 문제당 제한시간: {seconds}초\n🏆 가장 먼저 맞힌 한 명에게 1점\n🔤 띄어쓰기와 영문 대소문자는 구분하지 않습니다.";
             await session.Room.SendEmbedAsync(introTitle, introDescription, 0x5865F2, ct);
             await announce(session.Room.Id, ct);
-            _ = RunAsync(guildId, session, selected, seconds, returnChannelId, showConsonants);
+            _ = RunAsync(guildId, session, quizName, selected, seconds, returnChannelId, showConsonants);
             return new(true, session.Room.Id);
         }
         catch
@@ -94,14 +99,14 @@ public sealed class SpeedQuizService
         await Task.WhenAll(sessions.Values.Select(s => s.Done.Task));
     }
 
-    private async Task RunAsync(ulong guildId, Session session, QuizQuestion[] questions, int seconds, ulong returnChannelId, bool showConsonants)
+    private async Task RunAsync(ulong guildId, Session session, string quizName, QuizQuestion[] questions, int seconds, ulong returnChannelId, bool showConsonants)
     {
         var ct = session.Stop.Token;
         var room = session.Room!;
         var scores = new Dictionary<ulong, int>();
         try
         {
-            await QuizCountdown.RunAsync(room, StartDelaySeconds, "스피드퀴즈 시작까지", false, delay, ct, clock);
+            await QuizCountdown.RunAsync(room, StartDelaySeconds, $"{quizName} 시작까지", false, delay, ct, clock);
             for (var i = 0; i < questions.Length; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -145,7 +150,7 @@ public sealed class SpeedQuizService
             var winners = scores.Count == 0 ? "정답자가 없어 우승자가 없습니다." :
                 $"{(scores.Count(x => x.Value == scores.Values.Max()) > 1 ? "공동 우승" : "우승")}: " +
                 string.Join(", ", scores.Where(x => x.Value == scores.Values.Max()).OrderBy(x => x.Key).Select(x => $"<@{x.Key}>")) + $" ({scores.Values.Max()}점)";
-            await FinishRoomAsync(room, "🏁 스피드퀴즈 종료", $"{winners}\n\n📊 {FormatScores(scores)}", 0xF1C40F, returnChannelId, ct);
+            await FinishRoomAsync(room, $"🏁 {quizName} 종료", $"{winners}\n\n📊 {FormatScores(scores)}", 0xF1C40F, returnChannelId, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -155,14 +160,14 @@ public sealed class SpeedQuizService
                     $"{(scores.Count(x => x.Value == scores.Values.Max()) > 1 ? "공동 우승" : "현재 우승")}: " +
                     string.Join(", ", scores.Where(x => x.Value == scores.Values.Max()).Select(x => $"<@{x.Key}>")) + $" ({scores.Values.Max()}점)";
                 using var finalTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-                try { await FinishRoomAsync(room, "🛑 스피드퀴즈 강제 종료", $"종료 요청으로 퀴즈가 종료되었습니다.\n\n🏆 {winners}\n\n📊 {FormatScores(scores)}", 0xE74C3C, returnChannelId, finalTimeout.Token); }
-                catch (Exception ex) { log($"[스피드퀴즈] 최종 결과 전송 실패: {ex.Message}"); }
+                try { await FinishRoomAsync(room, $"🛑 {quizName} 강제 종료", $"종료 요청으로 퀴즈가 종료되었습니다.\n\n🏆 {winners}\n\n📊 {FormatScores(scores)}", 0xE74C3C, returnChannelId, finalTimeout.Token); }
+                catch (Exception ex) { log($"[{quizName}] 최종 결과 전송 실패: {ex.Message}"); }
             }
-            else await ReportFailureAsync(session, "스피드퀴즈가 중단되었습니다. 새 게임은 /스피드퀴즈로 시작해주세요.");
+            else await ReportFailureAsync(session, $"{quizName}가 중단되었습니다. 새 게임을 다시 시작해주세요.");
         }
         catch (Exception ex)
         {
-            log($"[스피드퀴즈] 진행 실패: {ex.Message}");
+            log($"[{quizName}] 진행 실패: {ex.Message}");
             await ReportFailureAsync(session, "메시지를 전송하지 못해 스피드퀴즈를 종료했습니다. 채널 권한을 확인해주세요.");
         }
         finally { Release(guildId, session); }

@@ -7,13 +7,13 @@ namespace DiscordBot_Molly.Commands;
 
 public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    [SlashCommand("스피드퀴즈종료", "현재 진행 중인 스피드퀴즈를 강제로 종료하고 결과를 표시합니다.")]
+    [SlashCommand("퀴즈종료", "현재 진행 중인 퀴즈를 강제로 종료하고 결과를 표시합니다.")]
     public async Task Stop()
     {
         if (Program.instance.Quizzes.ForceStop(Context.Guild.Id))
-            await RespondAsync("🛑 진행 중인 스피드퀴즈를 종료하고 최종 결과를 정리하고 있어요.", ephemeral: false);
+            await RespondAsync("🛑 진행 중인 퀴즈를 종료하고 최종 결과를 정리하고 있어요.", ephemeral: false);
         else
-            await RespondAsync("현재 진행 중인 스피드퀴즈가 없습니다.", ephemeral: true);
+            await RespondAsync("현재 진행 중인 퀴즈가 없습니다.", ephemeral: true);
     }
 
     [SlashCommand("스피드퀴즈", "전용 채널에서 선착순 정답 맞히기 게임을 시작합니다.")]

@@ -12,6 +12,7 @@ class Program
     private readonly DiscordSocketClient m_Client;
     public DiscordSocketClient client => m_Client;
     public RuneCatalog Runes { get; private set; } = null!;
+    public ConsonantCatalog Consonants { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
     
     private readonly IConfiguration m_Config;
@@ -117,6 +118,10 @@ class Program
             m_Config["GoogleSheets:RuneSheetId"] ?? "0"),
             Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
         await Runes.InitializeAsync(appCts.Token);
+        Consonants = new ConsonantCatalog(new GoogleSheetsConsonantSource(runeHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId),
+            Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
+        await Consonants.InitializeAsync(appCts.Token);
         try
         {
             try
