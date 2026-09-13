@@ -2,8 +2,8 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 
-// 서버는 그대로 사용
-public enum MobiServer { 데이안=1, 아이라, 던컨, 알리사, 메이븐, 라사, 칼릭스 }
+// 공식 랭킹 페이지의 data-serverid와 일치해야 합니다.
+public enum MobiServer { 데이안 = 1, 아이라, 던컨, 알리사, 메이븐, 라사, 칼릭스, 몰리 = 8 }
 
 public record MobiRankResult(
     int Rank,
@@ -167,7 +167,7 @@ public static class MobiRankBrowser
 
 
             // 서버 선택
-            var serverId = (int)server;          // 예: 칼릭스=7
+            var serverId = (int)server;          // 예: 칼릭스=7, 몰리=8
             var serverOk = await SelectByDataAsync(page, "serverid", serverId.ToString(), server.ToString(), SELECT_TIMEOUT, Log);
             await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
             Log($"select server - {serverOk}");

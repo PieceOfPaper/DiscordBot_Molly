@@ -23,6 +23,7 @@ void Check(bool value, string name)
     if (!value) throw new Exception(name);
     Console.WriteLine("PASS " + name);
 }
+Check((int)MobiServer.몰리 == 8, "몰리 서버 ID는 공식 랭킹 선택값 8");
 void Reject(string csv, string name)
 {
     try { RuneCsvReader.Parse(csv, DateTimeOffset.UtcNow); }
