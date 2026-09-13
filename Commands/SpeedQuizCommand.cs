@@ -133,18 +133,12 @@ internal sealed class DiscordQuizRoom(ITextChannel channel) : IQuizRoom
     public Task LockAsync(CancellationToken ct)
     {
         var permissions = OverwritePermissions.InheritAll.Modify(
-            createInstantInvite: PermValue.Deny,
             addReactions: PermValue.Deny,
             sendMessages: PermValue.Deny,
-            sendTTSMessages: PermValue.Deny,
-            useExternalEmojis: PermValue.Deny,
             useApplicationCommands: PermValue.Deny,
             createPublicThreads: PermValue.Deny,
             createPrivateThreads: PermValue.Deny,
-            useExternalStickers: PermValue.Deny,
-            sendMessagesInThreads: PermValue.Deny,
-            sendVoiceMessages: PermValue.Deny,
-            sendPolls: PermValue.Deny);
+            sendMessagesInThreads: PermValue.Deny);
         return channel.AddPermissionOverwriteAsync(channel.Guild.EveryoneRole, permissions,
             new RequestOptions { CancelToken = ct });
     }

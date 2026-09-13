@@ -178,7 +178,15 @@ public sealed class SpeedQuizService
         await room.SendEmbedAsync(title,
             $"{result}\n\n🔒 이 채널은 **30초 뒤 보기 전용으로 잠깁니다.**\n↩️ 돌아가기: <#{returnChannelId}>", color, ct);
         await QuizCountdown.RunAsync(room, 30, "이 채널이 잠기기까지", false, delay, ct, clock);
-        await room.LockAsync(ct);
+        try
+        {
+            await room.LockAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            log($"[스피드퀴즈] 종료 채널 잠금 실패: {ex.Message}");
+            await room.SendAsync("⚠️ 채널 자동 잠금에 실패했습니다. 봇의 역할 관리하기 권한과 몰리퀴즈 카테고리 권한을 확인해주세요.", ct);
+        }
     }
 
     private async Task ReportFailureAsync(Session session, string text)
