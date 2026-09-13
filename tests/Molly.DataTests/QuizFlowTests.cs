@@ -52,13 +52,14 @@ internal static class QuizFlowTests
             };
             await service.StartAsync(1, QuizTopic.Season2RuneEffect,
                 new[] { new QuizQuestion("효과", "정답"), new QuizQuestion("효과2", "정답2") }, 6,
-                _ => Task.FromResult<IQuizRoom>(room), (_, _) => Task.CompletedTask);
+                _ => Task.FromResult<IQuizRoom>(room), (_, _) => Task.CompletedTask, 99);
             await room.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
             if (force)
-                Assert(submitted && room.Final.Contains("<@42>: 1점"), "정답 직후 강제 종료 점수 보존");
+                Assert(submitted && room.Final.Contains("<@42>: 1점") && room.Ended && room.Locked, "정답 직후 강제 종료 점수 보존·채널 잠금");
             else
-                Assert(room.QuestionTimes.SequenceEqual(new[] { 30d, 46d }) && room.Final.Contains("우승자가 없습니다"),
-                    "30초 준비·6초 문제·10초 휴식·정상 종료");
+                Assert(room.QuestionTimes.SequenceEqual(new[] { 30d, 46d }) && room.Final.Contains("우승자가 없습니다") &&
+                       room.Final.Contains("30초 뒤 보기 전용") && room.Final.Contains("<#99>") && room.Ended && room.Locked,
+                    "30초 준비·6초 문제·10초 휴식·종료 채널 잠금");
             await service.StopAsync();
         }
         var failureClock = new Clock();
@@ -66,7 +67,7 @@ internal static class QuizFlowTests
         var errors = new List<string>();
         var failedService = new SpeedQuizService((duration, ct) => duration.TotalSeconds == 6 ? Task.Delay(Timeout.Infinite, ct) : failureClock.Delay(duration, ct), errors.Add, failureClock);
         await failedService.StartAsync(2, QuizTopic.Season2RuneEffect, new[] { new QuizQuestion("효과", "정답") }, 6,
-            _ => Task.FromResult<IQuizRoom>(failureRoom), (_, _) => Task.CompletedTask);
+            _ => Task.FromResult<IQuizRoom>(failureRoom), (_, _) => Task.CompletedTask, 99);
         await failedService.StopAsync();
         Assert(errors.Any(x => x.Contains("send failed")), "카운트다운 메시지 전송 실패 관찰 및 종료");
     }
@@ -99,6 +100,8 @@ internal static class QuizFlowTests
         public List<double> QuestionTimes = new();
         public Action<string>? Send;
         public string Final = "";
+        public bool Ended;
+        public bool Locked;
         public TaskCompletionSource Finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private ulong id;
         public Task<ulong> SendAsync(string text, CancellationToken ct)
@@ -112,8 +115,21 @@ internal static class QuizFlowTests
         {
             ct.ThrowIfCancellationRequested();
             if (title.StartsWith("🧩")) QuestionTimes.Add(clock.Seconds);
-            if (title.Contains("종료")) { Final = description; Finished.TrySetResult(); }
+            if (title.Contains("종료")) Final = description;
             return Task.FromResult(++id);
+        }
+        public Task MarkEndedAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Ended = true;
+            return Task.CompletedTask;
+        }
+        public Task LockAsync(CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Locked = true;
+            Finished.TrySetResult();
+            return Task.CompletedTask;
         }
     }
 }

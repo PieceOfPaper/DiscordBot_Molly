@@ -76,7 +76,7 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
                         m.Content = $"스피드퀴즈 채널 <#{channelId}>에 입장해주세요! 해당 채널에서 {SpeedQuizService.StartDelaySeconds}초 뒤에 시작합니다.";
                         m.AllowedMentions = AllowedMentions.None;
                     });
-                }, showConsonants: showConsonants);
+                }, Context.Channel.Id, showConsonants: showConsonants);
             if (!result.Started)
                 await ModifyOriginalResponseAsync(m => m.Content = result.ChannelId == 0
                     ? "기존 퀴즈 준비가 취소되었습니다. 다시 시도해주세요."
@@ -121,6 +121,32 @@ internal sealed class DiscordQuizRoom(ITextChannel channel) : IQuizRoom
         var message = await channel.SendMessageAsync(embed: embed, allowedMentions: AllowedMentions.None,
             options: new RequestOptions { CancelToken = ct });
         return message.Id;
+    }
+
+    public async Task MarkEndedAsync(CancellationToken ct)
+    {
+        var endedName = channel.Name.EndsWith("-종료", StringComparison.Ordinal) ? channel.Name : $"{channel.Name}-종료";
+        await channel.ModifyAsync(properties => properties.Name = endedName,
+            options: new RequestOptions { CancelToken = ct });
+    }
+
+    public Task LockAsync(CancellationToken ct)
+    {
+        var permissions = OverwritePermissions.InheritAll.Modify(
+            createInstantInvite: PermValue.Deny,
+            addReactions: PermValue.Deny,
+            sendMessages: PermValue.Deny,
+            sendTTSMessages: PermValue.Deny,
+            useExternalEmojis: PermValue.Deny,
+            useApplicationCommands: PermValue.Deny,
+            createPublicThreads: PermValue.Deny,
+            createPrivateThreads: PermValue.Deny,
+            useExternalStickers: PermValue.Deny,
+            sendMessagesInThreads: PermValue.Deny,
+            sendVoiceMessages: PermValue.Deny,
+            sendPolls: PermValue.Deny);
+        return channel.AddPermissionOverwriteAsync(channel.Guild.EveryoneRole, permissions,
+            new RequestOptions { CancelToken = ct });
     }
 
 }
