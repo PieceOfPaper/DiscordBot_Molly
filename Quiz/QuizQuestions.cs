@@ -38,4 +38,17 @@ public static class QuizQuestions
 
     public static string NormalizeAnswer(string value)
         => string.Concat(value.Normalize(NormalizationForm.FormC).Where(c => !char.IsWhiteSpace(c) && c != '+')).ToLowerInvariant();
+
+    public static string ConsonantHint(string name)
+    {
+        const string initials = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+        var hint = new StringBuilder();
+        foreach (var c in name.Normalize(NormalizationForm.FormC))
+        {
+            if (c is >= '가' and <= '힣') hint.Append(initials[(c - '가') / 588]);
+            else if (char.IsWhiteSpace(c)) hint.Append(c);
+            else if (c is >= 'ㄱ' and <= 'ㅎ') hint.Append(c);
+        }
+        return hint.ToString();
+    }
 }

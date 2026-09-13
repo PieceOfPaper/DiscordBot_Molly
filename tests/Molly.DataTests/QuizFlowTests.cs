@@ -4,6 +4,10 @@ internal static class QuizFlowTests
 {
     public static async Task RunAsync()
     {
+        Assert(QuizQuestions.ConsonantHint("거대한 분노+") == "ㄱㄷㅎ ㅂㄴ", "초성 힌트 공백 보존·기호 제거");
+        Assert(QuizQuestions.ConsonantHint("폭염+!") == "ㅍㅇ", "초성 힌트 특수문자 제거");
+        Assert(QuizQuestions.ConsonantHint("까  쌍").Normalize() == "ㄲ  ㅆ", "쌍자음 및 연속 공백 보존");
+        Assert(QuizQuestions.ConsonantHint("폭염".Normalize(System.Text.NormalizationForm.FormD)) == "ㅍㅇ", "분해된 한글 초성 변환");
         foreach (var seconds in new[] { 1, 2, 3, 10, 30 })
         {
             var clock = new Clock();

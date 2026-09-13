@@ -24,7 +24,8 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
         [Choice("시즌2방어구룬효과로이름", "시즌2방어구룬효과로이름")]
         [Choice("시즌2앰블럼룬효과로이름", "시즌2앰블럼룬효과로이름")] string topic,
         [Summary("문제수", "출제할 문제 수 (기본 10개)"), MinValue(1)] int count = 10,
-        [Summary("제한시간", "문제 하나당 제한시간 (기본 30초)"), MinValue(1)] int seconds = 30)
+        [Summary("제한시간", "문제 하나당 제한시간 (기본 30초)"), MinValue(1)] int seconds = 30,
+        [Summary("자음표시", "문제에 자음 힌트를 표시할지 여부 (기본 false)")] bool showConsonants = false)
     {
         Console.WriteLine($"[스피드퀴즈] 명령 시작 guild={Context.Guild.Id} topic={topic} count={count} seconds={seconds}");
         var selectedTopic = topic switch
@@ -75,7 +76,7 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
                         m.Content = $"스피드퀴즈 채널 <#{channelId}>에 입장해주세요! 해당 채널에서 {SpeedQuizService.StartDelaySeconds}초 뒤에 시작합니다.";
                         m.AllowedMentions = AllowedMentions.None;
                     });
-                });
+                }, showConsonants: showConsonants);
             if (!result.Started)
                 await ModifyOriginalResponseAsync(m => m.Content = result.ChannelId == 0
                     ? "기존 퀴즈 준비가 취소되었습니다. 다시 시도해주세요."
