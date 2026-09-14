@@ -8,6 +8,7 @@ public interface IQuizRoom
     Task<ulong> SendAsync(string text, CancellationToken ct);
     Task DeleteAsync(ulong messageId, CancellationToken ct);
     Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct);
+    Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct);
     Task MarkEndedAsync(CancellationToken ct);
     Task LockAsync(CancellationToken ct);
 }
@@ -45,13 +46,14 @@ public sealed class SpeedQuizService
         // 호출자가 원본 목록을 바꾸거나 Sheets가 갱신되어도 진행 중 문제는 고정합니다.
         var selected = questions.ToArray();
         var session = new Session(stopping.Token);
-        if (!sessions.TryAdd(guildId, session))
+        if (!QuizGameRegistry.TryReserve(guildId, session.RoomReady))
         {
             session.Stop.Dispose();
-            if (sessions.TryGetValue(guildId, out var existing))
-                return new(false, await existing.RoomReady.Task);
+            var existing = QuizGameRegistry.ExistingRoom(guildId);
+            if (existing is not null) return new(false, await existing);
             return new(false, 0);
         }
+        if (!sessions.TryAdd(guildId, session)) throw new InvalidOperationException("퀴즈 세션을 만들지 못했습니다.");
         try
         {
             var ct = session.Stop.Token;
@@ -209,6 +211,7 @@ public sealed class SpeedQuizService
         Volatile.Read(ref session.Round)?.Close();
         Volatile.Write(ref session.Round, null);
         session.RoomReady.TrySetResult(0);
+        QuizGameRegistry.Release(guildId, session.RoomReady);
         sessions.TryRemove(new KeyValuePair<ulong, Session>(guildId, session));
         session.Done.TrySetResult();
         // 채널 삭제 이벤트가 같은 Session을 참조할 수 있어 CTS는 여기서 Dispose하지 않습니다.

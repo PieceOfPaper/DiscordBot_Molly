@@ -29,6 +29,11 @@ internal static class QuizFlowTests
         await QuizCountdown.RunAsync(lagRoom, 10, "남은 시간", false, lagClock.Delay, default, lagClock);
         Assert(lagClock.Seconds == 10, "메시지 전송 지연 누적 없이 마감 시각 유지");
 
+        var deletedCountdownClock = new Clock();
+        var deletedCountdownRoom = new Room(deletedCountdownClock) { DeleteFailure = new IOException("unknown message") };
+        await QuizCountdown.RunAsync(deletedCountdownRoom, 10, "남은 시간", false, deletedCountdownClock.Delay, default, deletedCountdownClock);
+        Assert(deletedCountdownClock.Seconds == 10, "이미 삭제된 카운트다운 메시지도 출제를 중단하지 않음");
+
         var raceClock = new Clock();
         var round = new QuizRound("정답", 1, TimeSpan.FromSeconds(30), raceClock);
         raceClock.Advance(2);
@@ -126,6 +131,7 @@ internal static class QuizFlowTests
         public bool Ended;
         public bool Locked;
         public Exception? LockFailure;
+        public Exception? DeleteFailure;
         public TaskCompletionSource Finished = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private ulong id;
         public Task<ulong> SendAsync(string text, CancellationToken ct)
@@ -138,6 +144,7 @@ internal static class QuizFlowTests
         }
         public Task DeleteAsync(ulong messageId, CancellationToken ct)
         {
+            if (DeleteFailure != null) throw DeleteFailure;
             DeletedMessageIds.Add(messageId);
             return Task.CompletedTask;
         }
@@ -148,6 +155,8 @@ internal static class QuizFlowTests
             if (title.Contains("종료")) Final = description;
             return Task.FromResult(++id);
         }
+        public Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct)
+            => SendEmbedAsync(title, description, color, ct);
         public Task MarkEndedAsync(CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();

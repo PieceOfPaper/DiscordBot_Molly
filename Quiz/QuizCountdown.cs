@@ -22,7 +22,7 @@ public static class QuizCountdown
                 if (remaining != previousRemaining && ShouldAnnounce(remaining, dramaticFinalSeconds))
                 {
                     var messageId = await room.SendAsync(FormatMessage(label, remaining, dramaticFinalSeconds), ct);
-                    if (previousMessageId != 0) await room.DeleteAsync(previousMessageId, ct);
+                    if (previousMessageId != 0) await TryDeleteAsync(room, previousMessageId, ct);
                     previousMessageId = messageId;
                 }
                 previousRemaining = remaining;
@@ -39,8 +39,17 @@ public static class QuizCountdown
         finally
         {
             if (previousMessageId != 0)
-                await room.DeleteAsync(previousMessageId, CancellationToken.None);
+                await TryDeleteAsync(room, previousMessageId, CancellationToken.None);
         }
+    }
+
+    // 카운트다운 메시지는 정리용입니다. 다른 봇/사용자가 먼저 지웠거나 삭제 요청이 실패해도
+    // 출제·채점 흐름을 중단하면 안 됩니다.
+    private static async Task TryDeleteAsync(IQuizRoom room, ulong messageId, CancellationToken ct)
+    {
+        try { await room.DeleteAsync(messageId, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch { }
     }
 
     private static bool ShouldAnnounce(int remaining, bool dramaticFinalSeconds)

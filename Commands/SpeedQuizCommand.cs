@@ -10,7 +10,7 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
     [SlashCommand("퀴즈종료", "현재 진행 중인 퀴즈를 강제로 종료하고 결과를 표시합니다.")]
     public async Task Stop()
     {
-        if (Program.instance.Quizzes.ForceStop(Context.Guild.Id))
+        if (Program.instance.Quizzes.ForceStop(Context.Guild.Id) || Program.instance.TrueFalseQuizzes.ForceStop(Context.Guild.Id))
             await RespondAsync("🛑 진행 중인 퀴즈를 종료하고 최종 결과를 정리하고 있어요.", ephemeral: false);
         else
             await RespondAsync("현재 진행 중인 퀴즈가 없습니다.", ephemeral: true);
@@ -129,6 +129,19 @@ internal sealed class DiscordQuizRoom(ITextChannel channel) : IQuizRoom
             .Build();
         var message = await channel.SendMessageAsync(embed: embed, allowedMentions: AllowedMentions.None,
             options: new RequestOptions { CancelToken = ct });
+        return message.Id;
+    }
+
+    public async Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct)
+    {
+        var embed = new EmbedBuilder().WithTitle(title).WithDescription(description)
+            .WithColor(new Color(color)).WithTimestamp(DateTimeOffset.UtcNow).Build();
+        var buttons = new ComponentBuilder()
+            .WithButton("진실", "true_false:true", ButtonStyle.Secondary, emote: new Emoji(TrueFalseQuestions.TrueEmoji))
+            .WithButton("거짓", "true_false:false", ButtonStyle.Secondary, emote: new Emoji(TrueFalseQuestions.FalseEmoji))
+            .Build();
+        var message = await channel.SendMessageAsync(embed: embed, allowedMentions: AllowedMentions.None,
+            components: buttons, options: new RequestOptions { CancelToken = ct });
         return message.Id;
     }
 

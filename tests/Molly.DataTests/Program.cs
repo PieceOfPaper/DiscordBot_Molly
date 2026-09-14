@@ -77,6 +77,18 @@ var accessoryClass = QuizQuestions.Pick(QuizTopic.Season2AccessoryRuneNameClass,
 Check(accessoryClass.Count == 1 && accessoryClass[0] == new QuizQuestion("장신구 룬", "마법사"), "클래스가 있는 시즌2 장신구 룬 이름으로 클래스 출제");
 var plusName = RuneCsvReader.Parse(header + "2,전설,무기,전사,폭염+,효과", DateTimeOffset.UtcNow);
 Check(QuizQuestions.Pick(QuizTopic.Season2RuneEffect, plusName.Items, 1)[0].Answer == "폭염", "정답 표시에서 플러스 제거");
+var trueFalsePool = RuneCsvReader.Parse(header +
+    "2,전설,무기,전사,무기 하나,무기 효과 하나\n2,전설,무기,전사,무기 둘,무기 효과 둘\n2,전설,방어구,궁수,방어구 하나,방어구 효과 하나\n2,전설,방어구,궁수,방어구 둘,방어구 효과 둘\n2,전설,장신구,마법사,장신구 하나,장신구 효과 하나", DateTimeOffset.UtcNow);
+var trueFalseQuestions = TrueFalseQuestions.Pick(TrueFalseTopic.Season2WeaponRune, trueFalsePool.Items, 99);
+Check(trueFalseQuestions.Count == 2 && trueFalseQuestions.All(q => q.Prompt.Contains("무기") && !q.Prompt.Contains("방어구 효과")), "진혹거퀴즈는 같은 분류의 룬 효과만 출제");
+var reactionRound = new TrueFalseRound(true, TimeSpan.FromSeconds(30));
+reactionRound.Submit(1, true);
+reactionRound.Submit(2, false);
+reactionRound.Submit(3, true);
+Check(reactionRound.Submit(3, false) == TrueFalseChoiceResult.AlreadySelected && reactionRound.CloseAndGetWinners().SequenceEqual(new ulong[] { 1, 3 }), "진혹거퀴즈는 첫 버튼 선택 하나만 채점");
+var concurrentReactionRound = new TrueFalseRound(false, TimeSpan.FromSeconds(30));
+Parallel.For(1, 51, userId => concurrentReactionRound.Submit((ulong)userId, false));
+Check(concurrentReactionRound.CloseAndGetWinners().Count == 50, "진혹거퀴즈 동시 정답 버튼을 모두 채점");
 var round = new QuizRound("두 룬", 100, TimeSpan.FromSeconds(30));
 Check(round.Submit(1, 99, "두 룬") == false, "문제 이전 메시지 무시");
 Check(round.Submit(1, 101, " 두룬 "), "정답 선착순 처리");

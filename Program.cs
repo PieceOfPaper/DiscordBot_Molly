@@ -14,6 +14,7 @@ class Program
     public RuneCatalog Runes { get; private set; } = null!;
     public ConsonantCatalog Consonants { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
+    public TrueFalseQuizService TrueFalseQuizzes { get; } = new();
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -50,6 +51,7 @@ class Program
         m_Client.ChannelDestroyed += channel =>
         {
             Quizzes.CancelChannel(channel.Id);
+            TrueFalseQuizzes.CancelChannel(channel.Id);
             return Task.CompletedTask;
         };
         m_Client.Ready += async () =>
@@ -170,6 +172,7 @@ class Program
         {
             await appCts.CancelAsync();
             await Quizzes.StopAsync();
+            await TrueFalseQuizzes.StopAsync();
         }
     }
 }
