@@ -1,6 +1,7 @@
 using System.Net;
 using Molly.Runes;
 using Molly.Quiz;
+using Molly.Nunchi;
 
 const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
 const string valid = header + "2,전설,무기,전사,테스트,효과";
@@ -24,6 +25,19 @@ void Check(bool value, string name)
     Console.WriteLine("PASS " + name);
 }
 Check((int)MobiServer.몰리 == 8, "몰리 서버 ID는 공식 랭킹 선택값 8");
+Check(NunchiTargetParser.ParseMentions("<@12345678901234567> <@!23456789012345678> <@12345678901234567>").SequenceEqual(new ulong[] { 12345678901234567, 23456789012345678 }), "눈치게임 대상자 멘션을 중복 없이 읽기");
+var nunchi = new NunchiRound([1, 2, 3, 4, 5]);
+Check(nunchi.Submit(1, "1", DateTimeOffset.UnixEpoch) is null && nunchi.Submit(2, "2", DateTimeOffset.UnixEpoch.AddSeconds(1)) is null &&
+      nunchi.Submit(3, "3", DateTimeOffset.UnixEpoch.AddSeconds(2)) is null && nunchi.Submit(4, "4", DateTimeOffset.UnixEpoch.AddSeconds(3)) is { CaughtUserIds: var missing } && missing.SequenceEqual(new ulong[] { 5 }), "눈치게임은 마지막 숫자를 외칠 차례의 미호출자를 처리");
+var nunchiLast = new NunchiRound([1, 2, 3]);
+Check(nunchiLast.Submit(1, "1", DateTimeOffset.UnixEpoch) is null && nunchiLast.Submit(2, "1", DateTimeOffset.UnixEpoch.AddMilliseconds(900)) is { CaughtUserIds: var rapid } && rapid.Order().SequenceEqual(new ulong[] { 1, 2 }), "눈치게임 마지막 숫자 1초 내 중복은 모두 처리");
+var nunchiWrong = new NunchiRound([1, 2, 3]);
+Check(nunchiWrong.Submit(1, "2", DateTimeOffset.UnixEpoch) is { CaughtUserIds: var wrong } && wrong.SequenceEqual(new ulong[] { 1 }), "눈치게임 순서 밖 숫자는 호출자를 처리");
+var cancelNunchi = new NunchiGameService();
+Check(cancelNunchi.TryStart(77, 88, [1, 2], TimeSpan.FromMinutes(1), _ => Task.CompletedTask) &&
+      !cancelNunchi.TryStart(77, 99, [1, 2], TimeSpan.FromMinutes(1), _ => Task.CompletedTask), "눈치게임은 길드당 하나만 시작");
+cancelNunchi.CancelChannel(88);
+Check(cancelNunchi.TryStart(77, 99, [1, 2], TimeSpan.FromMinutes(1), _ => Task.CompletedTask), "눈치게임 채널 삭제 시 진행 상태 정리");
 void Reject(string csv, string name)
 {
     try { RuneCsvReader.Parse(csv, DateTimeOffset.UtcNow); }

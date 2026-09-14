@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using System.IO;
 using Molly.Runes;
 using Molly.Quiz;
+using Molly.Nunchi;
 using DiscordBot_Molly.Commands;
 
 class Program
@@ -15,6 +16,7 @@ class Program
     public ConsonantCatalog Consonants { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
     public TrueFalseQuizService TrueFalseQuizzes { get; } = new();
+    public NunchiGameService NunchiGames { get; } = new();
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -42,16 +44,19 @@ class Program
         });
         
         m_InteractionService = new InteractionService(m_Client.Rest);
-        m_Client.MessageReceived += message =>
+        m_Client.MessageReceived += async message =>
         {
             if (!message.Author.IsBot && message.Source == MessageSource.User && message.Channel is SocketTextChannel channel)
+            {
                 Quizzes.Submit(channel.Guild.Id, channel.Id, message.Author.Id, message.Id, message.Content);
-            return Task.CompletedTask;
+                await NunchiGames.SubmitAsync(channel.Guild.Id, channel.Id, message.Author.Id, message.Content, message.Timestamp);
+            }
         };
         m_Client.ChannelDestroyed += channel =>
         {
             Quizzes.CancelChannel(channel.Id);
             TrueFalseQuizzes.CancelChannel(channel.Id);
+            NunchiGames.CancelChannel(channel.Id);
             return Task.CompletedTask;
         };
         m_Client.Ready += async () =>
