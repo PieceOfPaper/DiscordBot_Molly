@@ -7,7 +7,7 @@ namespace DiscordBot_Molly.Commands;
 
 public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    [SlashCommand("퀴즈종료", "현재 진행 중인 퀴즈를 강제로 종료하고 결과를 표시합니다.")]
+    [SlashCommand("놀이종료", "현재 진행 중인 놀이를 강제로 종료하고 결과를 표시합니다.")]
     public async Task Stop()
     {
         if (Program.instance.Quizzes.ForceStop(Context.Guild.Id) || Program.instance.TrueFalseQuizzes.ForceStop(Context.Guild.Id))
