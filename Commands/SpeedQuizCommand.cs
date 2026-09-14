@@ -64,9 +64,9 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
                 async ct =>
                 {
                     var options = new RequestOptions { CancelToken = ct };
-                    ICategoryChannel? category = Context.Guild.CategoryChannels.FirstOrDefault(c => c.Name == "몰리퀴즈");
-                    category ??= await Context.Guild.CreateCategoryChannelAsync("몰리퀴즈", options: options);
-                    var channel = await Context.Guild.CreateTextChannelAsync($"몰리퀴즈-{MobiTime.now:yyyyMMddHHmm}", p =>
+                    ICategoryChannel? category = Context.Guild.CategoryChannels.FirstOrDefault(c => c.Name == "몰리 놀이터");
+                    category ??= await Context.Guild.CreateCategoryChannelAsync("몰리 놀이터", options: options);
+                    var channel = await Context.Guild.CreateTextChannelAsync($"몰리놀이터-{MobiTime.now:yyyyMMddHHmm}", p =>
                     {
                         p.CategoryId = category.Id;
                         p.PermissionOverwrites = category.PermissionOverwrites.ToArray();

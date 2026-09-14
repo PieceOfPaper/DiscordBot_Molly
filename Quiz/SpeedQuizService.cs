@@ -190,7 +190,7 @@ public sealed class SpeedQuizService
         catch (Exception ex)
         {
             log($"[스피드퀴즈] 종료 채널 잠금 실패: {ex.Message}");
-            await room.SendAsync("⚠️ 채널 자동 잠금에 실패했습니다. 봇의 역할 관리하기 권한과 몰리퀴즈 카테고리 권한을 확인해주세요.", ct);
+            await room.SendAsync("⚠️ 채널 자동 잠금에 실패했습니다. 봇의 역할 관리하기 권한과 몰리 놀이터 카테고리 권한을 확인해주세요.", ct);
         }
     }
 
