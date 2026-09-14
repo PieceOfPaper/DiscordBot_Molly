@@ -116,6 +116,9 @@ internal sealed class DiscordQuizRoom(ITextChannel channel) : IQuizRoom
         return lastMessageId;
     }
 
+    public Task DeleteAsync(ulong messageId, CancellationToken ct)
+        => channel.DeleteMessageAsync(messageId, new RequestOptions { CancelToken = ct });
+
     public async Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct)
     {
         var embed = new EmbedBuilder()

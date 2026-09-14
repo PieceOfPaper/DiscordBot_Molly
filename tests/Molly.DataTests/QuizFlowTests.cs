@@ -13,6 +13,7 @@ internal static class QuizFlowTests
         await QuizCountdown.RunAsync(normalRoom, 30, "시작까지", false, normalClock.Delay, default, normalClock);
         Assert(normalClock.Seconds == 30, "5초 단위 카운트다운도 전체 시간 대기");
         Assert(normalRoom.Messages.SequenceEqual(new[] { "⏱️ **시작까지 30초**", "⏱️ **시작까지 25초**", "⏱️ **시작까지 20초**", "⏱️ **시작까지 15초**", "⏱️ **시작까지 10초**", "⏱️ **시작까지 5초**" }), "시작·문제 사이 알림은 5초 단위 일반 메시지");
+        Assert(normalRoom.DeletedMessageIds.SequenceEqual(new ulong[] { 1, 2, 3, 4, 5, 6 }), "남은 시간 메시지는 다음 안내와 종료 시 삭제");
 
         var dramaticClock = new Clock();
         var dramaticRoom = new Room(dramaticClock);
@@ -21,6 +22,7 @@ internal static class QuizFlowTests
         Assert(dramaticRoom.Messages.Count == 5 && dramaticRoom.Messages.Take(2).All(x => x.Contains("초")) &&
                dramaticRoom.Messages.Skip(2).All(x => x.Contains("마지막")), "문제만 마지막 3초 강조 메시지");
         Assert(dramaticRoom.Messages[^1] == "🚨🚨 **마지막 1초!** 🚨🚨", "마지막 1초 한 줄 긴장감 강조");
+        Assert(dramaticRoom.DeletedMessageIds.SequenceEqual(new ulong[] { 1, 2, 3, 4, 5 }), "마지막 3·2·1 메시지도 순차 삭제");
 
         var lagClock = new Clock();
         var lagRoom = new Room(lagClock) { Send = _ => lagClock.Advance(.25) };
@@ -58,8 +60,8 @@ internal static class QuizFlowTests
                 Assert(submitted && room.Final.Contains("<@42>: 1점") && room.Ended && room.Locked, "정답 직후 강제 종료 점수 보존·채널 잠금");
             else
                 Assert(room.QuestionTimes.SequenceEqual(new[] { 30d, 46d }) && room.Final.Contains("우승자가 없습니다") &&
-                       room.Final.Contains("30초 뒤 보기 전용") && room.Final.Contains("<#99>") && room.Ended && room.Locked,
-                    "30초 준비·6초 문제·10초 휴식·종료 채널 잠금");
+                       room.Final.Contains("30초 뒤 보기 전용") && room.Final.Contains("<#99>") && room.Messages.Last() == "🔒 이 몰리 놀이터 채널은 닫혔습니다." && room.Ended && room.Locked,
+                    "30초 준비·6초 문제·10초 휴식·종료 채널 잠금·닫힘 안내");
             await service.StopAsync();
         }
         var failureClock = new Clock();
@@ -117,6 +119,7 @@ internal static class QuizFlowTests
     {
         public ulong Id => 50;
         public List<string> Messages = new();
+        public List<ulong> DeletedMessageIds = new();
         public List<double> QuestionTimes = new();
         public Action<string>? Send;
         public string Final = "";
@@ -132,6 +135,11 @@ internal static class QuizFlowTests
             Send?.Invoke(text);
             if (text.Contains("채널 자동 잠금에 실패")) Finished.TrySetResult();
             return Task.FromResult(++id);
+        }
+        public Task DeleteAsync(ulong messageId, CancellationToken ct)
+        {
+            DeletedMessageIds.Add(messageId);
+            return Task.CompletedTask;
         }
         public Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct)
         {

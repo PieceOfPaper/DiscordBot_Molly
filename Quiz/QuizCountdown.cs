@@ -9,24 +9,37 @@ public static class QuizCountdown
         var started = clock.GetTimestamp();
         var duration = TimeSpan.FromSeconds(seconds);
         var previousRemaining = seconds + 1;
+        ulong previousMessageId = 0;
 
-        while (clock.GetElapsedTime(started) < duration)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            var remaining = Math.Max(0, (int)Math.Ceiling((duration - clock.GetElapsedTime(started)).TotalSeconds));
-            if (remaining == 0) return;
+            while (clock.GetElapsedTime(started) < duration)
+            {
+                ct.ThrowIfCancellationRequested();
+                var remaining = Math.Max(0, (int)Math.Ceiling((duration - clock.GetElapsedTime(started)).TotalSeconds));
+                if (remaining == 0) return;
 
-            if (remaining != previousRemaining && ShouldAnnounce(remaining, dramaticFinalSeconds))
-                await room.SendAsync(FormatMessage(label, remaining, dramaticFinalSeconds), ct);
-            previousRemaining = remaining;
+                if (remaining != previousRemaining && ShouldAnnounce(remaining, dramaticFinalSeconds))
+                {
+                    var messageId = await room.SendAsync(FormatMessage(label, remaining, dramaticFinalSeconds), ct);
+                    if (previousMessageId != 0) await room.DeleteAsync(previousMessageId, ct);
+                    previousMessageId = messageId;
+                }
+                previousRemaining = remaining;
 
-            var nextRemaining = NextAnnouncement(remaining, dramaticFinalSeconds);
-            var nextElapsed = nextRemaining is int next
-                ? TimeSpan.FromSeconds(seconds - next)
-                : duration;
-            // 전송 요청이 늦어져도 절대 마감 시각을 기준으로 다음 알림을 잡습니다.
-            var untilNext = nextElapsed - clock.GetElapsedTime(started);
-            if (untilNext > TimeSpan.Zero) await delay(untilNext, ct);
+                var nextRemaining = NextAnnouncement(remaining, dramaticFinalSeconds);
+                var nextElapsed = nextRemaining is int next
+                    ? TimeSpan.FromSeconds(seconds - next)
+                    : duration;
+                // 전송 요청이 늦어져도 절대 마감 시각을 기준으로 다음 알림을 잡습니다.
+                var untilNext = nextElapsed - clock.GetElapsedTime(started);
+                if (untilNext > TimeSpan.Zero) await delay(untilNext, ct);
+            }
+        }
+        finally
+        {
+            if (previousMessageId != 0)
+                await room.DeleteAsync(previousMessageId, CancellationToken.None);
         }
     }
 

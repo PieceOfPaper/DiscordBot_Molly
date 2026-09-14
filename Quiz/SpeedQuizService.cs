@@ -6,6 +6,7 @@ public interface IQuizRoom
 {
     ulong Id { get; }
     Task<ulong> SendAsync(string text, CancellationToken ct);
+    Task DeleteAsync(ulong messageId, CancellationToken ct);
     Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct);
     Task MarkEndedAsync(CancellationToken ct);
     Task LockAsync(CancellationToken ct);
@@ -185,6 +186,7 @@ public sealed class SpeedQuizService
         await QuizCountdown.RunAsync(room, 30, "이 채널이 잠기기까지", false, delay, ct, clock);
         try
         {
+            await room.SendAsync("🔒 이 몰리 놀이터 채널은 닫혔습니다.", ct);
             await room.LockAsync(ct);
         }
         catch (Exception ex)
