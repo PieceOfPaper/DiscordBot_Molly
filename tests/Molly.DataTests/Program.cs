@@ -2,6 +2,7 @@ using System.Net;
 using Molly.Runes;
 using Molly.Quiz;
 using Molly.Nunchi;
+using Molly.Messages;
 
 const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
 const string valid = header + "2,전설,무기,전사,테스트,효과";
@@ -129,6 +130,12 @@ var mixedQuestions = QuizQuestions.PickConsonant(ConsonantTopic.NpcClassRegion, 
 Check(mixedQuestions.Count == 6 && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("NPC")) && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("클래스")) && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("지역")), "NPC·클래스·지역 혼합 출제");
 RejectConsonants(new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions, consonantCsv.Classes), "NPC 이름 중복 거부");
 
+var bottleCsv = "ID,메시지\n1,첫 번째 쪽지\n2,\"둘째 줄 첫 문장\n둘째 줄 두 번째 문장\"";
+var bottleTable = MessageBottleCsvReader.Parse(bottleCsv, DateTimeOffset.UtcNow);
+Check(bottleTable.Items.Count == 2 && bottleTable.Items[1].Message == "둘째 줄 첫 문장\n둘째 줄 두 번째 문장", "병 속에 든 쪽지 CSV와 줄바꿈 검증");
+RejectMessageBottle("ID,메시지\n1,첫 쪽지\n1,다른 쪽지", "병 속에 든 쪽지 ID 중복 거부");
+RejectMessageBottle("ID,메시지\n1,", "병 속에 든 쪽지 빈 메시지 거부");
+
 var dir = Path.Combine(Path.GetTempPath(), "molly-data-tests-" + Guid.NewGuid().ToString("N"));
 try
 {
@@ -182,6 +189,13 @@ try
     var consonantOriginal = consonantCatalog.Current;
     consonantSource.Csv = new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions, consonantCsv.Classes);
     Check(!await consonantCatalog.RefreshAsync() && ReferenceEquals(consonantOriginal, consonantCatalog.Current), "자음퀴즈 시트 검증 실패 시 정상 스냅샷 유지");
+
+    var bottleSource = new FakeMessageBottleSource(bottleCsv);
+    var bottleCatalog = new MessageBottleCatalog(bottleSource, dir, _ => { });
+    await bottleCatalog.InitializeAsync();
+    var bottleOriginal = bottleCatalog.Current;
+    bottleSource.Csv = "ID,메시지\n1,첫 쪽지\n1,다른 쪽지";
+    Check(!await bottleCatalog.RefreshAsync() && ReferenceEquals(bottleOriginal, bottleCatalog.Current), "병 속에 든 쪽지 검증 실패 시 정상 스냅샷 유지");
 }
 finally { Directory.Delete(dir, recursive: true); }
 using var http = new HttpClient(new StubHandler());
@@ -194,6 +208,13 @@ Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 void RejectConsonants(ConsonantCsvData csv, string name)
 {
     try { ConsonantCsvReader.Parse(csv, DateTimeOffset.UtcNow); }
+    catch (InvalidDataException) { Console.WriteLine("PASS " + name); return; }
+    throw new Exception(name);
+}
+
+void RejectMessageBottle(string csv, string name)
+{
+    try { MessageBottleCsvReader.Parse(csv, DateTimeOffset.UtcNow); }
     catch (InvalidDataException) { Console.WriteLine("PASS " + name); return; }
     throw new Exception(name);
 }
@@ -230,6 +251,16 @@ sealed class FakeConsonantSource(ConsonantCsvData csv) : IConsonantSource
     public string CacheKey => "test-consonant-source";
     public ConsonantCsvData Csv { get; set; } = csv;
     public Task<ConsonantCsvData> FetchAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(Csv);
+    }
+}
+sealed class FakeMessageBottleSource(string csv) : IMessageBottleSource
+{
+    public string CacheKey => "test-message-bottle-source";
+    public string Csv { get; set; } = csv;
+    public Task<string> FetchCsvAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(Csv);

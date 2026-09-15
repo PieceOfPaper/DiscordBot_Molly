@@ -15,6 +15,7 @@
 | `/시간` | 현재 KST 시간 출력 | 없음 |
 | `/홀리몰리` | 이미지 출력 | 없음 |
 | `/개발자` | 제작자 출력 | 없음 |
+| `/병속에든쪽지` | Google Sheets의 병 속에 든 쪽지에서 무작위 메시지 출력 | 없음 |
 | `/진행중인이벤트` | 진행 중 이벤트 목록 | `마감미정`(bool, 기본: false) |
 | `/이벤트마감알림등록` | 마감 알림 등록 | `시간`(1~240, 기본 24시간) |
 | `/이벤트마감알림해제` | 마감 알림 해제 | 없음 |
@@ -124,6 +125,8 @@ dotnet run
 - 캐시는 `MOLLY_DATA_DIR`(미설정 시 실행 파일 폴더) 아래 `runes/`에 원본별로 저장합니다. 이벤트 초기 수집 오류도 다른 기능의 시작을 중단시키지 않습니다.
 
 다른 문서나 탭을 사용하려면 user-secrets의 `GoogleSheets:SpreadsheetId`, `GoogleSheets:RuneSheetId` 또는 환경변수 `GoogleSheets__SpreadsheetId`, `GoogleSheets__RuneSheetId`를 설정하세요. 탭 ID는 URL의 숫자 `gid`이며 현재 기본값은 `0`입니다.
+
+`/병속에든쪽지`는 같은 문서의 `병 속에 든 쪽지` 탭에서 무작위 메시지를 골라 쪽지 모양 Embed로 표시합니다. 탭의 첫 행에는 `ID`, `메시지` 헤더를 유지하세요. ID와 메시지는 모두 비어 있지 않아야 하고, ID는 중복될 수 없으며 메시지는 3500자 이하여야 합니다. 데이터는 시작 시와 마지막 정상 갱신 후 10분이 지난 명령 실행 시 갱신합니다. 갱신 또는 검증에 실패하면 마지막 정상본을 계속 사용합니다. 다른 탭 이름은 `GoogleSheets:MessageBottleSheetName` 또는 `GoogleSheets__MessageBottleSheetName`으로 설정할 수 있습니다.
 
 향후 명령에서는 한 번 읽은 스냅샷을 작업 동안 사용합니다:
 

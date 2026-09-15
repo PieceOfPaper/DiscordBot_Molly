@@ -6,6 +6,7 @@ using System.IO;
 using Molly.Runes;
 using Molly.Quiz;
 using Molly.Nunchi;
+using Molly.Messages;
 using DiscordBot_Molly.Commands;
 
 class Program
@@ -14,6 +15,7 @@ class Program
     public DiscordSocketClient client => m_Client;
     public RuneCatalog Runes { get; private set; } = null!;
     public ConsonantCatalog Consonants { get; private set; } = null!;
+    public MessageBottleCatalog MessageBottles { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
     public TrueFalseQuizService TrueFalseQuizzes { get; } = new();
     public NunchiGameService NunchiGames { get; } = new();
@@ -129,6 +131,11 @@ class Program
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId),
             Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
         await Consonants.InitializeAsync(appCts.Token);
+        MessageBottles = new MessageBottleCatalog(new GoogleSheetsMessageBottleSource(runeHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
+            m_Config["GoogleSheets:MessageBottleSheetName"] ?? GoogleSheetsMessageBottleSource.DefaultSheetName),
+            Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
+        await MessageBottles.InitializeAsync(appCts.Token);
         try
         {
             try
