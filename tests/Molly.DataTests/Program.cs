@@ -3,6 +3,7 @@ using Molly.Runes;
 using Molly.Quiz;
 using Molly.Nunchi;
 using Molly.Messages;
+using Molly.LiarGame;
 
 const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
 const string valid = header + "2,전설,무기,전사,테스트,효과";
@@ -39,6 +40,16 @@ Check(cancelNunchi.TryStart(77, 88, [1, 2], TimeSpan.FromMinutes(1), _ => Task.C
       !cancelNunchi.TryStart(77, 99, [1, 2], TimeSpan.FromMinutes(1), _ => Task.CompletedTask), "눈치게임은 길드당 하나만 시작");
 cancelNunchi.CancelChannel(88);
 Check(cancelNunchi.TryStart(77, 99, [1, 2], TimeSpan.FromMinutes(1), _ => Task.CompletedTask), "눈치게임 채널 삭제 시 진행 상태 정리");
+var liarVotes = new LiarGameRound([1, 2, 3]);
+Check(liarVotes.VoteAnswer(1, true) && liarVotes.VoteAnswer(2, false) && !liarVotes.VoteAnswer(1, false) &&
+      liarVotes.MissingAnswers.SequenceEqual(new ulong[] { 3 }), "라이어게임 O/X 투표는 참가자 한 명당 한 번과 미투표자를 처리");
+Check(liarVotes.Accuse(1, 3) && liarVotes.Accuse(2, 3) && liarVotes.Accuse(3, 1) && liarVotes.Decide(3).LiarFound,
+    "라이어게임 최다 지목 라이어 판정");
+var liarTie = new LiarGameRound([1, 2, 3, 4]);
+Check(liarTie.Accuse(1, 2) && liarTie.Accuse(2, 1) && liarTie.Accuse(3, 2) && liarTie.Accuse(4, 1) && !liarTie.Decide(3).LiarFound,
+    "라이어게임 지목 동률은 라이어 승리");
+var liarNoVote = new LiarGameRound([1, 2, 3]);
+Check(!liarNoVote.Decide(1).LiarFound, "라이어게임 지목자가 없으면 라이어 승리");
 void Reject(string csv, string name)
 {
     try { RuneCsvReader.Parse(csv, DateTimeOffset.UtcNow); }

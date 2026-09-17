@@ -7,6 +7,7 @@ using Molly.Runes;
 using Molly.Quiz;
 using Molly.Nunchi;
 using Molly.Messages;
+using Molly.LiarGame;
 using DiscordBot_Molly.Commands;
 
 class Program
@@ -19,6 +20,7 @@ class Program
     public SpeedQuizService Quizzes { get; } = new();
     public TrueFalseQuizService TrueFalseQuizzes { get; } = new();
     public NunchiGameService NunchiGames { get; } = new();
+    public LiarGameService LiarGames { get; } = new();
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -59,6 +61,7 @@ class Program
             Quizzes.CancelChannel(channel.Id);
             TrueFalseQuizzes.CancelChannel(channel.Id);
             NunchiGames.CancelChannel(channel.Id);
+            LiarGames.CancelChannel(channel.Id);
             return Task.CompletedTask;
         };
         m_Client.Ready += async () =>
