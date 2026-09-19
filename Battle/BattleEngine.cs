@@ -99,10 +99,13 @@ public sealed class BattleEngine
             switch (effect.Type)
             {
                 case "피해":
+                    // 다단 효과의 총 기본 위력은 유지하고 타격마다 나눕니다.
+                    // 각 타격은 별도로 치명타·추가타를 판정하므로 연출과 변동성은 남습니다.
+                    var hitBaseDamage = actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier / effect.Count;
                     for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
                     {
                         if (random.NextDouble() >= effect.Chance) continue;
-                        resolution.TargetDamaged |= Attack(actor, receiver, actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier, 1, random, rules, events);
+                        resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events);
                     }
                     break;
                 case "회복":
