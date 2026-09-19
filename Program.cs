@@ -52,7 +52,7 @@ class Program
         m_InteractionService = new InteractionService(m_Client.Rest);
         m_Client.MessageReceived += async message =>
         {
-            if (!message.Author.IsBot && message.Source == MessageSource.User && message.Channel is SocketTextChannel channel)
+            if (!message.Author.IsBot && message.Source == MessageSource.User && message.Channel is SocketGuildChannel channel)
             {
                 Quizzes.Submit(channel.Guild.Id, channel.Id, message.Author.Id, message.Id, message.Content);
                 await NunchiGames.SubmitAsync(channel.Guild.Id, channel.Id, message.Author.Id, message.Content, message.Timestamp);

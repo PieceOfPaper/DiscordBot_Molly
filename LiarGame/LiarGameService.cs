@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Discord;
 using Discord.WebSocket;
+using DiscordBot_Molly.Commands;
 
 namespace Molly.LiarGame;
 
@@ -25,21 +26,13 @@ public sealed class LiarGameService
         ("동물", "고양이"), ("동물", "펭귄"), ("동물", "코끼리")
     ];
 
-    public async Task<(bool Started, ulong ChannelId)> StartAsync(SocketGuild guild, ulong returnChannelId, ulong hostId)
+    public async Task<(bool Started, ulong ChannelId)> StartAsync(SocketGuild guild, IMessageChannel parentChannel, ulong hostId)
     {
-        var session = new Session(guild.Id, returnChannelId, hostId);
+        var session = new Session(guild.Id, hostId);
         if (!_sessions.TryAdd(guild.Id, session)) return (false, 0);
         try
         {
-            ICategoryChannel category;
-            var existingCategory = guild.CategoryChannels.FirstOrDefault(x => x.Name == "몰리 놀이터");
-            if (existingCategory is not null) category = existingCategory;
-            else category = await guild.CreateCategoryChannelAsync("몰리 놀이터");
-            var channel = await guild.CreateTextChannelAsync($"몰리놀이터-라이어-{MobiTime.now:yyyyMMddHHmm}", p =>
-            {
-                p.CategoryId = category.Id;
-                p.PermissionOverwrites = category.PermissionOverwrites.ToArray();
-            });
+            var channel = await GameThreads.CreateAsync(parentChannel, $"라이어게임-{MobiTime.now:yyyyMMddHHmm}");
             session.Channel = channel;
             await channel.SendMessageAsync($"🎭 **라이어게임 참가 안내**\n\n참가 버튼을 눌러주세요. **{JoinSeconds}초** 뒤 3명 이상이면 시작합니다.\n라이어는 주제만 받고, 다른 참가자는 단어를 비공개로 받습니다. 질문은 O 또는 X로 답할 수 있게 작성하세요.",
                 components: new ComponentBuilder().WithButton("참가하기", "liar:join", ButtonStyle.Success).Build(), allowedMentions: AllowedMentions.None);
@@ -256,12 +249,11 @@ public sealed class LiarGameService
     }
 
     private enum Phase { Joining, Question, AnswerVote, Accusation, LiarGuess }
-    private sealed class Session(ulong guildId, ulong returnChannelId, ulong hostId)
+    private sealed class Session(ulong guildId, ulong hostId)
     {
         public ulong GuildId { get; } = guildId;
-        public ulong ReturnChannelId { get; } = returnChannelId;
         public ulong HostId { get; } = hostId;
-        public ITextChannel? Channel;
+        public IThreadChannel? Channel;
         public object Gate { get; } = new();
         public List<ulong> Players { get; } = [];
         public List<ulong> Order { get; set; } = [];
@@ -280,11 +272,13 @@ public sealed class LiarGameService
     private static async Task CloseAsync(Session s)
     {
         if (s.Channel is null) return;
-        await s.Channel.ModifyAsync(x => x.Name = s.Channel.Name.EndsWith("-종료") ? s.Channel.Name : $"{s.Channel.Name}-종료");
-        await s.Channel.SendMessageAsync($"이 몰리 놀이터 채널은 **{CloseSeconds}초** 뒤 보기 전용으로 닫힙니다.", allowedMentions: AllowedMentions.None);
+        await s.Channel.SendMessageAsync($"이 게임 스레드는 **{CloseSeconds}초** 뒤 읽기 전용으로 보관됩니다.", allowedMentions: AllowedMentions.None);
         await Task.Delay(TimeSpan.FromSeconds(CloseSeconds));
-        var permissions = OverwritePermissions.InheritAll.Modify(sendMessages: PermValue.Deny, addReactions: PermValue.Deny, useApplicationCommands: PermValue.Deny);
-        await s.Channel.AddPermissionOverwriteAsync(s.Channel.Guild.EveryoneRole, permissions);
-        await s.Channel.SendMessageAsync("🔒 이 몰리 놀이터 채널은 닫혔습니다.", allowedMentions: AllowedMentions.None);
+        await s.Channel.SendMessageAsync("🔒 이 게임 스레드는 보관되었습니다.", allowedMentions: AllowedMentions.None);
+        await s.Channel.ModifyAsync(x =>
+        {
+            x.Locked = true;
+            x.Archived = true;
+        });
     }
 }

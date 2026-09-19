@@ -216,9 +216,9 @@ public sealed class TrueFalseQuizService
     private async Task FinishAsync(IQuizRoom room, string title, string result, IReadOnlyDictionary<ulong, int> scores, ulong returnChannelId, CancellationToken ct)
     {
         await room.MarkEndedAsync(ct);
-        await room.SendEmbedAsync(title, $"{result}\n\n📊 {SpeedQuizService.FormatScores(scores)}\n\n🔒 이 채널은 **30초 뒤 보기 전용으로 잠깁니다.**\n↩️ 돌아가기: <#{returnChannelId}>", 0xF1C40F, ct);
-        await QuizCountdown.RunAsync(room, 30, "이 채널이 잠기기까지", false, delay, ct, clock);
-        await room.SendAsync("🔒 이 몰리 놀이터 채널은 닫혔습니다.", ct);
+        await room.SendEmbedAsync(title, $"{result}\n\n📊 {SpeedQuizService.FormatScores(scores)}\n\n🔒 이 스레드는 **30초 뒤 읽기 전용으로 보관됩니다.**", 0xF1C40F, ct);
+        await QuizCountdown.RunAsync(room, 30, "이 스레드가 보관되기까지", false, delay, ct, clock);
+        await room.SendAsync("🔒 이 게임 스레드는 보관되었습니다.", ct);
         await room.LockAsync(ct);
     }
     private void Release(ulong guildId, Session session) { sessions.TryRemove(new KeyValuePair<ulong, Session>(guildId, session)); session.RoomReady.TrySetResult(0); QuizGameRegistry.Release(guildId, session.RoomReady); session.Done.TrySetResult(); }

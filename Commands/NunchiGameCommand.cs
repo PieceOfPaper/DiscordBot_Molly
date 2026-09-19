@@ -6,7 +6,7 @@ namespace DiscordBot_Molly.Commands;
 
 public sealed class NunchiGameCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    [SlashCommand("눈치게임", "대상자와 즉시 숫자 눈치게임을 시작합니다.")]
+    [SlashCommand("눈치게임", "대상자와 현재 채널에서 즉시 숫자 눈치게임을 시작합니다.")]
     public async Task Start(
         [Summary("대상자", "함께 할 사람들을 모두 멘션하세요. 예: @A @B @C")] string targets,
         [Summary("제한시간", "숫자를 외칠 제한시간(초, 기본 30·최대 120)"), MinValue(1), MaxValue(120)] int seconds = 30)

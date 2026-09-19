@@ -65,8 +65,8 @@ internal static class QuizFlowTests
                 Assert(submitted && room.Final.Contains("<@42>: 1점") && room.Ended && room.Locked, "정답 직후 강제 종료 점수 보존·채널 잠금");
             else
                 Assert(room.QuestionTimes.SequenceEqual(new[] { 30d, 46d }) && room.Final.Contains("우승자가 없습니다") &&
-                       room.Final.Contains("30초 뒤 보기 전용") && room.Final.Contains("<#99>") && room.Messages.Last() == "🔒 이 몰리 놀이터 채널은 닫혔습니다." && room.Ended && room.Locked,
-                    "30초 준비·6초 문제·10초 휴식·종료 채널 잠금·닫힘 안내");
+                       room.Final.Contains("30초 뒤 읽기 전용") && room.Messages.Last() == "🔒 이 게임 스레드는 보관되었습니다." && room.Ended && room.Locked,
+                    "30초 준비·6초 문제·10초 휴식·종료 스레드 보관 안내");
             await service.StopAsync();
         }
         var failureClock = new Clock();
@@ -85,8 +85,8 @@ internal static class QuizFlowTests
         await lockFailureService.StartAsync(3, QuizTopic.Season2RuneEffect, new[] { new QuizQuestion("효과", "정답") }, 6,
             _ => Task.FromResult<IQuizRoom>(lockFailureRoom), (_, _) => Task.CompletedTask, 99);
         await lockFailureRoom.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert(lockFailureRoom.Messages.Any(x => x.Contains("채널 자동 잠금에 실패")) && lockFailureErrors.Any(x => x.Contains("종료 채널 잠금 실패")),
-            "채널 잠금 실패는 종료 결과와 분리해 안내");
+        Assert(lockFailureRoom.Messages.Any(x => x.Contains("스레드 자동 보관에 실패")) && lockFailureErrors.Any(x => x.Contains("종료 스레드 잠금 실패")),
+            "스레드 보관 실패는 종료 결과와 분리해 안내");
         await lockFailureService.StopAsync();
 
         var exclusiveService = new SpeedQuizService((_, ct) => Task.Delay(Timeout.Infinite, ct));
@@ -139,7 +139,7 @@ internal static class QuizFlowTests
             ct.ThrowIfCancellationRequested();
             Messages.Add(text);
             Send?.Invoke(text);
-            if (text.Contains("채널 자동 잠금에 실패")) Finished.TrySetResult();
+            if (text.Contains("스레드 자동 보관에 실패")) Finished.TrySetResult();
             return Task.FromResult(++id);
         }
         public Task DeleteAsync(ulong messageId, CancellationToken ct)

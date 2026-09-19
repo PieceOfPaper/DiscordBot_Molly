@@ -16,7 +16,7 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
             await RespondAsync("현재 진행 중인 퀴즈가 없습니다.", ephemeral: true);
     }
 
-    [SlashCommand("스피드퀴즈", "전용 채널에서 선착순 정답 맞히기 게임을 시작합니다.")]
+    [SlashCommand("스피드퀴즈", "이 채널에 만든 스레드에서 선착순 정답 맞히기 게임을 시작합니다.")]
     public async Task Start(
         [Summary("문제종목", "진행할 문제 종목")]
         [Choice("시즌2룬효과로이름", "시즌2룬효과로이름")]
@@ -52,9 +52,9 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
             await RespondAsync("문제수와 제한시간은 최소 1이어야 합니다.", ephemeral: true);
             return;
         }
-        // 채널 생성과 권한 확인은 Discord API 왕복이 필요하므로
+        // 스레드 생성과 권한 확인은 Discord API 왕복이 필요하므로
         // 3초 Interaction 응답 제한을 넘기지 않도록 먼저 즉시 응답합니다.
-        await RespondAsync("스피드퀴즈 채널을 준비하고 있어요. 잠시만 기다려주세요.", ephemeral: false);
+        await RespondAsync("스피드퀴즈 스레드를 준비하고 있어요. 잠시만 기다려주세요.", ephemeral: false);
         Console.WriteLine($"[스피드퀴즈] 초기 응답 완료 guild={Context.Guild.Id}");
         try
         {
@@ -63,23 +63,16 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
             var result = await Program.instance.Quizzes.StartAsync(Context.Guild.Id, selectedTopic.Value, questions, seconds,
                 async ct =>
                 {
-                    var options = new RequestOptions { CancelToken = ct };
-                    ICategoryChannel? category = Context.Guild.CategoryChannels.FirstOrDefault(c => c.Name == "몰리 놀이터");
-                    category ??= await Context.Guild.CreateCategoryChannelAsync("몰리 놀이터", options: options);
-                    var channel = await Context.Guild.CreateTextChannelAsync($"몰리놀이터-{MobiTime.now:yyyyMMddHHmm}", p =>
-                    {
-                        p.CategoryId = category.Id;
-                        p.PermissionOverwrites = category.PermissionOverwrites.ToArray();
-                    }, options);
-                    Console.WriteLine($"[스피드퀴즈] 채널 생성 완료 channel={channel.Id}");
-                    return new DiscordQuizRoom(channel);
+                    var thread = await GameThreads.CreateAsync(Context.Channel, $"스피드퀴즈-{MobiTime.now:yyyyMMddHHmm}", ct);
+                    Console.WriteLine($"[스피드퀴즈] 스레드 생성 완료 thread={thread.Id}");
+                    return new DiscordQuizRoom(thread);
                 },
                 async (channelId, ct) =>
                 {
                     ct.ThrowIfCancellationRequested();
                         await ModifyOriginalResponseAsync(m =>
                     {
-                        m.Content = $"스피드퀴즈 채널 <#{channelId}>에 입장해주세요! 해당 채널에서 {SpeedQuizService.StartDelaySeconds}초 뒤에 시작합니다.";
+                        m.Content = $"스피드퀴즈 스레드 <#{channelId}>에서 {SpeedQuizService.StartDelaySeconds}초 뒤에 시작합니다.";
                         m.AllowedMentions = AllowedMentions.None;
                     });
                 }, Context.Channel.Id, showConsonants: showConsonants);
@@ -96,12 +89,12 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
         catch (Exception ex)
         {
             Console.WriteLine($"[스피드퀴즈] 시작 실패: {ex.Message}");
-            await ModifyOriginalResponseAsync(m => m.Content = "퀴즈를 시작하지 못했어요. 봇의 채널 관리·채널 보기·메시지 보내기 권한을 확인해주세요.");
+            await ModifyOriginalResponseAsync(m => m.Content = "퀴즈를 시작하지 못했어요. 봇의 공개 스레드 만들기·채널 보기·메시지 보내기 권한을 확인해주세요.");
         }
     }
 }
 
-internal sealed class DiscordQuizRoom(ITextChannel channel) : IQuizRoom
+internal sealed class DiscordQuizRoom(IThreadChannel channel) : IQuizRoom
 {
     public ulong Id => channel.Id;
     public async Task<ulong> SendAsync(string text, CancellationToken ct)
@@ -147,22 +140,16 @@ internal sealed class DiscordQuizRoom(ITextChannel channel) : IQuizRoom
 
     public async Task MarkEndedAsync(CancellationToken ct)
     {
-        var endedName = channel.Name.EndsWith("-종료", StringComparison.Ordinal) ? channel.Name : $"{channel.Name}-종료";
-        await channel.ModifyAsync(properties => properties.Name = endedName,
-            options: new RequestOptions { CancelToken = ct });
+        await Task.CompletedTask;
     }
 
     public Task LockAsync(CancellationToken ct)
     {
-        var permissions = OverwritePermissions.InheritAll.Modify(
-            addReactions: PermValue.Deny,
-            sendMessages: PermValue.Deny,
-            useApplicationCommands: PermValue.Deny,
-            createPublicThreads: PermValue.Deny,
-            createPrivateThreads: PermValue.Deny,
-            sendMessagesInThreads: PermValue.Deny);
-        return channel.AddPermissionOverwriteAsync(channel.Guild.EveryoneRole, permissions,
-            new RequestOptions { CancelToken = ct });
+        return channel.ModifyAsync(properties =>
+        {
+            properties.Locked = true;
+            properties.Archived = true;
+        }, new RequestOptions { CancelToken = ct });
     }
 
 }

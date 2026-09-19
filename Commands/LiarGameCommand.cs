@@ -6,7 +6,7 @@ namespace DiscordBot_Molly.Commands;
 
 public sealed class LiarGameCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    [SlashCommand("라이어게임", "몰리 놀이터 채널에서 참가형 라이어게임을 시작합니다.")]
+    [SlashCommand("라이어게임", "이 채널에 만든 스레드에서 참가형 라이어게임을 시작합니다.")]
     public async Task Start()
     {
         if (Context.Guild is null)
@@ -14,18 +14,18 @@ public sealed class LiarGameCommand : InteractionModuleBase<SocketInteractionCon
             await RespondAsync("이 명령은 서버 채널에서만 사용할 수 있어요.", ephemeral: true);
             return;
         }
-        await RespondAsync("라이어게임 채널을 준비하고 있어요. 잠시만 기다려주세요.");
+        await RespondAsync("라이어게임 스레드를 준비하고 있어요. 잠시만 기다려주세요.");
         try
         {
-            var result = await Program.instance.LiarGames.StartAsync(Context.Guild, Context.Channel.Id, Context.User.Id);
+            var result = await Program.instance.LiarGames.StartAsync(Context.Guild, Context.Channel, Context.User.Id);
             await ModifyOriginalResponseAsync(x => x.Content = result.Started
-                ? $"라이어게임 채널 <#{result.ChannelId}>을 만들었어요. 그 채널에서 참가 버튼을 눌러주세요!"
+                ? $"라이어게임 스레드 <#{result.ChannelId}>을 만들었어요. 그 스레드에서 참가 버튼을 눌러주세요!"
                 : "이 서버에서는 이미 라이어게임이 진행 중이에요.");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[라이어게임] 시작 실패: {ex.Message}");
-            await ModifyOriginalResponseAsync(x => x.Content = "라이어게임 채널을 만들지 못했어요. 봇의 채널 관리·채널 보기·메시지 보내기 권한을 확인해주세요.");
+            await ModifyOriginalResponseAsync(x => x.Content = "라이어게임 스레드를 만들지 못했어요. 봇의 공개 스레드 만들기·채널 보기·메시지 보내기 권한을 확인해주세요.");
         }
     }
 

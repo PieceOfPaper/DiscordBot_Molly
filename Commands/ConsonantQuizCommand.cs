@@ -6,7 +6,7 @@ namespace DiscordBot_Molly.Commands;
 
 public class ConsonantQuizCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    [SlashCommand("자음퀴즈", "전용 채널에서 자음을 보고 정답을 맞히는 게임을 시작합니다.")]
+    [SlashCommand("자음퀴즈", "이 채널에 만든 스레드에서 자음을 보고 정답을 맞히는 게임을 시작합니다.")]
     public async Task Start(
         [Summary("문제종목", "진행할 문제 종목")]
         [Choice("시즌2룬", "시즌2룬")]
@@ -41,7 +41,7 @@ public class ConsonantQuizCommand : InteractionModuleBase<SocketInteractionConte
             await RespondAsync("문제종목을 선택하고 문제수와 제한시간을 1 이상으로 입력해주세요.", ephemeral: true);
             return;
         }
-        await RespondAsync("자음퀴즈 채널을 준비하고 있어요. 잠시만 기다려주세요.", ephemeral: false);
+        await RespondAsync("자음퀴즈 스레드를 준비하고 있어요. 잠시만 기다려주세요.", ephemeral: false);
         try
         {
             await Task.WhenAll(
@@ -52,22 +52,14 @@ public class ConsonantQuizCommand : InteractionModuleBase<SocketInteractionConte
                 $"{topic}: 자음과 종류·힌트를 보고 정답을 맞혀주세요.", questions, seconds,
                 async ct =>
                 {
-                    var options = new RequestOptions { CancelToken = ct };
-                    ICategoryChannel? category = Context.Guild.CategoryChannels.FirstOrDefault(c => c.Name == "몰리 놀이터");
-                    category ??= await Context.Guild.CreateCategoryChannelAsync("몰리 놀이터", options: options);
-                    var channel = await Context.Guild.CreateTextChannelAsync($"몰리놀이터-{MobiTime.now:yyyyMMddHHmm}", p =>
-                    {
-                        p.CategoryId = category.Id;
-                        p.PermissionOverwrites = category.PermissionOverwrites.ToArray();
-                    }, options);
-                    return new DiscordQuizRoom(channel);
+                    return new DiscordQuizRoom(await GameThreads.CreateAsync(Context.Channel, $"자음퀴즈-{MobiTime.now:yyyyMMddHHmm}", ct));
                 },
                 async (channelId, ct) =>
                 {
                     ct.ThrowIfCancellationRequested();
                     await ModifyOriginalResponseAsync(m =>
                     {
-                        m.Content = $"자음퀴즈 채널 <#{channelId}>에 입장해주세요! 해당 채널에서 {SpeedQuizService.StartDelaySeconds}초 뒤에 시작합니다.";
+                        m.Content = $"자음퀴즈 스레드 <#{channelId}>에서 {SpeedQuizService.StartDelaySeconds}초 뒤에 시작합니다.";
                         m.AllowedMentions = AllowedMentions.None;
                     });
                 }, Context.Channel.Id);
@@ -80,7 +72,7 @@ public class ConsonantQuizCommand : InteractionModuleBase<SocketInteractionConte
         catch (Exception ex)
         {
             Console.WriteLine($"[자음퀴즈] 시작 실패: {ex.Message}");
-            await ModifyOriginalResponseAsync(m => m.Content = "퀴즈를 시작하지 못했어요. 봇의 채널 관리·채널 보기·메시지 보내기 권한을 확인해주세요.");
+            await ModifyOriginalResponseAsync(m => m.Content = "퀴즈를 시작하지 못했어요. 봇의 공개 스레드 만들기·채널 보기·메시지 보내기 권한을 확인해주세요.");
         }
     }
 }

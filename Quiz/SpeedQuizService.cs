@@ -184,17 +184,17 @@ public sealed class SpeedQuizService
     {
         await room.MarkEndedAsync(ct);
         await room.SendEmbedAsync(title,
-            $"{result}\n\n🔒 이 채널은 **30초 뒤 보기 전용으로 잠깁니다.**\n↩️ 돌아가기: <#{returnChannelId}>", color, ct);
-        await QuizCountdown.RunAsync(room, 30, "이 채널이 잠기기까지", false, delay, ct, clock);
+            $"{result}\n\n🔒 이 스레드는 **30초 뒤 읽기 전용으로 보관됩니다.**", color, ct);
+        await QuizCountdown.RunAsync(room, 30, "이 스레드가 보관되기까지", false, delay, ct, clock);
         try
         {
-            await room.SendAsync("🔒 이 몰리 놀이터 채널은 닫혔습니다.", ct);
+            await room.SendAsync("🔒 이 게임 스레드는 보관되었습니다.", ct);
             await room.LockAsync(ct);
         }
         catch (Exception ex)
         {
-            log($"[스피드퀴즈] 종료 채널 잠금 실패: {ex.Message}");
-            await room.SendAsync("⚠️ 채널 자동 잠금에 실패했습니다. 봇의 역할 관리하기 권한과 몰리 놀이터 카테고리 권한을 확인해주세요.", ct);
+            log($"[스피드퀴즈] 종료 스레드 잠금 실패: {ex.Message}");
+            await room.SendAsync("⚠️ 스레드 자동 보관에 실패했습니다. 봇의 스레드 관리 권한을 확인해주세요.", ct);
         }
     }
 
