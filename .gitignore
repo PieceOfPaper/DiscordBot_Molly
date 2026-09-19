@@ -5,6 +5,7 @@
 
 # dotenv files
 .env
+.molly-data/
 
 # User-specific files
 *.rsuser

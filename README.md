@@ -101,7 +101,9 @@ dotnet run
   비어 있거나 0이면 글로벌 등록(전파 지연 가능).  
   환경변수로는 `Discord__GuildId` 사용.
 - `MOLLY_DATA_DIR`  
-  이벤트 마감 알림 설정 저장 위치(기본: 실행 폴더).
+  영구 데이터 저장 위치입니다. 이벤트 마감 알림 SQLite DB와 룬·쪽지 캐시가 이 경로 아래에 저장됩니다. 개발 시에는 프로젝트별로 `MOLLY_DATA_DIR="$PWD/.molly-data"`를 권장하며, `.molly-data/`는 Git에 포함하지 않습니다.
+- `MollyDatabase__Path`<br>
+  선택 설정입니다. 지정하면 SQLite DB의 경로를 직접 바꿉니다. 미지정 시 `MOLLY_DATA_DIR/database/molly.sqlite`를 사용합니다.
 - `assets/shop_table.csv`  
   일반 상점 데이터. 실행 시 자동 로드됩니다.
 - `assets/shop_exchange_table.csv`  
@@ -113,6 +115,10 @@ dotnet run
 - 이벤트/랭킹 조회는 Playwright(Headless Chromium)로 페이지를 로드합니다.
 - 이벤트 마감 알림은 KST 기준 **09:00 / 21:00**에 갱신됩니다.
 - 이벤트 목록은 페이지 해시를 비교하여 변경 시에만 갱신합니다.
+
+## SQLite 저장
+
+이벤트 마감 알림의 서버별 설정은 SQLite의 `event_expire_alert_settings` 테이블에 저장됩니다. 기존 `MOLLY_DATA_DIR/eventexpirealertsetting/<길드 ID>.json` 파일이 있으면 첫 시작에 SQLite로 안전하게 이전합니다. DB 트랜잭션이 성공한 JSON만 삭제하므로, JSON이 남아 있으면 다음 시작에 이전을 다시 시도합니다.
 
 ## 룬 테이블 연동
 

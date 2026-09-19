@@ -14,6 +14,9 @@
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.0" />
+    <!-- 시스템 SQLite를 사용해 취약점 경고가 있는 번들 네이티브 라이브러리를 배포하지 않는다. macOS·Ubuntu Lightsail에는 libsqlite3가 기본 포함된다. -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.0" />
+    <PackageReference Include="SQLitePCLRaw.provider.sqlite3" Version="2.1.12" />
     <PackageReference Include="Microsoft.Playwright" Version="1.55.0" />
   </ItemGroup>
 

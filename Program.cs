@@ -127,20 +127,24 @@ class Program
         };
         AppDomain.CurrentDomain.ProcessExit += (_, __) => appCts.Cancel();
 
+        MollyDataPaths.Configure(m_Config);
+        await MobiEventExpireAlert.InitializeStorageAsync(appCts.Token);
+
         using var runeHttp = new HttpClient();
+        var dataDirectory = MollyDataPaths.RootDirectory;
         Runes = new RuneCatalog(new GoogleSheetsRuneSource(runeHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
             m_Config["GoogleSheets:RuneSheetId"] ?? "0"),
-            Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
+            dataDirectory);
         await Runes.InitializeAsync(appCts.Token);
         Consonants = new ConsonantCatalog(new GoogleSheetsConsonantSource(runeHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId),
-            Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
+            dataDirectory);
         await Consonants.InitializeAsync(appCts.Token);
         MessageBottles = new MessageBottleCatalog(new GoogleSheetsMessageBottleSource(runeHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
             m_Config["GoogleSheets:MessageBottleSheetName"] ?? GoogleSheetsMessageBottleSource.DefaultSheetName),
-            Environment.GetEnvironmentVariable("MOLLY_DATA_DIR") ?? AppContext.BaseDirectory);
+            dataDirectory);
         await MessageBottles.InitializeAsync(appCts.Token);
         try
         {

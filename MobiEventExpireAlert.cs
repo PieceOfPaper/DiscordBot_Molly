@@ -25,11 +25,16 @@ public sealed class EventExpireAlertInfo
 
 public static class MobiEventExpireAlert
 {
-    private static readonly LocalStorage<EventExpireAlertSetting> s_ExpireAlertSettingStorage = new();
+    private static readonly EventExpireAlertSettingStore s_ExpireAlertSettingStorage = new();
     private static readonly Dictionary<ulong, List<EventExpireAlertInfo>> s_EventExpireAlertInfos = new();
     
     private static Task? s_UpdateTask;
     private static CancellationTokenSource? s_UpdateTaskCancellationTokenSource;
+
+    public static EventExpireAlertSettingStore Storage => s_ExpireAlertSettingStorage;
+
+    public static Task InitializeStorageAsync(CancellationToken ct = default)
+        => s_ExpireAlertSettingStorage.InitializeAsync(ct);
 
 
     public static void RunUpdateTask(CancellationToken appToken = default)
@@ -103,7 +108,7 @@ public static class MobiEventExpireAlert
 
     public static async Task RegistEventExpireAlertAll()
     {
-        var list = s_ExpireAlertSettingStorage.GetAllGuildIds();
+        var list = await s_ExpireAlertSettingStorage.GetAllGuildIdsAsync().ConfigureAwait(false);
         foreach (var guildId in list)
         {
             var setting = await s_ExpireAlertSettingStorage.LoadAsync(guildId);

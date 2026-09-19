@@ -227,6 +227,23 @@ try
     Check(!await bottleCatalog.RefreshAsync() && ReferenceEquals(bottleOriginal, bottleCatalog.Current), "병 속에 든 쪽지 검증 실패 시 정상 스냅샷 유지");
 }
 finally { Directory.Delete(dir, recursive: true); }
+var storageDir = Path.Combine(Path.GetTempPath(), "molly-storage-tests-" + Guid.NewGuid().ToString("N"));
+try
+{
+    var legacyDir = Path.Combine(storageDir, "eventexpirealertsetting");
+    Directory.CreateDirectory(legacyDir);
+    await File.WriteAllTextAsync(Path.Combine(legacyDir, "123.json"), "{\"enabled\":true,\"channelId\":456,\"hoursBefore\":12,\"lastAlertAtKst\":null}");
+    var settingsStore = new EventExpireAlertSettingStore(storageDir);
+    await settingsStore.InitializeAsync();
+    var migrated = await settingsStore.LoadAsync(123);
+    Check(migrated is { Enabled: true, ChannelId: 456, HoursBefore: 12 } && !File.Exists(Path.Combine(legacyDir, "123.json")), "기존 이벤트 알림 JSON을 SQLite로 이전 후 삭제");
+    await settingsStore.SaveAsync(789, new EventExpireAlertSetting { Enabled = false, ChannelId = 987, HoursBefore = 24 });
+    Check((await settingsStore.GetAllGuildIdsAsync()).SequenceEqual(new ulong[] { 123, 789 }) && (await settingsStore.LoadAsync(789))?.ChannelId == 987, "SQLite 이벤트 알림 설정 저장·조회");
+    await File.WriteAllTextAsync(Path.Combine(legacyDir, "999.json"), "{broken");
+    await settingsStore.InitializeAsync();
+    Check(File.Exists(Path.Combine(legacyDir, "999.json")), "손상된 기존 JSON은 삭제하지 않고 다음 이전을 위해 유지");
+}
+finally { Directory.Delete(storageDir, recursive: true); }
 using var http = new HttpClient(new StubHandler());
 var httpSource = new GoogleSheetsRuneSource(http);
 try { await httpSource.FetchCsvAsync(default); throw new Exception("HTML 허용"); }

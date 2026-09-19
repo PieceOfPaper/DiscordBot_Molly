@@ -240,4 +240,3 @@ sudo journalctl -k --no-pager | grep -i -E 'out of memory|oom|killed process'
 ```
 
 512MB에서는 이벤트용과 랭킹용 Chromium이 동시에 유지되면 스왑을 사용한다. 조회 실패가 반복되거나 OOM이 발생하면 1GB 플랜으로 올리거나 브라우저 동시 실행·유휴 종료 정책을 코드에서 조정한다.
-
