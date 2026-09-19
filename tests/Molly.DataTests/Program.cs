@@ -280,10 +280,11 @@ var impactRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
 impactRules["base_attack"] = new("base_attack", "전투능력치", "number", "20", "");
 impactRules["base_critical_chance"] = new("base_critical_chance", "치명타", "number", "1", "");
 impactRules["additional_hit_chance"] = new("additional_hit_chance", "추가타", "number", "1", "");
-var strike = new BattleSkill("strike", "시험 일격", "일반", null, true, 2, 0, 1, 1, Array.Empty<BattleEffect>());
+var strikeEffect = new BattleEffect("strike_damage", 1, "피해", "상대", 2, 1, 0, null, 0, null, null, null, null, null, null, null, null);
+var strike = new BattleSkill("strike", "시험 일격", "일반", null, true, 2, 0, 1, 1, [strikeEffect]);
 var impactSnapshot = new BattleDataSnapshot { Rules = impactRules, Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["strike"]) }, Skills = new Dictionary<string, BattleSkill> { ["strike"] = strike }, LoadedAt = DateTimeOffset.UtcNow };
 var impactBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), impactSnapshot, new FixedBattleRandom(new[] { 0d, .9d, 0d, .5d, 0d, 0d }.Concat(Enumerable.Repeat(.5d, 100))));
-Check(impactBattle.Events.Any(x => x.Type == "CriticalHit") && impactBattle.Events.Any(x => x.Type == "AdditionalHit"), "치명타와 치명타 비적용 추가타를 독립적으로 처리");
+Check(impactBattle.Events.Any(x => x.Type == "CriticalHit") && impactBattle.Events.Any(x => x.Type == "AdditionalHit") && impactBattle.Events.Count(x => x.Type == "DamageDealt") == 2, "효과 행의 다단 피해·치명타·치명타 비적용 추가타를 처리");
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)

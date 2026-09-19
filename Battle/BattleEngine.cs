@@ -34,20 +34,9 @@ public sealed class BattleEngine
                 actor.Cooldowns[skill.Id] = Math.Max(skill.Cooldown, rules.MinimumSkillCooldown);
                 actor.LastSkillId = skill.Id;
                 events.Add(new("SkillUsed", actor.Name, target.Name, Detail: skill.Name));
-                targetDamaged = Attack(actor, target, actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier, 1, random, rules, events);
-                foreach (var effect in skill.Effects)
-                {
-                    if (target.Hp <= 0 || actor.Hp <= 0) break;
-                    if (random.NextDouble() > effect.Chance) continue;
-                    var receiver = effect.Target == "자신" ? actor : target;
-                    if (effect.Type == "회복")
-                    {
-                        var amount = Math.Max(1, (int)Math.Round(actor.MaxHp * rules.SkillHealRatio));
-                        var healed = Math.Min(amount, receiver.MaxHp - receiver.Hp); receiver.Hp += healed;
-                        events.Add(new("HealApplied", actor.Name, receiver.Name, healed));
-                        actorHealed |= ReferenceEquals(receiver, actor) && healed > 0;
-                    }
-                }
+                var resolved = ExecuteEffects(actor, target, skill, surpriseMultiplier, random, rules, events);
+                targetDamaged = resolved.TargetDamaged;
+                actorHealed = resolved.ActorHealed;
             }
             if (targetDamaged && target.Hp > 0) events.Add(new("HpStatus", target.Name, Detail: HpStatus(target)));
             if (actorHealed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
@@ -99,6 +88,41 @@ public sealed class BattleEngine
         foreach (var skill in choices) { point -= skill.Weight * (1d + skill.Priority / 100d); if (point <= 0) return skill; }
         return choices[^1];
     }
+
+    private static EffectResolution ExecuteEffects(Fighter actor, Fighter target, BattleSkill skill, double surpriseMultiplier, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        var resolution = new EffectResolution();
+        foreach (var effect in skill.Effects)
+        {
+            if (actor.Hp <= 0 || target.Hp <= 0) break;
+            var receiver = effect.Target == "자신" ? actor : target;
+            switch (effect.Type)
+            {
+                case "피해":
+                    for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
+                    {
+                        if (random.NextDouble() >= effect.Chance) continue;
+                        resolution.TargetDamaged |= Attack(actor, receiver, actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier, 1, random, rules, events);
+                    }
+                    break;
+                case "회복":
+                    for (var healIndex = 0; healIndex < effect.Count; healIndex++)
+                    {
+                        if (random.NextDouble() >= effect.Chance) continue;
+                        var amount = Math.Max(1, (int)Math.Round(actor.MaxHp * rules.SkillHealRatio));
+                        var healed = Math.Min(amount, receiver.MaxHp - receiver.Hp);
+                        receiver.Hp += healed;
+                        if (healed > 0)
+                        {
+                            events.Add(new("HealApplied", actor.Name, receiver.Name, healed));
+                            resolution.ActorHealed |= ReferenceEquals(receiver, actor);
+                        }
+                    }
+                    break;
+            }
+        }
+        return resolution;
+    }
     private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         for (var i = 0; i < count && target.Hp > 0; i++)
@@ -125,6 +149,12 @@ public sealed class BattleEngine
     {
         >= .85 => "아직 끄떡없습니다.", >= .60 => "조금씩 밀리기 시작합니다.", >= .30 => "상태가 심상치 않습니다.", _ => "간신히 버티고 있습니다."
     };
+
+    private sealed class EffectResolution
+    {
+        public bool TargetDamaged;
+        public bool ActorHealed;
+    }
 
     private sealed class Fighter
     {

@@ -22,7 +22,12 @@ public sealed record BattleRule(string Id, string Category, string ValueType, st
 public sealed record BattleClass(string Id, string Name, IReadOnlyList<string> SkillIds, bool IsBattleReady = true);
 public sealed record BattleSkill(string Id, string Name, string Kind, string? ParentSkillId, bool Enabled,
     int Cooldown, int InitialCooldown, int Priority, double Weight, IReadOnlyList<BattleEffect> Effects);
-public sealed record BattleEffect(string Id, int Order, string Type, string Target, int Count, double Chance);
+public sealed record BattleEffect(
+    string Id, int Order, string Type, string Target, int Count, double Chance,
+    int Duration, string? StatusId, int MaxStacks, string? Message,
+    string? ConditionTarget, string? ConditionType, string? ConditionId,
+    string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
+    string? NumericReferenceMode);
 
 public sealed record CharacterBattleSnapshot(ulong DiscordUserId, string CharacterName, string ClassId,
     int CombatPower, int LifePower, int CharmPower);
