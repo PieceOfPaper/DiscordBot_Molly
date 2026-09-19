@@ -1,4 +1,5 @@
 using Discord.Interactions;
+using Molly.Battle;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -44,11 +45,11 @@ public sealed class CharacterRegistrationCommand : InteractionModuleBase<SocketI
                 return;
             }
 
+            var battleClass = Program.instance.Battles.Current.Classes.Values
+                .SingleOrDefault(x => string.Equals(x.Name, rank.ClassName, StringComparison.Ordinal));
             await Program.instance.RegisteredCharacters.SaveAsync(new RegisteredCharacter(
-                Context.User.Id,
-                server,
-                normalizedName,
-                DateTimeOffset.UtcNow), cts.Token);
+                Context.User.Id, server, normalizedName, DateTimeOffset.UtcNow,
+                battleClass?.Id, rank.Combat ?? rank.Power, rank.Life, rank.Charm, DateTimeOffset.UtcNow), cts.Token);
 
             await ModifyOriginalResponseAsync(message => message.Content =
                 $"✅ [{rank.ServerName}] 서버의 `{normalizedName}` 캐릭터를 등록했어요.");

@@ -5,6 +5,7 @@ using Molly.Nunchi;
 using Molly.Messages;
 using Molly.LiarGame;
 using Molly.Lottery;
+using Molly.Battle;
 
 const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
 const string valid = header + "2,전설,무기,전사,테스트,효과";
@@ -20,6 +21,14 @@ if (args.SequenceEqual(new[] { "--live" }))
     using var client = new HttpClient();
     var table = RuneCsvReader.Parse(await new GoogleSheetsRuneSource(client).FetchCsvAsync(default), DateTimeOffset.UtcNow);
     Console.WriteLine($"실제 Google Sheets HTTP 로딩: {table.Items.Count}개, 경고 {table.Warnings.Count}개");
+    return;
+}
+if (args.SequenceEqual(new[] { "--battle-live" }))
+{
+    using var client = new HttpClient();
+    var source = new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId);
+    var snapshot = BattleCatalog.Parse(await source.FetchAsync(default), DateTimeOffset.UtcNow);
+    Console.WriteLine($"실제 배틀 시트: 클래스 {snapshot.Classes.Count}개, 스킬 {snapshot.Skills.Count}개");
     return;
 }
 void Check(bool value, string name)
@@ -255,6 +264,26 @@ var httpSource = new GoogleSheetsRuneSource(http);
 try { await httpSource.FetchCsvAsync(default); throw new Exception("HTML 허용"); }
 catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거부"); }
 await QuizFlowTests.RunAsync();
+var battleRules = new Dictionary<string, BattleRule>
+{
+    ["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100", ""), ["base_attack"] = new("base_attack", "전투능력치", "number", "40", ""), ["base_defense"] = new("base_defense", "전투능력치", "number", "0", ""),
+    ["power_scale_exponent"] = new("power_scale_exponent", "전투능력치", "number", "0.5", ""), ["power_scale_min"] = new("power_scale_min", "전투능력치", "number", "0.75", ""), ["power_scale_max"] = new("power_scale_max", "전투능력치", "number", "1.25", ""),
+    ["defense_coefficient"] = new("defense_coefficient", "피해", "number", "1", ""), ["damage_variance_min"] = new("damage_variance_min", "피해", "number", "1", ""), ["damage_variance_max"] = new("damage_variance_max", "피해", "number", "1", ""), ["base_critical_chance"] = new("base_critical_chance", "치명타", "number", "0", ""), ["critical_damage_multiplier"] = new("critical_damage_multiplier", "치명타", "number", "1.5", ""),
+    ["max_major_actions"] = new("max_major_actions", "종료", "integer", "16", ""), ["draw_hp_ratio_threshold"] = new("draw_hp_ratio_threshold", "종료", "number", "0.05", "")
+    , ["normal_attack_multiplier"] = new("normal_attack_multiplier", "피해", "number", "1.3", ""), ["skill_damage_min_multiplier"] = new("skill_damage_min_multiplier", "피해", "number", "1.7", ""), ["skill_damage_max_multiplier"] = new("skill_damage_max_multiplier", "피해", "number", "2.1", ""), ["ultimate_damage_multiplier"] = new("ultimate_damage_multiplier", "피해", "number", "2.4", ""), ["minimum_skill_cooldown"] = new("minimum_skill_cooldown", "행동", "integer", "2", ""), ["skill_heal_ratio"] = new("skill_heal_ratio", "회복", "number", "0.06", ""), ["max_surprise_events_per_actor"] = new("max_surprise_events_per_actor", "돌발", "integer", "2", ""), ["surprise_event_global_cooldown"] = new("surprise_event_global_cooldown", "돌발", "integer", "2", ""), ["life_surprise_hp_ratio_threshold"] = new("life_surprise_hp_ratio_threshold", "돌발", "number", "0.5", ""), ["life_surprise_heal_ratio"] = new("life_surprise_heal_ratio", "돌발", "number", "0.08", ""), ["charm_surprise_damage_multiplier"] = new("charm_surprise_damage_multiplier", "돌발", "number", "1.3", ""), ["life_surprise_base_chance"] = new("life_surprise_base_chance", "돌발", "number", "0.2", ""), ["life_surprise_stat_reference"] = new("life_surprise_stat_reference", "돌발", "number", "100000", ""), ["life_surprise_stat_coefficient"] = new("life_surprise_stat_coefficient", "돌발", "number", "0.1", ""), ["life_surprise_max_chance"] = new("life_surprise_max_chance", "돌발", "number", "0.35", ""), ["charm_surprise_base_chance"] = new("charm_surprise_base_chance", "돌발", "number", "0.2", ""), ["charm_surprise_stat_reference"] = new("charm_surprise_stat_reference", "돌발", "number", "100000", ""), ["charm_surprise_stat_coefficient"] = new("charm_surprise_stat_coefficient", "돌발", "number", "0.1", ""), ["charm_surprise_max_chance"] = new("charm_surprise_max_chance", "돌발", "number", "0.35", ""), ["additional_hit_chance"] = new("additional_hit_chance", "추가타", "number", "0", ""), ["additional_hit_damage_ratio"] = new("additional_hit_damage_ratio", "추가타", "number", "0.35", "")
+};
+var battleSnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", Array.Empty<string>()) }, Skills = new Dictionary<string, BattleSkill>(), LoadedAt = DateTimeOffset.UtcNow };
+var fixedRandom = new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(0.5d, 200)));
+var battle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), battleSnapshot, fixedRandom);
+Check(battle.Outcome == BattleOutcome.FighterAWin && battle.MajorActions == 3 && battle.Events.Count(x => x.Type == "DamageDealt") == 3, "배틀 엔진은 고정 난수에서 동일한 일반 공격 결과를 생성");
+var impactRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+impactRules["base_attack"] = new("base_attack", "전투능력치", "number", "20", "");
+impactRules["base_critical_chance"] = new("base_critical_chance", "치명타", "number", "1", "");
+impactRules["additional_hit_chance"] = new("additional_hit_chance", "추가타", "number", "1", "");
+var strike = new BattleSkill("strike", "시험 일격", "일반", null, true, 2, 0, 1, 1, Array.Empty<BattleEffect>());
+var impactSnapshot = new BattleDataSnapshot { Rules = impactRules, Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["strike"]) }, Skills = new Dictionary<string, BattleSkill> { ["strike"] = strike }, LoadedAt = DateTimeOffset.UtcNow };
+var impactBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), impactSnapshot, new FixedBattleRandom(new[] { 0d, .9d, 0d, .5d, 0d, 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(impactBattle.Events.Any(x => x.Type == "CriticalHit") && impactBattle.Events.Any(x => x.Type == "AdditionalHit"), "치명타와 치명타 비적용 추가타를 독립적으로 처리");
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)
@@ -291,6 +320,11 @@ sealed class FakeSource(string csv) : IRuneSource
         }
         finally { Interlocked.Decrement(ref active); }
     }
+}
+sealed class FixedBattleRandom(IEnumerable<double> values) : IBattleRandom
+{
+    private readonly Queue<double> values = new(values);
+    public double NextDouble() => values.Count == 0 ? 0.5 : values.Dequeue();
 }
 sealed class StubHandler : HttpMessageHandler
 {

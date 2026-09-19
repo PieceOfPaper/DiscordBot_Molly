@@ -10,6 +10,7 @@ using Molly.Messages;
 using Molly.LiarGame;
 using Molly.Lottery;
 using DiscordBot_Molly.Commands;
+using Molly.Battle;
 
 class Program
 {
@@ -24,6 +25,8 @@ class Program
     public LiarGameService LiarGames { get; } = new();
     public LotteryService Lotteries { get; } = new();
     public RegisteredCharacterStore RegisteredCharacters { get; private set; } = null!;
+    public BattleCatalog Battles { get; private set; } = null!;
+    public BattleSessions BattleSessions { get; } = new();
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -149,6 +152,9 @@ class Program
             m_Config["GoogleSheets:MessageBottleSheetName"] ?? GoogleSheetsMessageBottleSource.DefaultSheetName),
             dataDirectory);
         await MessageBottles.InitializeAsync(appCts.Token);
+        Battles = new BattleCatalog(new GoogleSheetsBattleSource(runeHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId), dataDirectory);
+        await Battles.InitializeAsync(appCts.Token);
         try
         {
             try

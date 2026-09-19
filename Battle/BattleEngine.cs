@@ -1,0 +1,160 @@
+namespace Molly.Battle;
+
+/// <summary>Discord·DB·HTTP를 참조하지 않는 단일 전투 시뮬레이터입니다.</summary>
+public sealed class BattleEngine
+{
+    public BattleResult Simulate(CharacterBattleSnapshot a, CharacterBattleSnapshot b, BattleDataSnapshot data, IBattleRandom random)
+    {
+        ArgumentNullException.ThrowIfNull(data); ArgumentNullException.ThrowIfNull(random);
+        if (!data.Classes.TryGetValue(a.ClassId, out var aClass) || !aClass.IsBattleReady || !data.Classes.TryGetValue(b.ClassId, out var bClass) || !bClass.IsBattleReady) throw new InvalidDataException("등록 캐릭터의 클래스에 해당하는 배틀 스킬 데이터가 아직 준비되지 않았습니다.");
+        var rules = new Rules(data.Rules);
+        var basePower = Math.Sqrt(Math.Max(1d, a.CombatPower) * Math.Max(1d, b.CombatPower));
+        var left = Fighter.Create(a, PowerScale(a.CombatPower, basePower, rules), rules, data);
+        var right = Fighter.Create(b, PowerScale(b.CombatPower, basePower, rules), rules, data);
+        var events = new List<BattleEvent> { new("BattleStarted", left.Name, right.Name) };
+        var actor = random.NextDouble() < .5 ? left : right;
+        var major = 0;
+        var surpriseCooldown = 0;
+        while (major < rules.MaxActions && left.Hp > 0 && right.Hp > 0)
+        {
+            var target = ReferenceEquals(actor, left) ? right : left;
+            events.Add(new("TurnStarted", actor.Name, target.Name));
+            actor.TickCooldowns();
+            var surpriseMultiplier = TrySurprise(actor, random, rules, ref surpriseCooldown, events);
+            var actorHealed = false;
+            var targetDamaged = false;
+            var skill = ChooseSkill(actor, data, random);
+            if (skill is null)
+            {
+                events.Add(new("NormalAttackUsed", actor.Name, target.Name));
+                targetDamaged = Attack(actor, target, actor.Attack * rules.NormalAttackMultiplier * surpriseMultiplier, 1, random, rules, events);
+            }
+            else
+            {
+                actor.Cooldowns[skill.Id] = Math.Max(skill.Cooldown, rules.MinimumSkillCooldown);
+                actor.LastSkillId = skill.Id;
+                events.Add(new("SkillUsed", actor.Name, target.Name, Detail: skill.Name));
+                targetDamaged = Attack(actor, target, actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier, 1, random, rules, events);
+                foreach (var effect in skill.Effects)
+                {
+                    if (target.Hp <= 0 || actor.Hp <= 0) break;
+                    if (random.NextDouble() > effect.Chance) continue;
+                    var receiver = effect.Target == "자신" ? actor : target;
+                    if (effect.Type == "회복")
+                    {
+                        var amount = Math.Max(1, (int)Math.Round(actor.MaxHp * rules.SkillHealRatio));
+                        var healed = Math.Min(amount, receiver.MaxHp - receiver.Hp); receiver.Hp += healed;
+                        events.Add(new("HealApplied", actor.Name, receiver.Name, healed));
+                        actorHealed |= ReferenceEquals(receiver, actor) && healed > 0;
+                    }
+                }
+            }
+            if (targetDamaged && target.Hp > 0) events.Add(new("HpStatus", target.Name, Detail: HpStatus(target)));
+            if (actorHealed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
+            major++;
+            surpriseCooldown = Math.Max(0, surpriseCooldown - 1);
+            if (left.Hp <= 0 || right.Hp <= 0) break;
+            actor = target;
+        }
+        var outcome = left.Hp <= 0 && right.Hp <= 0 ? BattleOutcome.Draw
+            : left.Hp <= 0 ? BattleOutcome.FighterBWin
+            : right.Hp <= 0 ? BattleOutcome.FighterAWin
+            : Math.Abs((double)left.Hp / left.MaxHp - (double)right.Hp / right.MaxHp) <= rules.DrawThreshold ? BattleOutcome.Draw
+            : (double)left.Hp / left.MaxHp > (double)right.Hp / right.MaxHp ? BattleOutcome.FighterAWin : BattleOutcome.FighterBWin;
+        events.Add(new("BattleEnded", outcome == BattleOutcome.FighterBWin ? right.Name : outcome == BattleOutcome.FighterAWin ? left.Name : "무승부"));
+        return new BattleResult(outcome, major, left.Hp, left.MaxHp, right.Hp, right.MaxHp, events);
+    }
+
+    private static double PowerScale(int power, double basePower, Rules rules) => Math.Clamp(Math.Pow(Math.Max(1d, power) / basePower, rules.PowerExponent), rules.PowerMin, rules.PowerMax);
+    private static double SkillMultiplier(BattleSkill skill, Rules rules)
+    {
+        if (skill.Kind == "궁극기" || skill.Id.Contains("finale", StringComparison.OrdinalIgnoreCase) || skill.Id.Contains("symphony", StringComparison.OrdinalIgnoreCase)) return rules.UltimateDamageMultiplier;
+        var variation = (uint)StringComparer.Ordinal.GetHashCode(skill.Id) % 100 / 100d;
+        return rules.SkillDamageMinMultiplier + variation * (rules.SkillDamageMaxMultiplier - rules.SkillDamageMinMultiplier);
+    }
+
+    private static double TrySurprise(Fighter actor, IBattleRandom random, Rules rules, ref int cooldown, List<BattleEvent> events)
+    {
+        if (cooldown > 0 || actor.SurpriseCount >= rules.MaxSurpriseEvents) return 1d;
+        // 생활력과 매력은 서로 비교하지 않는다. 각각 자신만의 기준값·보정계수·상한으로 판정한다.
+        if ((double)actor.Hp / actor.MaxHp <= rules.LifeSurpriseHpRatioThreshold && random.NextDouble() < rules.LifeSurpriseChance(actor.LifePower))
+        {
+            actor.SurpriseCount++; cooldown = rules.SurpriseCooldown;
+            var healed = Math.Min(actor.MaxHp - actor.Hp, (int)Math.Round(actor.MaxHp * rules.LifeSurpriseHealRatio)); actor.Hp += healed;
+            events.Add(new("SurpriseEventTriggered", actor.Name, Detail: "야전 응급처치")); events.Add(new("HealApplied", actor.Name, actor.Name, healed)); events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
+            return 1d;
+        }
+        if (random.NextDouble() >= rules.CharmSurpriseChance(actor.CharmPower)) return 1d;
+        actor.SurpriseCount++; cooldown = rules.SurpriseCooldown;
+        events.Add(new("SurpriseEventTriggered", actor.Name, Detail: "관중의 환호"));
+        return rules.CharmSurpriseDamageMultiplier;
+    }
+    private static BattleSkill? ChooseSkill(Fighter actor, BattleDataSnapshot data, IBattleRandom random)
+    {
+        var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && actor.Cooldowns.GetValueOrDefault(x.Id) == 0 && x.Weight > 0).Cast<BattleSkill>().ToArray();
+        if (choices.Length == 0) return null;
+        var varied = choices.Where(x => x.Id != actor.LastSkillId).ToArray();
+        if (varied.Length > 0) choices = varied;
+        var point = random.NextDouble() * choices.Sum(x => x.Weight * (1d + x.Priority / 100d));
+        foreach (var skill in choices) { point -= skill.Weight * (1d + skill.Priority / 100d); if (point <= 0) return skill; }
+        return choices[^1];
+    }
+    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        for (var i = 0; i < count && target.Hp > 0; i++)
+        {
+            var amount = Math.Max(1, baseDamage - target.Defense * rules.DefenseCoefficient) * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
+            var critical = random.NextDouble() < rules.CriticalChance;
+            if (critical) { amount *= rules.CriticalMultiplier; events.Add(new("CriticalHit", actor.Name, target.Name)); }
+            var damage = Math.Max(1, (int)Math.Round(amount)); target.Hp = Math.Max(0, target.Hp - damage);
+            events.Add(new("DamageDealt", actor.Name, target.Name, damage));
+            if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+            if (target.Hp > 0 && random.NextDouble() < rules.AdditionalHitChance)
+            {
+                // 추가타는 이미 확정된 피해의 일부만 더하고, 치명타 판정을 따로 하지 않습니다.
+                var additionalDamage = Math.Max(1, (int)Math.Round(damage * rules.AdditionalHitDamageRatio));
+                target.Hp = Math.Max(0, target.Hp - additionalDamage);
+                events.Add(new("AdditionalHit", actor.Name, target.Name, additionalDamage));
+                if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+            }
+        }
+        return true;
+    }
+
+    private static string HpStatus(Fighter fighter) => ((double)fighter.Hp / fighter.MaxHp) switch
+    {
+        >= .85 => "아직 끄떡없습니다.", >= .60 => "조금씩 밀리기 시작합니다.", >= .30 => "상태가 심상치 않습니다.", _ => "간신히 버티고 있습니다."
+    };
+
+    private sealed class Fighter
+    {
+        public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds;
+        public int SurpriseCount; public string? LastSkillId;
+        public Dictionary<string, int> Cooldowns { get; } = new(StringComparer.Ordinal);
+        public static Fighter Create(CharacterBattleSnapshot source, double scale, Rules rules, BattleDataSnapshot data)
+        {
+            var c = data.Classes[source.ClassId]; var max = Math.Max(1, (int)Math.Round(rules.BaseHp * scale));
+            var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds };
+            foreach (var id in c.SkillIds) if (data.Skills.TryGetValue(id, out var skill)) fighter.Cooldowns[id] = skill.InitialCooldown;
+            return fighter;
+        }
+        public void TickCooldowns() { foreach (var id in Cooldowns.Keys.ToArray()) Cooldowns[id] = Math.Max(0, Cooldowns[id] - 1); }
+    }
+
+    private sealed class Rules(IReadOnlyDictionary<string, BattleRule> values)
+    {
+        private double Number(string id) => values.TryGetValue(id, out var rule) && double.TryParse(rule.Value, System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : throw new InvalidDataException($"배틀규칙 시트의 필수 규칙 '{id}'이(가) 없습니다.");
+        public double BaseHp => Number("base_max_hp"); public double BaseAttack => Number("base_attack"); public double BaseDefense => Number("base_defense");
+        public double PowerExponent => Number("power_scale_exponent"); public double PowerMin => Number("power_scale_min"); public double PowerMax => Number("power_scale_max");
+        public double DefenseCoefficient => Number("defense_coefficient"); public double DamageVarianceMin => Number("damage_variance_min"); public double DamageVarianceMax => Number("damage_variance_max");
+        public double CriticalChance => Number("base_critical_chance"); public double CriticalMultiplier => Number("critical_damage_multiplier");
+        public int MaxActions => checked((int)Number("max_major_actions")); public double DrawThreshold => Number("draw_hp_ratio_threshold");
+        public double NormalAttackMultiplier => Number("normal_attack_multiplier"); public double SkillDamageMinMultiplier => Number("skill_damage_min_multiplier"); public double SkillDamageMaxMultiplier => Number("skill_damage_max_multiplier"); public double UltimateDamageMultiplier => Number("ultimate_damage_multiplier");
+        public int MinimumSkillCooldown => checked((int)Number("minimum_skill_cooldown")); public double SkillHealRatio => Number("skill_heal_ratio"); public int MaxSurpriseEvents => checked((int)Number("max_surprise_events_per_actor")); public int SurpriseCooldown => checked((int)Number("surprise_event_global_cooldown"));
+        public double LifeSurpriseHpRatioThreshold => Number("life_surprise_hp_ratio_threshold"); public double LifeSurpriseHealRatio => Number("life_surprise_heal_ratio"); public double CharmSurpriseDamageMultiplier => Number("charm_surprise_damage_multiplier");
+        public double AdditionalHitChance => Number("additional_hit_chance"); public double AdditionalHitDamageRatio => Number("additional_hit_damage_ratio");
+        public double LifeSurpriseChance(int lifePower) => SurpriseChance("life_surprise", lifePower);
+        public double CharmSurpriseChance(int charmPower) => SurpriseChance("charm_surprise", charmPower);
+        private double SurpriseChance(string prefix, int value) => Math.Min(Number(prefix + "_max_chance"), Number(prefix + "_base_chance") + Math.Min(2d, Math.Max(0, value) / Number(prefix + "_stat_reference")) * Number(prefix + "_stat_coefficient"));
+    }
+}
