@@ -239,6 +239,12 @@ try
     Check(migrated is { Enabled: true, ChannelId: 456, HoursBefore: 12 } && !File.Exists(Path.Combine(legacyDir, "123.json")), "기존 이벤트 알림 JSON을 SQLite로 이전 후 삭제");
     await settingsStore.SaveAsync(789, new EventExpireAlertSetting { Enabled = false, ChannelId = 987, HoursBefore = 24 });
     Check((await settingsStore.GetAllGuildIdsAsync()).SequenceEqual(new ulong[] { 123, 789 }) && (await settingsStore.LoadAsync(789))?.ChannelId == 987, "SQLite 이벤트 알림 설정 저장·조회");
+    var characterStore = new RegisteredCharacterStore(databasePath: Path.Combine(storageDir, "database", "molly.sqlite"));
+    await characterStore.InitializeAsync();
+    await characterStore.SaveAsync(new RegisteredCharacter(100, MobiServer.몰리, "첫캐릭터", DateTimeOffset.UnixEpoch));
+    await characterStore.SaveAsync(new RegisteredCharacter(100, MobiServer.칼릭스, "바꾼캐릭터", DateTimeOffset.UnixEpoch.AddDays(1)));
+    var registeredCharacter = await characterStore.LoadAsync(100);
+    Check(registeredCharacter is { Server: MobiServer.칼릭스, CharacterName: "바꾼캐릭터" }, "캐릭터 등록은 길드와 무관하게 Discord 사용자별로 저장·갱신");
     await File.WriteAllTextAsync(Path.Combine(legacyDir, "999.json"), "{broken");
     await settingsStore.InitializeAsync();
     Check(File.Exists(Path.Combine(legacyDir, "999.json")), "손상된 기존 JSON은 삭제하지 않고 다음 이전을 위해 유지");

@@ -23,6 +23,7 @@ class Program
     public NunchiGameService NunchiGames { get; } = new();
     public LiarGameService LiarGames { get; } = new();
     public LotteryService Lotteries { get; } = new();
+    public RegisteredCharacterStore RegisteredCharacters { get; private set; } = null!;
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -129,6 +130,8 @@ class Program
 
         MollyDataPaths.Configure(m_Config);
         await MobiEventExpireAlert.InitializeStorageAsync(appCts.Token);
+        RegisteredCharacters = new RegisteredCharacterStore();
+        await RegisteredCharacters.InitializeAsync(appCts.Token);
 
         using var runeHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;
