@@ -4,6 +4,7 @@ using Molly.Quiz;
 using Molly.Nunchi;
 using Molly.Messages;
 using Molly.LiarGame;
+using Molly.Lottery;
 
 const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
 const string valid = header + "2,전설,무기,전사,테스트,효과";
@@ -40,6 +41,23 @@ Check(cancelNunchi.TryStart(77, 88, [1, 2], TimeSpan.FromMinutes(1), _ => Task.C
       !cancelNunchi.TryStart(77, 99, [1, 2], TimeSpan.FromMinutes(1), _ => Task.CompletedTask), "눈치게임은 길드당 하나만 시작");
 cancelNunchi.CancelChannel(88);
 Check(cancelNunchi.TryStart(77, 99, [1, 2], TimeSpan.FromMinutes(1), _ => Task.CompletedTask), "눈치게임 채널 삭제 시 진행 상태 정리");
+var lotteryRound = new LotteryRound([1, 2, 3], 2, new Random(1));
+var lotteryFirst = lotteryRound.Draw(1);
+Check((lotteryFirst is LotteryDrawResult.Winner or LotteryDrawResult.NotWinner) && lotteryRound.Draw(1) == LotteryDrawResult.AlreadyDrawn &&
+      lotteryRound.Draw(4) == LotteryDrawResult.NotParticipant && lotteryRound.RevealRemaining().Count == 2 && lotteryRound.AllRevealed,
+    "당첨뽑기는 참가자별 한 번만 결과를 공개하고 미참가자를 거부");
+var concurrentLottery = new LotteryRound([1, 2], 1, new Random(2));
+var acceptedDraws = 0;
+Parallel.For(0, 50, _ =>
+{
+    if (concurrentLottery.Draw(1) is LotteryDrawResult.Winner or LotteryDrawResult.NotWinner) Interlocked.Increment(ref acceptedDraws);
+});
+Check(acceptedDraws == 1, "당첨뽑기 동시 버튼 입력은 한 번만 결과를 공개");
+var lotteryService = new LotteryService();
+var lotteryAnnouncements = 0;
+Check(lotteryService.TryStart(88, 100, [1, 2], 1, TimeSpan.FromMinutes(1), _ => { Interlocked.Increment(ref lotteryAnnouncements); return Task.CompletedTask; }) &&
+      !lotteryService.TryStart(88, 101, [3], 1, TimeSpan.FromMinutes(1), _ => Task.CompletedTask), "당첨뽑기는 길드당 하나만 시작");
+Check(await lotteryService.EndAsync(88, "테스트 종료") && lotteryAnnouncements == 1 && !await lotteryService.EndAsync(88, "중복 종료"), "당첨뽑기 종료는 남은 결과를 한 번만 공개");
 var liarVotes = new LiarGameRound([1, 2, 3]);
 Check(liarVotes.VoteAnswer(1, true) && liarVotes.VoteAnswer(2, false) && !liarVotes.VoteAnswer(1, false) &&
       liarVotes.MissingAnswers.SequenceEqual(new ulong[] { 3 }), "라이어게임 O/X 투표는 참가자 한 명당 한 번과 미투표자를 처리");
