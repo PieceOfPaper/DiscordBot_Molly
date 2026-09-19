@@ -34,6 +34,14 @@ EOF
 systemctl daemon-reload
 
 tar -xzf "$archive_path" -C "$staging_path"
+
+sqlite_library="$(ldconfig -p | awk '/libsqlite3\.so\.0/{print $NF; exit}')"
+if [[ -z "$sqlite_library" || ! -f "$sqlite_library" ]]; then
+  echo "시스템 SQLite 라이브러리(libsqlite3.so.0)를 찾을 수 없습니다." >&2
+  exit 1
+fi
+ln -sfn "$sqlite_library" "$staging_path/libsqlite3.so"
+
 test -x "$staging_path/DiscordBot_Molly" || chmod +x "$staging_path/DiscordBot_Molly"
 test -s "$staging_path/.playwright/package/cli.js"
 chmod +x "$staging_path/.playwright/node/linux-x64/node"
