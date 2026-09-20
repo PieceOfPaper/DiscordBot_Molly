@@ -68,7 +68,6 @@ public static class MobiRankBrowser
     {
         Locale = "ko-KR",
         TimezoneId = "Asia/Seoul",
-        ServiceWorkers = ServiceWorkerPolicy.Block,
         BypassCSP = true,
         ViewportSize = new() { Width = 800, Height = 600 }, // 불필요하게 큰 해상도 지양
         DeviceScaleFactor = 1,
