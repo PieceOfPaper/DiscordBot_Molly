@@ -37,6 +37,15 @@ void Check(bool value, string name)
     Console.WriteLine("PASS " + name);
 }
 Check((int)MobiServer.몰리 == 8, "몰리 서버 ID는 공식 랭킹 선택값 8");
+var rankBrowserReservation = new MobiRankBrowser.BrowserContainer();
+var reservedRankBrowsers = 0;
+Parallel.For(0, 50, rankingIndex =>
+{
+    if (rankBrowserReservation.TryReserve((rankingIndex % 4) + 1))
+        Interlocked.Increment(ref reservedRankBrowsers);
+});
+Check(reservedRankBrowsers == 1 && rankBrowserReservation.isRunning,
+    "랭킹 브라우저 컨테이너는 동시 요청에서 한 번만 예약");
 Check(NunchiTargetParser.ParseMentions("<@12345678901234567> <@!23456789012345678> <@12345678901234567>").SequenceEqual(new ulong[] { 12345678901234567, 23456789012345678 }), "눈치게임 대상자 멘션을 중복 없이 읽기");
 var nunchi = new NunchiRound([1, 2, 3, 4, 5]);
 Check(nunchi.Submit(1, "1", DateTimeOffset.UnixEpoch) is null && nunchi.Submit(2, "2", DateTimeOffset.UnixEpoch.AddSeconds(1)) is null &&

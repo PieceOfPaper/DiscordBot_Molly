@@ -93,12 +93,25 @@ public static class MobiRankBrowser
         private IBrowser m_Browser = null!;
         private IBrowserContext m_BrowserContext = null!;
 
-        private bool m_IsRunning = false;
-        public bool isRunning => m_IsRunning;
+        // 풀을 얻는 시점과 실제 작업 시작 사이에 같은 컨테이너가 두 번 선택되지 않도록
+        // 원자적으로 예약합니다. 예약 해제는 Run의 finally에서만 수행합니다.
+        private int m_IsRunning;
+        public bool isRunning => Volatile.Read(ref m_IsRunning) != 0;
+
+        public bool TryReserve(int requestedRankingIndex)
+        {
+            if (Interlocked.CompareExchange(ref m_IsRunning, 1, 0) != 0)
+                return false;
+
+            rankingIndex = requestedRankingIndex;
+            return true;
+        }
+
+        private void ReleaseReservation() => Volatile.Write(ref m_IsRunning, 0);
 
         private async Task Init(CancellationToken ct = default, Action<string>? log = null)
         {
-            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {rankingIndex}_{index}: {msg}");
+            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {index}: {msg}");
 
             m_Pw = await Playwright.CreateAsync();
             Log("init pw");
@@ -129,38 +142,27 @@ public static class MobiRankBrowser
             CancellationToken ct = default,
             Action<string>? log = null)
         {
-            m_IsRunning = true;
-
-            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {rankingIndex}_{index}: {msg}");
-
-            //Init!
-            if (m_IsInited == false) await Init(ct, log);
-
-            var keyword = "전투력";
-            switch (rankingIndex)
-            {
-                case 1:
-                    keyword = "전투력";
-                    break;
-                case 2:
-                    keyword = "매력";
-                    break;
-                case 3:
-                    keyword = "생활력";
-                    break;
-                case 4:
-                    keyword = "점수";
-                    break;
-            }
-
-            if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
-            if (nickname.Length > 12) nickname = nickname[..12]; // maxlength=12
-
-            Log($"start search(nickname='{nickname}', server={server}, class='{className ?? "전체 클래스"}')");
+            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {index}: {msg}");
 
             IPage? page = null;
             try
             {
+                // Init 실패도 finally에서 예약을 해제해야 다음 요청이 복구할 수 있습니다.
+                if (!m_IsInited) await Init(ct, log);
+
+                var keyword = rankingIndex switch
+                {
+                    2 => "매력",
+                    3 => "생활력",
+                    4 => "점수",
+                    _ => "전투력",
+                };
+
+                if (string.IsNullOrWhiteSpace(nickname)) throw new ArgumentException("nickname is required");
+                if (nickname.Length > 12) nickname = nickname[..12]; // maxlength=12
+
+                Log($"start search(nickname='{nickname}', server={server}, class='{className ?? "전체 클래스"}')");
+
                 page = await m_BrowserContext.NewPageAsync();
                 Log("NewPageAsync success");
                 await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
@@ -216,8 +218,6 @@ public static class MobiRankBrowser
                 // 4) 필요한 값이 모두 채워진 첫 결과를 즉시 반환
                 var result = await WaitForCompleteRankResultAsync(
                     page, rankingIndex, nickname, server, className, keyword, SEARCH_RESULT_TIMEOUT, ct, Log);
-                await page.CloseAsync();
-                m_IsRunning = false;
                 return result;
             }
             catch (Exception ex)
@@ -228,7 +228,7 @@ public static class MobiRankBrowser
             }
             finally
             {
-                m_IsRunning = false;
+                ReleaseReservation();
 
                 if (page is not null && !page.IsClosed)
                 {
@@ -279,23 +279,27 @@ public static class MobiRankBrowser
         }
     }
 
-    private const int BROWSER_COUNT = 1;
-    private static Dictionary<int, List<BrowserContainer>> m_BrowserQueues = new();
-    private static object m_BrowserLock = new();
+    // Lightsail에서 headed Chromium 두 개는 동시에 처리할 수 있으면서도 메모리·CPU
+    // 부담을 보수적으로 제한하는 값입니다. 랭킹 종류와 무관하게 전역으로 적용합니다.
+    private const int BROWSER_COUNT = 2;
+    private const int MAX_BROWSERS_PER_GUILD = 2;
+    private static readonly List<BrowserContainer> m_BrowserPool = new();
+    private static readonly Dictionary<ulong, int> m_GuildReservations = new();
+    private static readonly object m_BrowserLock = new();
 
-    public static bool IsFullRunning(int rankingIndex)
+    public static bool IsFullRunning(ulong guildId)
     {
         lock (m_BrowserLock)
         {
-            if (m_BrowserQueues.ContainsKey(rankingIndex) == false)
-                return false;
+            if (m_GuildReservations.GetValueOrDefault(guildId) >= MAX_BROWSERS_PER_GUILD)
+                return true;
 
-            if (m_BrowserQueues[rankingIndex].Count < BROWSER_COUNT)
+            if (m_BrowserPool.Count < BROWSER_COUNT)
                 return false;
 
             for (var i = 0; i < BROWSER_COUNT; i ++)
             {
-                if (m_BrowserQueues[rankingIndex][i].isRunning == false)
+                if (!m_BrowserPool[i].isRunning)
                     return false;
             }
         }
@@ -309,29 +313,48 @@ public static class MobiRankBrowser
         MobiServer server,
         string? className = null,
         CancellationToken ct = default,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        ulong guildId = 0)
     {
         BrowserContainer? browserContainer = null;
         lock (m_BrowserLock)
         {
-            if (m_BrowserQueues.ContainsKey(rankingIndex) == false)
-                m_BrowserQueues.Add(rankingIndex, new());
+            if (m_GuildReservations.GetValueOrDefault(guildId) >= MAX_BROWSERS_PER_GUILD)
+                return null;
 
-            var list = m_BrowserQueues[rankingIndex];
             for (var i = 0; i < BROWSER_COUNT; i ++)
             {
-                if (i >= list.Count)
-                    list.Add(new() { rankingIndex = rankingIndex, index = i });
+                if (i >= m_BrowserPool.Count)
+                    m_BrowserPool.Add(new() { index = i });
 
-                if (list[i].isRunning) continue;
+                if (!m_BrowserPool[i].TryReserve(rankingIndex))
+                    continue;
 
-                browserContainer = list[i];
+                browserContainer = m_BrowserPool[i];
+                m_GuildReservations[guildId] = m_GuildReservations.GetValueOrDefault(guildId) + 1;
                 break;
             }
         }
 
         if (browserContainer != null)
-            return await browserContainer.Run(nickname, server, className, ct, log);
+        {
+            try
+            {
+                return await browserContainer.Run(nickname, server, className, ct, log);
+            }
+            finally
+            {
+                lock (m_BrowserLock)
+                {
+                    var remaining = m_GuildReservations.GetValueOrDefault(guildId) - 1;
+                    if (remaining <= 0)
+                        m_GuildReservations.Remove(guildId);
+                    else
+                        m_GuildReservations[guildId] = remaining;
+                }
+            }
+        }
+
         return null;
     }
 

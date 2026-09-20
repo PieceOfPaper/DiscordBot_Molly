@@ -25,7 +25,8 @@ public sealed class CharacterRegistrationCommand : InteractionModuleBase<SocketI
             return;
         }
 
-        if (MobiRankBrowser.IsFullRunning(4))
+        var guildId = Context.Guild?.Id ?? 0;
+        if (MobiRankBrowser.IsFullRunning(guildId))
         {
             await RespondAsync("종합 랭킹 검색이 진행 중이에요. 잠시 후 다시 시도해주세요.", ephemeral: true);
             return;
@@ -37,7 +38,7 @@ public sealed class CharacterRegistrationCommand : InteractionModuleBase<SocketI
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(RankingTimeoutMilliseconds));
         try
         {
-            var rank = await MobiRankBrowser.GetRankBySearchAsync(4, normalizedName, server, null, cts.Token);
+            var rank = await MobiRankBrowser.GetRankBySearchAsync(4, normalizedName, server, null, cts.Token, guildId: guildId);
             if (rank is null)
             {
                 await ModifyOriginalResponseAsync(message => message.Content =

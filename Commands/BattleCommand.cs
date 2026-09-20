@@ -26,8 +26,8 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         string? bLabel = null;
         try
         {
-            var a = await ResolveAsync(Context.User.Id, session.CancellationToken);
-            var b = await ResolveAsync(opponent.Id, session.CancellationToken);
+            var a = await ResolveAsync(Context.User.Id, Context.Guild.Id, session.CancellationToken);
+            var b = await ResolveAsync(opponent.Id, Context.Guild.Id, session.CancellationToken);
             session.CancellationToken.ThrowIfCancellationRequested();
             aLabel = CombatantName(Context.User, a);
             bLabel = CombatantName(opponent, b);
@@ -70,7 +70,7 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         await RespondAsync("🛑 배틀 강제 종료를 요청했어요. 전투 스레드에 종료 안내를 남긴 뒤 " + ThreadCloseDelaySeconds + "초 후 잠금·보관합니다.", ephemeral: true);
     }
 
-    private static async Task<CharacterBattleSnapshot> ResolveAsync(ulong userId, CancellationToken cancellationToken)
+    private static async Task<CharacterBattleSnapshot> ResolveAsync(ulong userId, ulong guildId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var saved = await Program.instance.RegisteredCharacters.LoadAsync(userId) ?? throw new InvalidDataException("두 참가자 모두 먼저 /캐릭터등록을 해야 해요.");
@@ -78,7 +78,7 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
             return new CharacterBattleSnapshot(userId, saved.CharacterName, saved.ClassId, saved.CombatPower.Value, saved.LifePower.Value, saved.CharmPower.Value);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(60));
-        var rank = await MobiRankBrowser.GetRankBySearchAsync(4, saved.CharacterName, saved.Server, null, cts.Token) ?? throw new InvalidDataException(saved.CharacterName + " 캐릭터를 현재 종합 랭킹에서 찾지 못했어요. /캐릭터등록으로 확인해주세요.");
+        var rank = await MobiRankBrowser.GetRankBySearchAsync(4, saved.CharacterName, saved.Server, null, cts.Token, guildId: guildId) ?? throw new InvalidDataException(saved.CharacterName + " 캐릭터를 현재 종합 랭킹에서 찾지 못했어요. /캐릭터등록으로 확인해주세요.");
         var classId = Program.instance.Battles.Current.Classes.Values.SingleOrDefault(x => x.Name == rank.ClassName)?.Id ?? throw new InvalidDataException(rank.ClassName + " 클래스의 배틀 데이터가 없습니다.");
         if (rank.Combat is null || rank.Life is null || rank.Charm is null) throw new InvalidDataException("랭킹에서 배틀에 필요한 능력치를 읽지 못했어요. 잠시 후 다시 시도해주세요.");
         var updated = saved with { ClassId = classId, CombatPower = rank.Combat, LifePower = rank.Life, CharmPower = rank.Charm, LastSyncedAtUtc = DateTimeOffset.UtcNow };

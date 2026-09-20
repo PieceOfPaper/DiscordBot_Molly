@@ -41,7 +41,8 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
-        if (MobiRankBrowser.IsFullRunning(rankingIndex))
+        var guildId = Context.Guild?.Id ?? 0;
+        if (MobiRankBrowser.IsFullRunning(guildId))
         {
             await DeferAsync(ephemeral: true);
             await ModifyOriginalResponseAsync(m => m.Content = "잠시 후에 다시 시도해주세요.");
@@ -85,7 +86,7 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(RANKING_TIMEOUT_MS));
         try
         {
-            var result = await MobiRankBrowser.GetRankBySearchAsync(rankingIndex, nickname, server, className, cts.Token);
+            var result = await MobiRankBrowser.GetRankBySearchAsync(rankingIndex, nickname, server, className, cts.Token, guildId: guildId);
             if (result == null)
             {
                 await ModifyOriginalResponseAsync(m => m.Content =
