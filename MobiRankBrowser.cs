@@ -51,7 +51,7 @@ public static class MobiRankBrowser
 
     private static readonly BrowserTypeLaunchOptions s_BrowserTypeLaunchOpt = new()
     {
-        Headless = true,
+        Headless = false,
         Args = new[]
         {
             "--no-sandbox", // ★ 핵심: systemd 하드닝과 충돌 회피
