@@ -95,6 +95,7 @@ public static class MobiRankBrowser
         private IPlaywright m_Pw = null!;
         private IBrowser m_Browser = null!;
         private IBrowserContext m_BrowserContext = null!;
+        private IPage? m_RankingPage;
 
         // 풀을 얻는 시점과 실제 작업 시작 사이에 같은 컨테이너가 두 번 선택되지 않도록
         // 원자적으로 예약합니다. 예약 해제는 Run의 finally에서만 수행합니다.
@@ -111,6 +112,21 @@ public static class MobiRankBrowser
         }
 
         private void ReleaseReservation() => Volatile.Write(ref m_IsRunning, 0);
+
+        private async Task<IPage> GetRankingPageAsync(Action<string> log)
+        {
+            if (m_RankingPage is { IsClosed: false })
+            {
+                log("기존 랭킹 탭 재사용");
+                return m_RankingPage;
+            }
+
+            m_RankingPage = await m_BrowserContext.NewPageAsync();
+            await m_RankingPage.RouteAsync(
+                "**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
+            log("새 랭킹 탭 생성");
+            return m_RankingPage;
+        }
 
         private async Task Init(CancellationToken ct = default, Action<string>? log = null)
         {
@@ -166,10 +182,7 @@ public static class MobiRankBrowser
 
                 Log($"start search(nickname='{nickname}', server={server}, class='{className ?? "전체 클래스"}')");
 
-                page = await m_BrowserContext.NewPageAsync();
-                Log("NewPageAsync success");
-                await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
-                Log("page.RouteAsync success");
+                page = await GetRankingPageAsync(Log);
                 var rankingUrl = $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}";
                 var navigationResponse = await page.GotoAsync(rankingUrl, s_PageGotoOpt);
                 Log($"랭킹 페이지 초기 응답 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
@@ -227,23 +240,13 @@ public static class MobiRankBrowser
             {
                 Log($"랭킹 페이지 처리 중 예외: {ex.GetType().Name}: {ex.Message}");
                 await LogPageOnExceptionAsync(page, Log);
+                if (page?.IsClosed == true)
+                    m_RankingPage = null;
                 throw;
             }
             finally
             {
                 ReleaseReservation();
-
-                if (page is not null && !page.IsClosed)
-                {
-                    try
-                    {
-                        await page.CloseAsync();
-                    }
-                    catch (Exception closeException)
-                    {
-                        Log($"랭킹 페이지 닫기 실패: {closeException.GetType().Name}: {closeException.Message}");
-                    }
-                }
             }
         }
 
