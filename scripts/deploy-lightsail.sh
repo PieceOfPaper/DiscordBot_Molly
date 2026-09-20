@@ -11,7 +11,9 @@ browser_path="$install_root/playwright"
 data_path="$install_root/data"
 service_name="molly"
 service_override_dir="/etc/systemd/system/$service_name.service.d"
-service_override_path="$service_override_dir/data-directory.conf"
+service_override_path="$service_override_dir/runtime.conf"
+xvfb_service_name="molly-xvfb"
+xvfb_service_path="/etc/systemd/system/$xvfb_service_name.service"
 
 if [[ ! "$release_id" =~ ^[0-9a-f]{7,40}$ ]]; then
   echo "잘못된 배포 식별자: $release_id" >&2
@@ -26,12 +28,38 @@ rm -rf "$staging_path"
 mkdir -p "$staging_path" "$browser_path" "$data_path"
 chown -R molly:molly "$browser_path" "$data_path"
 
+if ! command -v Xvfb >/dev/null 2>&1; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb xauth
+fi
+
+cat > "$xvfb_service_path" <<'EOF'
+[Unit]
+Description=Molly 가상 디스플레이
+Before=molly.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x720x24 -nolisten tcp -ac
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 mkdir -p "$service_override_dir"
 cat > "$service_override_path" <<EOF
+[Unit]
+Requires=$xvfb_service_name.service
+After=$xvfb_service_name.service
+
 [Service]
 Environment=MOLLY_DATA_DIR=$data_path
+Environment=DISPLAY=:99
 EOF
 systemctl daemon-reload
+systemctl enable --now "$xvfb_service_name"
 
 tar -xzf "$archive_path" -C "$staging_path"
 
