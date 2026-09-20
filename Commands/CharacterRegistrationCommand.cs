@@ -5,7 +5,7 @@ namespace DiscordBot_Molly.Commands;
 
 public sealed class CharacterRegistrationCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    private const int RankingTimeoutMilliseconds = 120_000;
+    private const int RankingTimeoutMilliseconds = 180_000;
 
     [SlashCommand("캐릭터등록", "종합 랭킹에 있는 내 캐릭터를 등록합니다.")]
     public async Task RegisterAsync(
