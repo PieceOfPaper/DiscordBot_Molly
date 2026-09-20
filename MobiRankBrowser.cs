@@ -547,9 +547,11 @@ public static class MobiRankBrowser
                 const scoreDl = Array.from(item.querySelectorAll(""dl""))
                     .find(dl => normalize(dl.querySelector(""dt"")?.textContent)
                         .startsWith(""종합 점수""));
+                // 1,000위 이상은 ""3,453위""처럼 쉼표가 붙으므로 숫자만 매치하면 안 됩니다.
+                // 이 패턴은 tests/Molly.DataTests/Program.cs의 overallRankPattern과 맞춰야 합니다.
                 const rank = Array.from(item.querySelectorAll(""dt""))
                     .map(node => normalize(node.textContent))
-                    .find(text => /^\d+위$/.test(text)) || """";
+                    .find(text => /^[\d,]+위$/.test(text)) || """";
 
                 return JSON.stringify({
                     Rank: rank,

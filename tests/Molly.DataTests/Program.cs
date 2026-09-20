@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using Molly.Runes;
 using Molly.Quiz;
 using Molly.Nunchi;
@@ -37,6 +38,16 @@ void Check(bool value, string name)
     Console.WriteLine("PASS " + name);
 }
 Check((int)MobiServer.몰리 == 8, "몰리 서버 ID는 공식 랭킹 선택값 8");
+// MobiRankBrowser.cs의 ExtractOverallRankFieldsAsync 안 JS 정규식과 동일한 패턴입니다.
+// 브라우저 DOM을 거치는 실제 파싱은 오프라인 테스트로 실행할 수 없어, 정규식만 별도로 고정합니다.
+// 이 패턴을 바꾸면 JS 쪽도 함께 바꿔야 합니다.
+const string overallRankPattern = @"^[\d,]+위$";
+Check(Regex.IsMatch("3,453위", overallRankPattern),
+    "종합랭킹 순위 정규식은 1,000위 이상 쉼표 포함 순위를 인식");
+Check(Regex.IsMatch("845위", overallRankPattern),
+    "종합랭킹 순위 정규식은 쉼표 없는 순위도 인식");
+Check(!Regex.IsMatch("3,453위입니다", overallRankPattern),
+    "종합랭킹 순위 정규식은 순위 뒤에 다른 문자가 붙으면 거부");
 var rankBrowserReservation = new MobiRankBrowser.BrowserContainer();
 var reservedRankBrowsers = 0;
 Parallel.For(0, 50, rankingIndex =>
