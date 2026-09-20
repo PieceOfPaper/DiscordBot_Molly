@@ -674,7 +674,9 @@ public static class MobiRankBrowser
 
                 if (submitted)
                 {
-                    log("캐릭터 검색 입력 및 실행 완료");
+                    var actualValue = await page.EvaluateAsync<string>(
+                        "() => document.querySelector(\"input[name='search']\")?.value || ''");
+                    log($"캐릭터 검색 입력 및 실행 완료 - 실제 입력값: '{actualValue}'");
                     return true;
                 }
             }
@@ -736,7 +738,78 @@ public static class MobiRankBrowser
         }
 
         log($"'{nickname}'의 완성된 랭킹 결과가 {timeoutMs}ms 안에 나타나지 않았습니다. 마지막 상태: {lastReason}");
+        await LogSearchTimeoutDiagnosticsAsync(page, nickname, log);
         return null;
+    }
+
+    private static async Task LogSearchTimeoutDiagnosticsAsync(
+        IPage page,
+        string nickname,
+        Action<string> log)
+    {
+        try
+        {
+            var diagnostics = await page.EvaluateAsync<string>(
+                @"nickname => {
+                    const normalize = value => (value || """")
+                        .replace(/[\u200B-\u200D\uFEFF]/g, """")
+                        .replace(/\s+/g, "" "")
+                        .trim();
+                    const bodyText = normalize(document.body?.innerText || """");
+                    const lowerBody = bodyText.toLocaleLowerCase();
+                    const lowerNickname = nickname.toLocaleLowerCase();
+                    const nicknameIndex = lowerBody.indexOf(lowerNickname);
+                    const snippetStart = nicknameIndex < 0 ? 0 : Math.max(0, nicknameIndex - 120);
+                    const snippet = nicknameIndex < 0
+                        ? ""찾지 못함""
+                        : bodyText.substring(snippetStart, nicknameIndex + nickname.length + 240);
+
+                    const input = document.querySelector(""input[name='search']"");
+                    const selected = Array.from(document.querySelectorAll(""div.select_box .selected""))
+                        .map(element => normalize(element.textContent));
+                    const items = Array.from(document.querySelectorAll(""li.item""));
+                    const characterNames = items
+                        .map(item => {
+                            const byAttribute = item.querySelector(""dd[data-charactername]"");
+                            if (byAttribute)
+                                return normalize(
+                                    byAttribute.getAttribute(""data-charactername"")
+                                    || byAttribute.textContent);
+
+                            const text = normalize(item.innerText || item.textContent);
+                            const match = text.match(/캐릭터명\s+([^\s]+)/);
+                            return match ? match[1] : """";
+                        })
+                        .filter(Boolean);
+
+                    const uniqueNames = Array.from(new Set(characterNames));
+                    const noResultText = [
+                        ""검색 결과가 없습니다"",
+                        ""검색 결과가 없어요"",
+                        ""조회 결과가 없습니다"",
+                        ""캐릭터를 찾을 수 없습니다""
+                    ].find(text => bodyText.includes(text)) || ""없음"";
+
+                    return [
+                        `검색 입력값: '${input?.value || """"}'`,
+                        `선택 상태: ${selected.join("" / "") || ""확인 불가""}`,
+                        `li.item 개수: ${items.length}`,
+                        `표시 캐릭터 수: ${uniqueNames.length}`,
+                        `표시 캐릭터 목록(최대 30명): ${uniqueNames.slice(0, 30).join("", "") || ""없음""}`,
+                        `페이지의 닉네임 정확 포함: ${bodyText.includes(nickname)}`,
+                        `페이지의 닉네임 대소문자 무시 포함: ${nicknameIndex >= 0}`,
+                        `검색 결과 없음 문구: ${noResultText}`,
+                        `닉네임 주변 텍스트: ${snippet}`
+                    ].join(""\n"");
+                }",
+                nickname);
+
+            log($"랭킹 검색 시간 초과 진단 시작\n{diagnostics}\n랭킹 검색 시간 초과 진단 끝");
+        }
+        catch (Exception ex)
+        {
+            log($"랭킹 검색 시간 초과 진단 실패: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     private static async Task<(MobiRankResult? Result, string Reason)> TryParseCompleteRankResultAsync(
