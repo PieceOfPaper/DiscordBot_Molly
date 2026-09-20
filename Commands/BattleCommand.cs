@@ -52,24 +52,32 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
     private static IEnumerable<string> Format(IEnumerable<BattleEvent> events)
     {
         var current = new List<string>();
-        var prefix = new List<string>();
+        var hasActionHeader = false;
+        var pendingCritical = false;
         foreach (var x in events)
         {
-            if (x.Type is "BattleStarted" or "TurnStarted" or "BattleEnded") continue;
-            if (x.Type == "SurpriseEventTriggered") { prefix.Add("✨ " + x.Actor + "의 **" + x.Detail + "**!"); continue; }
-            if (x.Type is "NormalAttackUsed" or "SkillUsed")
+            if (x.Type is "BattleStarted" or "BattleEnded") continue;
+            if (x.Type == "TurnStarted")
             {
-                if (current.Count > 0) { yield return string.Join(" ", current); current.Clear(); }
-                current.AddRange(prefix); prefix.Clear();
-                current.Add(x.Type == "NormalAttackUsed" ? x.Actor + "의 일반 공격!" : x.Actor + "이(가) **" + x.Detail + "**을(를) 사용합니다!");
+                if (current.Count > 0) { yield return string.Join("\n", current); current.Clear(); hasActionHeader = false; }
                 continue;
             }
+            if (x.Type == "SurpriseEventTriggered") { current.Add("✨ " + x.Actor + "의 **" + x.Detail + "**!"); continue; }
+            if (x.Type is "NormalAttackUsed" or "SkillUsed" or "DerivedSkillUsed")
+            {
+                var heading = x.Type == "NormalAttackUsed" ? x.Actor + "의 일반 공격!" : x.Actor + "이(가) **" + x.Detail + "**을(를) 사용합니다!";
+                current.Add(x.Type == "DerivedSkillUsed" || hasActionHeader ? "　↳ " + heading : heading);
+                hasActionHeader = true;
+                continue;
+            }
+            if (x.Type == "CriticalHit") { pendingCritical = true; continue; }
             var text = x.Type switch
             {
-                "CriticalHit" => "💥 **치명타!**", "DamageDealt" => x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
+                "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
             };
-            if (text is not null) (current.Count == 0 ? prefix : current).Add(text);
+            pendingCritical = false;
+            if (text is not null) current.Add("　↳ " + text);
         }
-        if (current.Count > 0) yield return string.Join(" ", current);
+        if (current.Count > 0) yield return string.Join("\n", current);
     }
 }

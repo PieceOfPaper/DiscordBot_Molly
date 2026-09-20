@@ -280,12 +280,26 @@ var impactRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
 impactRules["base_attack"] = new("base_attack", "전투능력치", "number", "20", "");
 impactRules["base_critical_chance"] = new("base_critical_chance", "치명타", "number", "1", "");
 impactRules["additional_hit_chance"] = new("additional_hit_chance", "추가타", "number", "1", "");
-var strikeEffect = new BattleEffect("strike_damage", 1, "피해", "상대", 2, 1, 0, null, 0, null, null, null, null, null, null, null, null);
+var strikeEffect = new BattleEffect("strike_damage", 1, "피해", "상대", 0, 2, 1, 0, null, 0, null, null, null, null, null, null, null, null);
 var strike = new BattleSkill("strike", "시험 일격", "일반", null, true, 2, 0, 1, 1, [strikeEffect]);
 var impactSnapshot = new BattleDataSnapshot { Rules = impactRules, Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["strike"]) }, Skills = new Dictionary<string, BattleSkill> { ["strike"] = strike }, LoadedAt = DateTimeOffset.UtcNow };
 var impactBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), impactSnapshot, new FixedBattleRandom(new[] { 0d, .9d, 0d, .5d, 0d, 0d }.Concat(Enumerable.Repeat(.5d, 100))));
 var firstTwoHits = impactBattle.Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Take(2).ToArray();
 Check(impactBattle.Events.Any(x => x.Type == "CriticalHit") && impactBattle.Events.Any(x => x.Type == "AdditionalHit") && firstTwoHits.Length == 2 && firstTwoHits.Sum(x => x.Amount ?? 0) < 80, "효과 행의 다단 피해를 타수만큼 분배하고 치명타·추가타를 처리");
+var parentSkill = new BattleSkill("parent", "부모 스킬", "일반", null, true, 1, 0, 1, 1, Array.Empty<BattleEffect>());
+var childSkill = new BattleSkill("child", "파생 스킬", "파생", "parent", true, 1, 0, 1, 1, [new BattleEffect("child_damage", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var derivationSnapshot = new BattleDataSnapshot
+{
+    Rules = impactRules,
+    Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["parent"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["parent"] = parentSkill, ["child"] = childSkill },
+    Derivations = [new BattleDerivation("parent_child", "parent", "child", "무작위", 1, 1, null, null, false, "즉시", 1)],
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var derivationBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), derivationSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 100)));
+var derivedHeaderIndex = derivationBattle.Events.ToList().FindIndex(x => x.Type == "SkillUsed" && x.Detail == "파생 스킬");
+var derivedCriticalIndex = derivationBattle.Events.ToList().FindIndex(x => x.Type == "CriticalHit");
+Check(derivedHeaderIndex >= 0 && derivedCriticalIndex > derivedHeaderIndex, "무작위 파생 스킬의 제목은 치명타·피해 효과보다 먼저 기록");
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)

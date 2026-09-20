@@ -9,6 +9,8 @@ public sealed class BattleDataSnapshot
     public IReadOnlyDictionary<string, BattleRule> Rules { get; init; } = new ReadOnlyDictionary<string, BattleRule>(new Dictionary<string, BattleRule>());
     public IReadOnlyDictionary<string, BattleClass> Classes { get; init; } = new ReadOnlyDictionary<string, BattleClass>(new Dictionary<string, BattleClass>());
     public IReadOnlyDictionary<string, BattleSkill> Skills { get; init; } = new ReadOnlyDictionary<string, BattleSkill>(new Dictionary<string, BattleSkill>());
+    public IReadOnlyDictionary<string, BattleResource> Resources { get; init; } = new ReadOnlyDictionary<string, BattleResource>(new Dictionary<string, BattleResource>());
+    public IReadOnlyList<BattleDerivation> Derivations { get; init; } = Array.Empty<BattleDerivation>();
     public DateTimeOffset LoadedAt { get; init; }
     public bool IsUsable => Rules.Count > 0 && Classes.Count > 0 && Skills.Count > 0;
 }
@@ -21,13 +23,17 @@ public sealed record BattleRule(string Id, string Category, string ValueType, st
 
 public sealed record BattleClass(string Id, string Name, IReadOnlyList<string> SkillIds, bool IsBattleReady = true);
 public sealed record BattleSkill(string Id, string Name, string Kind, string? ParentSkillId, bool Enabled,
-    int Cooldown, int InitialCooldown, int Priority, double Weight, IReadOnlyList<BattleEffect> Effects);
+    int Cooldown, int InitialCooldown, int Priority, double Weight, IReadOnlyList<BattleEffect> Effects,
+    string? ResourceId = null, string? ResourceCost = null, string? ResourceGain = null);
 public sealed record BattleEffect(
-    string Id, int Order, string Type, string Target, int Count, double Chance,
+    string Id, int Order, string Type, string Target, int FixedValue, int Count, double Chance,
     int Duration, string? StatusId, int MaxStacks, string? Message,
     string? ConditionTarget, string? ConditionType, string? ConditionId,
     string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
     string? NumericReferenceMode);
+public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
+public sealed record BattleDerivation(string Id, string ParentSkillId, string ChildSkillId, string ActivationMode,
+    double Weight, double Chance, string? ConditionType, string? ConditionValue, bool AllowDuplicate, string Timing, int Priority);
 
 public sealed record CharacterBattleSnapshot(ulong DiscordUserId, string CharacterName, string ClassId,
     int CombatPower, int LifePower, int CharmPower);

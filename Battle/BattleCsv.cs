@@ -40,11 +40,11 @@ internal static class BattleCsv
         if (missing.Length > 0) throw new InvalidDataException($"{sheet} 시트에 필수 헤더가 없습니다: {string.Join(", ", missing)}");
     }
 
-    public static bool Bool(string value, string sheet, int row, string field) => value switch
+    public static bool Bool(string value, string sheet, int row, string field) => value.Trim().ToUpperInvariant() switch
     {
-        "TRUE" or "true" or "True" => true,
-        "FALSE" or "false" or "False" => false,
-        _ => throw new InvalidDataException($"{sheet} 시트 {row}행의 {field} 값은 TRUE 또는 FALSE여야 합니다.")
+        "TRUE" or "1" or "예" => true,
+        "FALSE" or "0" or "아니오" => false,
+        _ => throw new InvalidDataException($"{sheet} 시트 {row}행의 {field} 값 '{value}'은 TRUE 또는 FALSE여야 합니다.")
     };
 
     public static int Int(string value, string sheet, int row, string field, int minimum = 0)

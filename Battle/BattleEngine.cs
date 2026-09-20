@@ -31,10 +31,22 @@ public sealed class BattleEngine
             }
             else
             {
-                actor.Cooldowns[skill.Id] = Math.Max(skill.Cooldown, rules.MinimumSkillCooldown);
+                var selectedId = skill.Id;
+                skill = ResolveReuse(actor, skill, data) ?? skill;
+                actor.Cooldowns[selectedId] = Math.Max(skill.Cooldown, rules.MinimumSkillCooldown);
                 actor.LastSkillId = skill.Id;
-                events.Add(new("SkillUsed", actor.Name, target.Name, Detail: skill.Name));
+                var derivedSkills = SelectImmediateDerivations(actor, skill, data, random).ToArray();
+                var hideParent = skill.Effects.Count == 0 && derivedSkills.Length == 1 && data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.ChildSkillId == derivedSkills[0].Id && x.ActivationMode == "무작위");
+                if (!hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: skill.Name));
+                if (hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: derivedSkills[0].Name));
                 var resolved = ExecuteEffects(actor, target, skill, surpriseMultiplier, random, rules, events);
+                foreach (var derived in derivedSkills)
+                {
+                    if (!hideParent) events.Add(new("DerivedSkillUsed", actor.Name, target.Name, Detail: derived.Name));
+                    var child = ExecuteEffects(actor, target, derived, surpriseMultiplier, random, rules, events);
+                    resolved.TargetDamaged |= child.TargetDamaged;
+                    resolved.ActorHealed |= child.ActorHealed;
+                }
                 targetDamaged = resolved.TargetDamaged;
                 actorHealed = resolved.ActorHealed;
             }
@@ -89,6 +101,28 @@ public sealed class BattleEngine
         return choices[^1];
     }
 
+    private static BattleSkill? ResolveReuse(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
+        => data.Derivations.Where(x => x.ParentSkillId == skill.Id && x.Timing == "재사용 시" && IsDerivationEligible(actor, x))
+            .OrderByDescending(x => x.Priority).Select(x => data.Skills[x.ChildSkillId]).FirstOrDefault();
+
+    private static IEnumerable<BattleSkill> SelectImmediateDerivations(Fighter actor, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random)
+    {
+        var candidates = data.Derivations.Where(x => x.ParentSkillId == skill.Id && x.Timing == "즉시" && IsDerivationEligible(actor, x)).GroupBy(x => x.Priority).OrderByDescending(x => x.Key).FirstOrDefault();
+        if (candidates is null) return [];
+        var available = candidates.Where(x => x.ActivationMode != "확률" || random.NextDouble() < x.Chance).ToArray();
+        if (available.Length == 0) return [];
+        var point = random.NextDouble() * available.Sum(x => Math.Max(1, x.Weight));
+        foreach (var rule in available) { point -= Math.Max(1, rule.Weight); if (point <= 0) return [data.Skills[rule.ChildSkillId]]; }
+        return [data.Skills[available[^1].ChildSkillId]];
+    }
+
+    private static bool IsDerivationEligible(Fighter actor, BattleDerivation rule)
+    {
+        if (rule.ConditionType != "자원보유") return rule.ActivationMode is "무작위" or "확률";
+        var parts = rule.ConditionValue?.Split(['=', '>'], 2) ?? [];
+        return parts.Length == 2 && int.TryParse(parts[1], out var value) && actor.Resources.GetValueOrDefault(parts[0]) >= value;
+    }
+
     private static EffectResolution ExecuteEffects(Fighter actor, Fighter target, BattleSkill skill, double surpriseMultiplier, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         var resolution = new EffectResolution();
@@ -122,9 +156,22 @@ public sealed class BattleEngine
                         }
                     }
                     break;
+                case "자원설정":
+                    SetResource(actor, effect.StatusId, effect.FixedValue, events);
+                    break;
+                case "자원소모" when effect.StatusId is { } resourceId:
+                    SetResource(actor, resourceId, effect.NumericReferenceMode == "전부" ? 0 : actor.Resources.GetValueOrDefault(resourceId) - effect.FixedValue, events);
+                    break;
             }
         }
         return resolution;
+    }
+    private static void SetResource(Fighter fighter, string? id, int value, List<BattleEvent> events)
+    {
+        if (id is null || !fighter.ResourceDefinitions.TryGetValue(id, out var definition)) return;
+        var capped = definition.Maximum == 0 ? Math.Max(0, value) : Math.Clamp(value, 0, definition.Maximum);
+        fighter.Resources[id] = capped;
+        events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + capped));
     }
     private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
@@ -161,14 +208,16 @@ public sealed class BattleEngine
 
     private sealed class Fighter
     {
-        public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds;
+        public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds; public required IReadOnlyDictionary<string, BattleResource> ResourceDefinitions;
         public int SurpriseCount; public string? LastSkillId;
         public Dictionary<string, int> Cooldowns { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, int> Resources { get; } = new(StringComparer.Ordinal);
         public static Fighter Create(CharacterBattleSnapshot source, double scale, Rules rules, BattleDataSnapshot data)
         {
             var c = data.Classes[source.ClassId]; var max = Math.Max(1, (int)Math.Round(rules.BaseHp * scale));
-            var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds };
+            var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds, ResourceDefinitions = data.Resources };
             foreach (var id in c.SkillIds) if (data.Skills.TryGetValue(id, out var skill)) fighter.Cooldowns[id] = skill.InitialCooldown;
+            foreach (var resource in data.Resources.Values) fighter.Resources[resource.Id] = resource.InitialValue;
             return fighter;
         }
         public void TickCooldowns() { foreach (var id in Cooldowns.Keys.ToArray()) Cooldowns[id] = Math.Max(0, Cooldowns[id] - 1); }
