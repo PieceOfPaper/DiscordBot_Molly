@@ -251,23 +251,20 @@ public static class MobiRankBrowser
         {
             if (page is null)
             {
-                log("예외 발생 시 랭킹 페이지가 생성되지 않아 페이지 내용을 확인할 수 없습니다.");
+                log("예외 발생 시 랭킹 페이지가 생성되지 않아 URL과 제목을 확인할 수 없습니다.");
                 return;
             }
 
             try
             {
                 var title = await page.TitleAsync();
-                var pageText = await page.EvaluateAsync<string>(
-                    "() => document.documentElement.innerText || ''");
 
                 log($"예외 발생 페이지 URL: {page.Url}");
                 log($"예외 발생 페이지 제목: {title}");
-                log($"예외 발생 페이지 텍스트 시작\n{pageText}\n예외 발생 페이지 텍스트 끝");
             }
             catch (Exception logException)
             {
-                log($"예외 발생 페이지 내용 출력 실패: {logException.GetType().Name}: {logException.Message}");
+                log($"예외 발생 페이지 정보 출력 실패: {logException.GetType().Name}: {logException.Message}");
             }
         }
 
