@@ -213,7 +213,7 @@ public static class MobiRankBrowser
                 if (!searchSubmitted)
                     throw new TimeoutException("캐릭터 검색 입력 또는 실행 준비 시간이 초과되었습니다.");
 
-                // 4) 필요한 값이 모두 채워진 동일 결과를 두 번 연속 확인하면 반환
+                // 4) 필요한 값이 모두 채워진 첫 결과를 즉시 반환
                 var result = await WaitForCompleteRankResultAsync(
                     page, rankingIndex, nickname, server, className, keyword, SEARCH_RESULT_TIMEOUT, ct, Log);
                 await page.CloseAsync();
@@ -379,36 +379,29 @@ public static class MobiRankBrowser
 
     private static async Task<string> ExtractRecordBlockAsync(IPage page, string nickname, string keyword)
     {
-        // 닉네임/라벨(서버명/캐릭터명/클래스/전투력)을 모두 포함하는 후보를 좁혀감
-        var nicknameLoc = page.Locator($":text('{nickname}')");
+        // 검색 결과가 재렌더링되는 도중 Locator 개수와 실제 노드가 달라지는 경쟁 조건을 피하기 위해
+        // 한 번의 브라우저 DOM 평가 안에서 후보 탐색과 텍스트 추출을 끝냅니다.
+        return await page.EvaluateAsync<string>(
+            @"args => {
+                const normalize = value => (value || """").replace(/\s+/g, "" "").trim();
+                const expectedCharacter = `캐릭터명 ${args.nickname}`;
 
-        var candidates = page.Locator("li, div, article, section, tr")
-            .Filter(new() { Has = nicknameLoc }) // 닉네임 포함
-            .Filter(new() { HasTextString = "서버명" })
-            .Filter(new() { HasTextString = "캐릭터명" })
-            .Filter(new() { HasTextString = "클래스" })
-            .Filter(new() { HasTextString = keyword });
+                const candidates = Array.from(
+                    document.querySelectorAll(""li, div, article, section, tr""))
+                    .map(element => normalize(element.innerText || element.textContent))
+                    .filter(text =>
+                        text.includes(expectedCharacter)
+                        && text.includes(""서버명"")
+                        && text.includes(""클래스"")
+                        && text.includes(args.keyword));
 
-        var count = await candidates.CountAsync();
+                if (candidates.length === 0)
+                    return """";
 
-        if (count == 0)
-        {
-            return "";
-        }
-
-        // 여러 개면 텍스트 길이가 가장 짧은(=개별 항목일 확률이 높은) 것을 선택
-        string? best = null;
-        for (int i = 0; i < count; i ++)
-        {
-            var t = await candidates.Nth(i).InnerTextAsync() ?? "";
-            var norm = Regex.Replace(t, @"\s+", " ").Trim();
-
-            // 너무 큰 컨테이너는 배제되도록 길이 기준 사용
-            if (best == null || norm.Length < best.Length)
-                best = norm;
-        }
-
-        return best!;
+                candidates.sort((left, right) => left.length - right.length);
+                return candidates[0];
+            }",
+            new { nickname, keyword });
     }
 
     private static string SliceOneRecordFromPlain(string all, string nickname)
@@ -716,18 +709,26 @@ public static class MobiRankBrowser
             ct.ThrowIfCancellationRequested();
             pollCount++;
 
-            var parsed = await TryParseCompleteRankResultAsync(
-                page, rankingIndex, nickname, requestedServer, requestedClass, keyword);
-            if (parsed.Result is not null)
+            try
             {
-                log($"완성된 랭킹 결과 확인: {parsed.Result.Rank}위, {parsed.Result.ClassName}");
-                return parsed.Result;
-            }
+                var parsed = await TryParseCompleteRankResultAsync(
+                    page, rankingIndex, nickname, requestedServer, requestedClass, keyword);
+                if (parsed.Result is not null)
+                {
+                    log($"완성된 랭킹 결과 확인: {parsed.Result.Rank}위, {parsed.Result.ClassName}");
+                    return parsed.Result;
+                }
 
-            if (!string.Equals(lastReason, parsed.Reason, StringComparison.Ordinal)
-                || pollCount % 5 == 0)
+                if (!string.Equals(lastReason, parsed.Reason, StringComparison.Ordinal)
+                    || pollCount % 5 == 0)
+                {
+                    lastReason = parsed.Reason;
+                    log($"랭킹 결과 대기 중: {lastReason}");
+                }
+            }
+            catch (PlaywrightException ex) when (!ct.IsCancellationRequested)
             {
-                lastReason = parsed.Reason;
+                lastReason = $"결과 DOM 갱신 중: {ex.GetType().Name}";
                 log($"랭킹 결과 대기 중: {lastReason}");
             }
 
