@@ -76,6 +76,7 @@ public sealed class BattleEngine
                     resolved.ActorHealed |= child.ActorHealed;
                 }
                 GainSkillResource(actor, skill, data, events);
+                SpendDeferredSkillResource(actor, skill, data, events);
                 targetDamaged = resolved.TargetDamaged;
                 actorHealed = resolved.ActorHealed;
             }
@@ -121,7 +122,7 @@ public sealed class BattleEngine
     }
     private static BattleSkill? ChooseSkill(Fighter actor, BattleDataSnapshot data, IBattleRandom random)
     {
-        var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && (actor.Cooldowns.GetValueOrDefault(x.Id) == 0 || ResolveReuse(actor, x, data) is not null) && x.Weight > 0 && CanPaySkillResource(actor, x, data)).Cast<BattleSkill>().ToArray();
+        var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && (actor.Cooldowns.GetValueOrDefault(x.Id) == 0 || ResolveReuse(actor, x, data) is not null) && x.Weight > 0 && CanPaySkillResource(actor, x, data) && (x.Effects.Count > 0 || HasImmediateDerivation(actor, x, data))).Cast<BattleSkill>().ToArray();
         if (choices.Length == 0) return null;
         // 재사용 파생은 플레이어가 같은 버튼을 다시 누른 동작을 자동전투에서 표현하는 경로다.
         // 진행 중인 상태를 끝내는 재사용 후보가 있으면 일반 후보보다 먼저 선택한다.
@@ -136,6 +137,9 @@ public sealed class BattleEngine
 
     private static BattleSkill? ResolveReuse(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
         => SelectDerivation(actor, skill.Id, "재사용 시", data, null)?.Child;
+
+    private static bool HasImmediateDerivation(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
+        => data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.Timing == "즉시" && IsDerivationEligible(actor, x));
 
     private static IEnumerable<BattleSkill> SelectImmediateDerivations(Fighter actor, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random)
     {
@@ -204,7 +208,8 @@ public sealed class BattleEngine
                 case "피해":
                     // 다단 효과의 총 기본 위력은 유지하고 타격마다 나눕니다.
                     // 각 타격은 별도로 치명타·추가타를 판정하므로 연출과 변동성은 남습니다.
-                    var hitBaseDamage = actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier / effect.Count;
+                    var totalBaseDamage = effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier;
+                    var hitBaseDamage = totalBaseDamage / effect.Count;
                     for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
                     {
                         if (random.NextDouble() >= effect.Chance) continue;
@@ -253,6 +258,9 @@ public sealed class BattleEngine
                     if (random.NextDouble() < effect.Chance)
                         ApplyBreakDamage(actor, receiver, Math.Max(1, ResolveFixedAmount(actor, effect)), rules, events);
                     break;
+                case "쿨다운감소":
+                    receiver.ReduceCooldowns(Math.Max(1, ResolveFixedAmount(receiver, effect)), events);
+                    break;
                 default:
                     if (effect.StatusId is { } statusId && effect.Duration > 0)
                         receiver.ApplyStatus(statusId, effect.Duration, skill.Id, events);
@@ -264,6 +272,8 @@ public sealed class BattleEngine
 
     private static bool CanApplyEffect(Fighter actor, Fighter target, BattleEffect effect)
     {
+        // 1:1 자동전투에는 '주변 적'이 존재하지 않는다.
+        if (effect.Target == "주변적") return false;
         if (effect.ConditionType is null or "") return true;
         var conditionOwner = effect.ConditionTarget == "상대" ? target : actor;
         return effect.ConditionType switch
@@ -340,8 +350,14 @@ public sealed class BattleEngine
 
     private static void SpendSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
     {
-        if (ResolveSkillResource(skill, data) is not { } resource || !int.TryParse(skill.ResourceCost, out var cost) || cost == 0) return;
+        if (ResolveSkillResource(skill, data) is not { } resource || skill.ResourceCost == "전부" || !int.TryParse(skill.ResourceCost, out var cost) || cost == 0) return;
         SetResource(actor, resource.Id, actor.Resources.GetValueOrDefault(resource.Id) - cost, events);
+    }
+
+    private static void SpendDeferredSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
+    {
+        if (skill.ResourceCost != "전부" || ResolveSkillResource(skill, data) is not { } resource) return;
+        SetResource(actor, resource.Id, 0, events);
     }
 
     private static void GainSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
@@ -359,6 +375,13 @@ public sealed class BattleEngine
     }
     private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null)
     {
+        // 대상 해제는 다단의 매 타격이 아니라 다음 공격 효과 전체를 한 번 회피하는 판정이다.
+        if (target.HasStatusEffect("대상해제") && random.NextDouble() < rules.TargetReleaseEvasionChance)
+        {
+            events.Add(new("AttackEvaded", actor.Name, target.Name));
+            return false;
+        }
+        var damaged = false;
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
             var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill);
@@ -368,6 +391,7 @@ public sealed class BattleEngine
             var critical = random.NextDouble() < criticalChance;
             if (critical) { amount *= rules.CriticalMultiplier; events.Add(new("CriticalHit", actor.Name, target.Name)); }
             var damage = Math.Max(1, (int)Math.Round(amount)); target.Hp = Math.Max(0, target.Hp - damage);
+            damaged = true;
             events.Add(new("DamageDealt", actor.Name, target.Name, damage));
             if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
             if (target.Hp > 0 && random.NextDouble() < rules.AdditionalHitChance)
@@ -379,7 +403,7 @@ public sealed class BattleEngine
                 if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
             }
         }
-        return true;
+        return damaged;
     }
 
     private static string HpStatus(Fighter fighter) => ((double)fighter.Hp / fighter.MaxHp) switch
@@ -425,8 +449,19 @@ public sealed class BattleEngine
         {
             if (skill is null || !HasStatusEffect("악상피해증가")) return 0d;
             var hasMelody = Resources.Any(x => x.Value > 0 && ResourceDefinitions.TryGetValue(x.Key, out var resource) && resource.Kind == "악상");
-            var melodySkill = skill.Effects.Any(x => x.ConditionType == "자원보유" && x.ConditionId?.StartsWith("bard_", StringComparison.Ordinal) == true);
+            var melodySkill = skill.ParentSkillId == "bards_tale" || skill.Effects.Any(x => x.ConditionType == "자원보유" && x.ConditionId?.StartsWith("bard_", StringComparison.Ordinal) == true);
             return hasMelody && melodySkill ? StatusValue("악상피해증가") : 0d;
+        }
+        public void ReduceCooldowns(int amount, List<BattleEvent> events)
+        {
+            var reduced = 0;
+            foreach (var id in Cooldowns.Keys.ToArray())
+            {
+                var before = Cooldowns[id];
+                Cooldowns[id] = Math.Max(0, before - amount);
+                reduced += before - Cooldowns[id];
+            }
+            if (reduced > 0) events.Add(new("CooldownReduced", Name, Amount: reduced, Detail: amount.ToString()));
         }
         public void TickResources(List<BattleEvent> events)
         {
@@ -502,9 +537,9 @@ public sealed class BattleEngine
         private double Number(string id) => values.TryGetValue(id, out var rule) && double.TryParse(rule.Value, System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : throw new InvalidDataException($"배틀규칙 시트의 필수 규칙 '{id}'이(가) 없습니다.");
         public double BaseHp => Number("base_max_hp"); public double BaseAttack => Number("base_attack"); public double BaseDefense => Number("base_defense");
         public double PowerExponent => Number("power_scale_exponent"); public double PowerMin => Number("power_scale_min"); public double PowerMax => Number("power_scale_max");
-        public double DefenseCoefficient => Number("defense_coefficient"); public double DamageVarianceMin => Number("damage_variance_min"); public double DamageVarianceMax => Number("damage_variance_max");
+        public double DefenseCoefficient => Number("defense_coefficient"); public double DamageVarianceMin => Number("damage_variance_min"); public double DamageVarianceMax => Number("damage_variance_max"); public double FixedDamageScale => Number("fixed_damage_scale");
         public double CriticalChance => Number("base_critical_chance"); public double CriticalMultiplier => Number("critical_damage_multiplier");
-        public int MaxActions => checked((int)Number("max_major_actions")); public double DrawThreshold => Number("draw_hp_ratio_threshold");
+        public int MaxActions => checked((int)Number("max_major_actions")); public double DrawThreshold => Number("draw_hp_ratio_threshold"); public double TargetReleaseEvasionChance => Number("target_release_evasion_chance");
         public double NormalAttackMultiplier => Number("normal_attack_multiplier"); public double SkillDamageMinMultiplier => Number("skill_damage_min_multiplier"); public double SkillDamageMaxMultiplier => Number("skill_damage_max_multiplier"); public double UltimateDamageMultiplier => Number("ultimate_damage_multiplier");
         public int MinimumSkillCooldown => checked((int)Number("minimum_skill_cooldown")); public double SkillHealRatio => Number("skill_heal_ratio"); public int MaxSurpriseEvents => checked((int)Number("max_surprise_events_per_actor")); public int SurpriseCooldown => checked((int)Number("surprise_event_global_cooldown"));
         public double LifeSurpriseHpRatioThreshold => Number("life_surprise_hp_ratio_threshold"); public double LifeSurpriseHealRatio => Number("life_surprise_heal_ratio"); public double CharmSurpriseDamageMultiplier => Number("charm_surprise_damage_multiplier");
