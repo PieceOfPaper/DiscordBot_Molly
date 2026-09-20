@@ -499,82 +499,6 @@ public static class MobiRankBrowser
         }
     }
 
-    // select_box를 "서버/클래스" 타입으로 안정적으로 찾기
-    private static ILocator FindSelectBox(IPage page, string type)
-    {
-        // 1순위: 내부에 해당 타입의 li가 실제로 존재하는 박스 매칭
-        var byType = type switch
-        {
-            "server" => page.Locator("div.select_box").Filter(new() { Has = page.Locator("li[data-searchtype='serverid']") }),
-            "class" => page.Locator("div.select_box").Filter(new() { Has = page.Locator("li[data-searchtype='classid']") }),
-            _ => page.Locator("div.select_box")
-        };
-
-        return byType.CountAsync().GetAwaiter().GetResult() > 0
-            ? byType.First
-            : // 2순위: 위치 휴리스틱(페이지 구조가 고정이라면)
-            (type == "server"
-                ? page.Locator("div.select_box").Nth(0)
-                : page.Locator("div.select_box").Nth(1));
-    }
-
-    // 공용 드롭다운 선택 루틴
-    private static async Task<bool> SelectFromDropdownAsync(
-        IPage page,
-        ILocator selectBox, // div.select_box
-        string optionCss, // 예: "li[data-searchtype='serverid'][data-serverid='7']"
-        string? expectSelectedText, // 선택 후 .selected에 포함될(기대) 텍스트. 검증 생략하려면 null
-        int timeoutMs,
-        Action<string> log)
-    {
-        // 1) 드롭다운 펼치기
-        await selectBox.Locator(".selected").ClickAsync(new() { Timeout = timeoutMs });
-
-        // 2) 옵션 목록 노출 대기(최소 하나의 항목이 보이는지)
-        var option = page.Locator(optionCss).First;
-        await option.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = timeoutMs });
-
-        // 3) 옵션 클릭
-        await option.ClickAsync(new() { Timeout = timeoutMs });
-
-        // 4) 렌더링 안정화 약간
-        await page.WaitForTimeoutAsync(150);
-
-        // 5) 선택 검증
-        // (A) 기대 텍스트가 있으면 .selected에 포함되는지 확인
-        if (!string.IsNullOrWhiteSpace(expectSelectedText))
-        {
-            var selText = (await selectBox.Locator(".selected").InnerTextAsync()).Trim();
-            var ok = selText.Contains(expectSelectedText!, StringComparison.OrdinalIgnoreCase);
-            log($"select verify (.selected contains): '{selText}' vs '{expectSelectedText}' -> {ok}");
-            if (ok) return true;
-        }
-
-        // (B) 아니면 해당 li가 data-selected="true" 또는 class="on"인지로 확인
-        try
-        {
-            var selectedAttr = await option.GetAttributeAsync("data-selected");
-            var cls = await option.GetAttributeAsync("class");
-            var ok = string.Equals(selectedAttr, "true", StringComparison.OrdinalIgnoreCase)
-                     || (cls?.Split(' ').Contains("on") ?? false);
-            log($"select verify (attr/class): data-selected={selectedAttr}, class={cls} -> {ok}");
-            return ok;
-        }
-        catch
-        {
-            // 최악의 경우 한 번 더 드롭다운을 열어 현재 표시 텍스트로 재검증
-            if (!string.IsNullOrWhiteSpace(expectSelectedText))
-            {
-                await selectBox.Locator(".selected").ClickAsync(new() { Timeout = 1000 });
-                var selText = (await selectBox.Locator(".selected").InnerTextAsync()).Trim();
-                var ok = selText.Contains(expectSelectedText!, StringComparison.OrdinalIgnoreCase);
-                log($"select re-verify: '{selText}' vs '{expectSelectedText}' -> {ok}");
-                return ok;
-            }
-            return false;
-        }
-    }
-
     private static async Task WaitForRankingControlsAsync(
         IPage page,
         int timeoutMs,
@@ -586,9 +510,17 @@ public static class MobiRankBrowser
         {
             ct.ThrowIfCancellationRequested();
 
-            var boxCount = await page.Locator("div.select_box").CountAsync();
-            var searchCount = await page.Locator("input[name='search']").CountAsync();
-            if (boxCount >= 2 && searchCount > 0)
+            var controlsReady = await page.EvaluateAsync<bool>(
+                @"() => {
+                    const hasSelectBox = dataType => Array.from(
+                        document.querySelectorAll(""div.select_box""))
+                        .some(box => box.querySelector(
+                            `li[data-searchtype='${dataType}']`));
+                    return hasSelectBox(""serverid"")
+                        && hasSelectBox(""classid"")
+                        && document.querySelector(""input[name='search']"") instanceof HTMLInputElement;
+                }");
+            if (controlsReady)
             {
                 log("랭킹 페이지 기능 UI 준비 완료");
                 return;
@@ -610,8 +542,7 @@ public static class MobiRankBrowser
         Action<string> log)
     {
         var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
-        var boxIndex = dataType == "serverid" ? 0 : 1;
-        var optionSelector = $"li[data-searchtype='{dataType}'][data-{dataType}='{value}']";
+        var verifyOnly = false;
 
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -619,37 +550,46 @@ public static class MobiRankBrowser
 
             try
             {
-                var selectedText = await page.EvaluateAsync<string?>(
+                var selectionState = await page.EvaluateAsync<string?>(
                     @"args => {
-                        const boxes = Array.from(document.querySelectorAll(""div.select_box""));
-                        const box = boxes[args.boxIndex];
+                        const box = Array.from(document.querySelectorAll(""div.select_box""))
+                            .find(candidate => candidate.querySelector(
+                                `li[data-searchtype='${args.dataType}']`));
                         const selected = box?.querySelector("".selected"");
-                        if (!(selected instanceof HTMLElement))
+                        const option = box?.querySelector(
+                            `li[data-searchtype='${args.dataType}'][data-${args.dataType}='${args.value}']`);
+                        if (!(selected instanceof HTMLElement)
+                            || !(option instanceof HTMLElement))
                             return null;
 
                         const currentText = (selected.textContent || """").trim();
-                        if (args.expectSelectedText
-                            && currentText.includes(args.expectSelectedText))
-                            return currentText;
+                        const optionIsSelected = option.dataset.selected === ""true""
+                            || option.classList.contains(""on"");
+                        const selectedTextMatches = !args.expectSelectedText
+                            || currentText.includes(args.expectSelectedText);
+                        if (optionIsSelected && selectedTextMatches)
+                            return `selected:${currentText}`;
 
-                        selected.click();
+                        if (!args.verifyOnly) {
+                            selected.click();
 
-                        const option = document.querySelector(args.optionSelector);
-                        if (!(option instanceof HTMLElement))
-                            return currentText;
+                            option.click();
+                            return `clicked:${currentText}`;
+                        }
 
-                        option.click();
-                        return (selected.textContent || """").trim();
+                        return `pending:${currentText}`;
                     }",
-                    new { boxIndex, optionSelector, expectSelectedText });
+                    new { dataType, value, expectSelectedText, verifyOnly });
 
-                if (!string.IsNullOrWhiteSpace(selectedText)
-                    && (string.IsNullOrWhiteSpace(expectSelectedText)
-                        || selectedText.Contains(expectSelectedText, StringComparison.OrdinalIgnoreCase)))
+                if (selectionState?.StartsWith("selected:", StringComparison.Ordinal) == true)
                 {
-                    log($"선택 완료: '{selectedText}'");
+                    log($"선택 완료: '{selectionState["selected:".Length..]}'");
                     return true;
                 }
+
+                // 클릭 직후의 노드는 재렌더링으로 사라질 수 있으므로 다음 폴링에서는
+                // 최신 DOM의 선택 상태만 확인하고, 실패했을 때 그 다음 폴링에 재시도합니다.
+                verifyOnly = selectionState?.StartsWith("clicked:", StringComparison.Ordinal) == true;
             }
             catch (Exception) when (!ct.IsCancellationRequested)
             {
