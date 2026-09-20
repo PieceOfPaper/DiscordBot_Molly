@@ -159,6 +159,8 @@ public sealed class BattleCatalog
             {
                 if (effect.StatusId is null || !resourceMap.ContainsKey(effect.StatusId)) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'가 존재하지 않는 자원을 참조합니다.");
             }
+            else if (effect.Duration > 0 && effect.StatusId is { } statusId && !statusMap.ContainsKey(statusId))
+                throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'가 존재하지 않는 상태 효과 ID '{statusId}'를 참조합니다.");
             if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
             if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
             if (effect.NumericReferenceId is { } referenceId && !resourceMap.ContainsKey(referenceId)) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 수치 참조 자원이 올바르지 않습니다.");

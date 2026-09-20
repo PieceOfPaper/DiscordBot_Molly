@@ -33,7 +33,12 @@ public sealed record BattleEffect(
     string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
     string? NumericReferenceMode);
 public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
-public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description);
+public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description)
+{
+    /// <summary>복합 상태는 시트에서 <c>효과A|효과B</c>로 선언한다.</summary>
+    public bool HasEffectType(string effectType)
+        => EffectType.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Contains(effectType, StringComparer.Ordinal);
+}
 public sealed record BattleDerivation(string Id, string ParentSkillId, string ChildSkillId, string ActivationMode,
     double Weight, double Chance, string? ConditionType, string? ConditionValue, bool AllowDuplicate, string Timing, int Priority);
 

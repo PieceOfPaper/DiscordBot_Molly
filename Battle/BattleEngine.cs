@@ -21,10 +21,21 @@ public sealed class BattleEngine
             events.Add(new("TurnStarted", actor.Name, target.Name));
             actor.TickCooldowns();
             actor.TickResources(events);
+            var damagedByStatus = actor.TickPeriodicEffects(rules, events);
+            if (damagedByStatus && actor.Hp > 0) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
+            if (actor.Hp <= 0) break;
+            var actionBroken = actor.HasStatusEffect("브레이크");
             foreach (var expired in actor.TickStatuses(events))
             {
                 var scheduled = SelectDerivation(actor, expired.SourceSkillId, "상태만료 시", data, random, expired.Id);
                 if (scheduled is not null) actor.PendingSkillId = scheduled.Value.Child.Id;
+            }
+            if (actionBroken)
+            {
+                events.Add(new("BreakActionLost", target.Name, actor.Name));
+                major++;
+                actor = target;
+                continue;
             }
             var surpriseMultiplier = TrySurprise(actor, random, rules, ref surpriseCooldown, events);
             var actorHealed = false;
@@ -33,7 +44,8 @@ public sealed class BattleEngine
             if (skill is null)
             {
                 events.Add(new("NormalAttackUsed", actor.Name, target.Name));
-                targetDamaged = Attack(actor, target, actor.Attack * rules.NormalAttackMultiplier * surpriseMultiplier, 1, random, rules, events);
+                var normalAttackMultiplier = rules.NormalAttackMultiplier * (1d + actor.StatusValue("기본공격피해증가"));
+                targetDamaged = Attack(actor, target, actor.Attack * normalAttackMultiplier * surpriseMultiplier, 1, random, rules, events);
             }
             else
             {
@@ -196,8 +208,15 @@ public sealed class BattleEngine
                     for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
                     {
                         if (random.NextDouble() >= effect.Chance) continue;
-                        resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events);
+                        resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events, skill);
                     }
+                    break;
+                case "지속피해" when effect.StatusId is { } periodicStatusId && effect.Duration > 0:
+                    receiver.ApplyStatus(periodicStatusId, effect.Duration, skill.Id, events);
+                    // 횟수는 지속 시간 전체에 걸쳐 들어갈 총 타격 수다. 턴마다 한 번씩 나누어 적용한다.
+                    receiver.ApplyPeriodicEffect(periodicStatusId, actor.Name,
+                        actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier / Math.Max(1, effect.Count),
+                        effect.Message ?? periodicStatusId);
                     break;
                 case "추가피해":
                     if (random.NextDouble() < effect.Chance)
@@ -229,6 +248,10 @@ public sealed class BattleEngine
                     break;
                 case "자원증가" when effect.StatusId is { } resourceId:
                     AddResource(receiver, resourceId, ResolveFixedAmount(receiver, effect), events);
+                    break;
+                case "브레이크피해":
+                    if (random.NextDouble() < effect.Chance)
+                        ApplyBreakDamage(actor, receiver, Math.Max(1, ResolveFixedAmount(actor, effect)), rules, events);
                     break;
                 default:
                     if (effect.StatusId is { } statusId && effect.Duration > 0)
@@ -270,6 +293,21 @@ public sealed class BattleEngine
         target.Hp = Math.Max(0, target.Hp - damage);
         events.Add(new("AdditionalDamage", actor.Name, target.Name, damage));
         if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+    }
+
+    private static void ApplyBreakDamage(Fighter actor, Fighter target, int amount, Rules rules, List<BattleEvent> events)
+    {
+        if (target.HasStatusEffect("브레이크면역"))
+        {
+            events.Add(new("BreakImmune", actor.Name, target.Name));
+            return;
+        }
+        target.BreakGauge = Math.Min(rules.BreakGaugeMaximum, target.BreakGauge + amount);
+        events.Add(new("BreakGaugeChanged", actor.Name, target.Name, target.BreakGauge, rules.BreakGaugeMaximum.ToString()));
+        if (target.BreakGauge < rules.BreakGaugeMaximum) return;
+        target.BreakGauge = 0;
+        target.ApplyStatus("break_broken", rules.BreakDuration, "break", events);
+        events.Add(new("BreakActivated", actor.Name, target.Name));
     }
 
     private static void SetResource(Fighter fighter, string id, int value, List<BattleEvent> events)
@@ -319,11 +357,11 @@ public sealed class BattleEngine
         var matches = data.Resources.Values.Where(x => x.Kind == id).ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
-    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null)
     {
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
-            var outgoing = 1d + actor.StatusValue("주는피해증가");
+            var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill);
             var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소"));
             var amount = Math.Max(1, baseDamage - target.Defense * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
             var criticalChance = Math.Clamp(rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가"), 0d, 1d);
@@ -359,12 +397,14 @@ public sealed class BattleEngine
     {
         public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds; public required IReadOnlyDictionary<string, BattleResource> ResourceDefinitions; public required IReadOnlyDictionary<string, BattleStatus> StatusDefinitions;
         public int SurpriseCount; public string? LastSkillId;
+        public int BreakGauge;
         public string? PendingSkillId;
         public Dictionary<string, int> Cooldowns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, int> Resources { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, int> ResourceTurns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, int> Statuses { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> StatusSources { get; } = new(StringComparer.Ordinal);
+        private Dictionary<string, PeriodicEffect> PeriodicEffects { get; } = new(StringComparer.Ordinal);
         public static Fighter Create(CharacterBattleSnapshot source, double scale, Rules rules, BattleDataSnapshot data)
         {
             var c = data.Classes[source.ClassId]; var max = Math.Max(1, (int)Math.Round(rules.BaseHp * scale));
@@ -379,7 +419,15 @@ public sealed class BattleEngine
             foreach (var id in Cooldowns.Keys.ToArray()) Cooldowns[id] = Math.Max(0, Cooldowns[id] - reduction);
         }
 
-        public double StatusValue(string effectType) => Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.EffectType == effectType ? status.Value : 0d);
+        public double StatusValue(string effectType) => Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType) ? status.Value : 0d);
+        public bool HasStatusEffect(string effectType) => Statuses.Keys.Any(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType));
+        public double MelodySkillDamageBonus(BattleSkill? skill)
+        {
+            if (skill is null || !HasStatusEffect("악상피해증가")) return 0d;
+            var hasMelody = Resources.Any(x => x.Value > 0 && ResourceDefinitions.TryGetValue(x.Key, out var resource) && resource.Kind == "악상");
+            var melodySkill = skill.Effects.Any(x => x.ConditionType == "자원보유" && x.ConditionId?.StartsWith("bard_", StringComparison.Ordinal) == true);
+            return hasMelody && melodySkill ? StatusValue("악상피해증가") : 0d;
+        }
         public void TickResources(List<BattleEvent> events)
         {
             foreach (var id in ResourceTurns.Keys.ToArray())
@@ -404,6 +452,24 @@ public sealed class BattleEngine
             var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
             events.Add(new("StatusApplied", Name, Amount: applied, Detail: name));
         }
+        public void ApplyPeriodicEffect(string statusId, string sourceName, double baseDamage, string message)
+            => PeriodicEffects.TryAdd(statusId, new PeriodicEffect(sourceName, baseDamage, message));
+        public bool TickPeriodicEffects(Rules rules, List<BattleEvent> events)
+        {
+            var damaged = false;
+            foreach (var (statusId, periodic) in PeriodicEffects.ToArray())
+            {
+                if (!Statuses.ContainsKey(statusId)) { PeriodicEffects.Remove(statusId); continue; }
+                var incoming = Math.Max(.1d, 1d + StatusValue("받는피해증가") - StatusValue("받는피해감소"));
+                var amount = Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseDamage - Defense * rules.DefenseCoefficient) * incoming));
+                Hp = Math.Max(0, Hp - amount);
+                damaged = true;
+                var name = StatusDefinitions.GetValueOrDefault(statusId)?.Name ?? periodic.Message;
+                events.Add(new("StatusDamage", periodic.SourceName, Name, amount, name));
+                if (Hp == 0) events.Add(new("CharacterDefeated", periodic.SourceName, Name));
+            }
+            return damaged;
+        }
         public IReadOnlyList<(string Id, string SourceSkillId)> TickStatuses(List<BattleEvent> events)
         {
             var expired = new List<(string Id, string SourceSkillId)>();
@@ -412,6 +478,7 @@ public sealed class BattleEngine
                 Statuses[id]--;
                 if (Statuses[id] > 0) continue;
                 Statuses.Remove(id);
+                PeriodicEffects.Remove(id);
                 var source = StatusSources.GetValueOrDefault(id) ?? string.Empty;
                 StatusSources.Remove(id);
                 var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
@@ -428,6 +495,8 @@ public sealed class BattleEngine
         }
     }
 
+    private sealed record PeriodicEffect(string SourceName, double BaseDamage, string Message);
+
     private sealed class Rules(IReadOnlyDictionary<string, BattleRule> values)
     {
         private double Number(string id) => values.TryGetValue(id, out var rule) && double.TryParse(rule.Value, System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : throw new InvalidDataException($"배틀규칙 시트의 필수 규칙 '{id}'이(가) 없습니다.");
@@ -440,6 +509,7 @@ public sealed class BattleEngine
         public int MinimumSkillCooldown => checked((int)Number("minimum_skill_cooldown")); public double SkillHealRatio => Number("skill_heal_ratio"); public int MaxSurpriseEvents => checked((int)Number("max_surprise_events_per_actor")); public int SurpriseCooldown => checked((int)Number("surprise_event_global_cooldown"));
         public double LifeSurpriseHpRatioThreshold => Number("life_surprise_hp_ratio_threshold"); public double LifeSurpriseHealRatio => Number("life_surprise_heal_ratio"); public double CharmSurpriseDamageMultiplier => Number("charm_surprise_damage_multiplier");
         public double AdditionalHitChance => Number("additional_hit_chance"); public double AdditionalHitDamageRatio => Number("additional_hit_damage_ratio");
+        public int BreakGaugeMaximum => checked((int)Number("break_gauge_maximum")); public int BreakDuration => checked((int)Number("break_duration_turns"));
         public double LifeSurpriseChance(int lifePower) => SurpriseChance("life_surprise", lifePower);
         public double CharmSurpriseChance(int charmPower) => SurpriseChance("charm_surprise", charmPower);
         private double SurpriseChance(string prefix, int value) => Math.Min(Number(prefix + "_max_chance"), Number(prefix + "_base_chance") + Math.Min(2d, Math.Max(0, value) / Number(prefix + "_stat_reference")) * Number(prefix + "_stat_coefficient"));
