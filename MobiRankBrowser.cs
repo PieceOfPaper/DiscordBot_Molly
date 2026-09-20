@@ -592,60 +592,50 @@ public static class MobiRankBrowser
         Action<string> log)
     {
         var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
+        var boxIndex = dataType == "serverid" ? 0 : 1;
         var optionSelector = $"li[data-searchtype='{dataType}'][data-{dataType}='{value}']";
 
         while (DateTimeOffset.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
 
-            var boxes = page.Locator("div.select_box");
-            var boxCount = Math.Min(await boxes.CountAsync(), 2);
-            for (var i = 0; i < boxCount; i++)
+            try
             {
-                var box = boxes.Nth(i);
-                try
+                var selectedText = await page.EvaluateAsync<string?>(
+                    @"args => {
+                        const boxes = Array.from(document.querySelectorAll(""div.select_box""));
+                        const box = boxes[args.boxIndex];
+                        const selected = box?.querySelector("".selected"");
+                        if (!(selected instanceof HTMLElement))
+                            return null;
+
+                        const currentText = (selected.textContent || """").trim();
+                        if (args.expectSelectedText
+                            && currentText.includes(args.expectSelectedText))
+                            return currentText;
+
+                        selected.click();
+
+                        const option = document.querySelector(args.optionSelector);
+                        if (!(option instanceof HTMLElement))
+                            return currentText;
+
+                        option.click();
+                        return (selected.textContent || """").trim();
+                    }",
+                    new { boxIndex, optionSelector, expectSelectedText });
+
+                if (!string.IsNullOrWhiteSpace(selectedText)
+                    && (string.IsNullOrWhiteSpace(expectSelectedText)
+                        || selectedText.Contains(expectSelectedText, StringComparison.OrdinalIgnoreCase)))
                 {
-                    var selected = box.Locator(".selected").First;
-                    if (await selected.CountAsync() == 0)
-                        continue;
-
-                    var selectedText = (await selected.EvaluateAsync<string>(
-                        "element => (element.textContent || '').trim()")).Trim();
-                    if (!string.IsNullOrWhiteSpace(expectSelectedText)
-                        && selectedText.Contains(expectSelectedText, StringComparison.OrdinalIgnoreCase))
-                    {
-                        log($"선택값 확인: '{selectedText}'");
-                        return true;
-                    }
-
-                    // 동적 렌더링 중에는 Playwright의 화면 클릭 가능 판정이 오래 걸릴 수 있습니다.
-                    // DOM에 연결된 최신 요소를 매 폴링마다 다시 찾아 직접 클릭합니다.
-                    await selected.EvaluateAsync("element => element.click()");
-
-                    var option = box.Locator(optionSelector).First;
-                    if (await option.CountAsync() == 0)
-                        continue;
-
-                    await option.EvaluateAsync("element => element.click()");
-                    await Task.Delay(250, ct);
-
-                    selectedText = (await selected.EvaluateAsync<string>(
-                        "element => (element.textContent || '').trim()")).Trim();
-                    if (string.IsNullOrWhiteSpace(expectSelectedText)
-                        || selectedText.Contains(expectSelectedText, StringComparison.OrdinalIgnoreCase))
-                    {
-                        log($"선택 완료: '{selectedText}'");
-                        return true;
-                    }
+                    log($"선택 완료: '{selectedText}'");
+                    return true;
                 }
-                catch (Exception) when (!ct.IsCancellationRequested)
-                {
-                    // 동적 재렌더링으로 기존 요소가 교체될 수 있으므로 다음 폴링에서 다시 찾습니다.
-                }
-                finally
-                {
-                    try { await page.Keyboard.PressAsync("Escape"); } catch { }
-                }
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                // 동적 재렌더링 중이면 다음 폴링에서 최신 DOM으로 다시 시도합니다.
             }
 
             await Task.Delay(POLL_INTERVAL, ct);
