@@ -150,6 +150,13 @@ public static class MobiRankBrowser
             {
                 page = await m_BrowserContext.NewPageAsync();
                 Log("NewPageAsync success");
+                var homeResponse = await page.GotoAsync(
+                    "https://mabinogimobile.nexon.com/",
+                    s_PageGotoOpt);
+                var homeTitle = await page.TitleAsync();
+                Log($"공식 홈페이지 이동 완료 - HTTP 상태: {homeResponse?.Status.ToString() ?? "응답 없음"}");
+                Log($"공식 홈페이지 제목: {homeTitle}");
+
                 var navigationResponse = await page.GotoAsync(
                     $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
                     s_PageGotoOpt);
@@ -157,7 +164,7 @@ public static class MobiRankBrowser
                 var actualPlatform = await page.EvaluateAsync<string>("() => navigator.platform");
                 var pageTitle = await page.TitleAsync();
 
-                Log($"페이지 이동 완료 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+                Log($"랭킹 페이지 이동 완료 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
                 Log($"실제 브라우저 User-Agent: {actualUserAgent}");
                 Log($"실제 브라우저 플랫폼: {actualPlatform}");
                 Log($"페이지 제목: {pageTitle}");
