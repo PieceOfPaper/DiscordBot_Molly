@@ -187,14 +187,6 @@ class Program
             await m_Client.LoginAsync(TokenType.Bot, token);
             await m_Client.StartAsync();
 
-            // Discord 연결을 막지 않는 별도 작업에서 랭킹 브라우저를 예열합니다.
-            // 실패해도 로그만 남기고 봇의 다른 기능에는 영향을 주지 않습니다.
-            _ = Task.Run(async () =>
-            {
-                try { await MobiRankBrowser.WarmUpAllAsync(appCts.Token); }
-                catch (Exception ex) { Console.WriteLine($"[랭킹] 예열 실패, 다른 기능은 계속 진행합니다: {ex.Message}"); }
-            }, appCts.Token);
-
             try { await MobiEventExpireAlert.RegistEventExpireAlertAll(); }
             catch (Exception ex) { Console.WriteLine($"[이벤트] 초기 알림 등록 실패: {ex.Message}"); }
             MobiEventExpireAlert.RunUpdateTask(appCts.Token);
