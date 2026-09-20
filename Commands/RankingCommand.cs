@@ -4,7 +4,7 @@ namespace DiscordBot_Molly.Commands;
 
 public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
 {
-    private const int RANKING_TIMEOUT_MS = 60_000;
+    private const int RANKING_TIMEOUT_MS = 120_000;
     [SlashCommand("전투력랭킹", "캐릭터의 전투력 랭킹을 가져옵니다.")]
     public async Task Command_Rank1(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
