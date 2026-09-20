@@ -79,6 +79,7 @@ public static class MobiRankBrowser
     private const int PAGE_READY_TIMEOUT = 60000; // headed 브라우저에서 보안 검사 후 랭킹 UI가 나타날 때까지의 실측 기반 상한
     private const int CONTROL_READY_TIMEOUT = 10000;
     private const int SINGLE_ACTION_TIMEOUT = 2000;
+    private const int SEARCH_SUBMIT_TIMEOUT = 10000;
     private const int SEARCH_RESULT_TIMEOUT = 20000;
     private const int POLL_INTERVAL = 1000;
 
@@ -206,11 +207,10 @@ public static class MobiRankBrowser
                     throw new TimeoutException($"클래스 '{classDisplay}' 선택 준비 시간이 초과되었습니다.");
     
     
-                // 3) 닉네임 검색
-                var nicknameFillResult = await TryFill(page, "input[name='search']", nickname, SINGLE_ACTION_TIMEOUT);
-                var nicknameClickResult = await TryClick(page, "button[data-searchtype='search']", SINGLE_ACTION_TIMEOUT);
-                Log($"send nickname - {nicknameFillResult}, {nicknameClickResult}");
-                if (!nicknameFillResult || !nicknameClickResult)
+                // 3) 닉네임 입력과 검색 실행을 같은 DOM 작업으로 처리
+                var searchSubmitted = await SubmitSearchAsync(
+                    page, nickname, SEARCH_SUBMIT_TIMEOUT, ct, Log);
+                if (!searchSubmitted)
                     throw new TimeoutException("캐릭터 검색 입력 또는 실행 준비 시간이 초과되었습니다.");
 
                 // 4) 필요한 값이 모두 채워진 동일 결과를 두 번 연속 확인하면 반환
@@ -646,6 +646,58 @@ public static class MobiRankBrowser
                 {
                     try { await page.Keyboard.PressAsync("Escape"); } catch { }
                 }
+            }
+
+            await Task.Delay(POLL_INTERVAL, ct);
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> SubmitSearchAsync(
+        IPage page,
+        string nickname,
+        int timeoutMs,
+        CancellationToken ct,
+        Action<string> log)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            try
+            {
+                var submitted = await page.EvaluateAsync<bool>(
+                    @"nickname => {
+                        const input = document.querySelector(""input[name='search']"");
+                        const button = document.querySelector(""button[data-searchtype='search']"");
+                        if (!(input instanceof HTMLInputElement) || !(button instanceof HTMLElement))
+                            return false;
+
+                        const setter = Object.getOwnPropertyDescriptor(
+                            HTMLInputElement.prototype, ""value"")?.set;
+                        if (setter)
+                            setter.call(input, nickname);
+                        else
+                            input.value = nickname;
+
+                        input.dispatchEvent(new Event(""input"", { bubbles: true }));
+                        input.dispatchEvent(new Event(""change"", { bubbles: true }));
+                        button.click();
+                        return true;
+                    }",
+                    nickname);
+
+                if (submitted)
+                {
+                    log("캐릭터 검색 입력 및 실행 완료");
+                    return true;
+                }
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                // 페이지 재렌더링 중이면 다음 폴링에서 현재 DOM을 다시 사용합니다.
             }
 
             await Task.Delay(POLL_INTERVAL, ct);
