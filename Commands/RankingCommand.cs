@@ -4,7 +4,7 @@ namespace DiscordBot_Molly.Commands;
 
 public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
 {
-    private const int RANKING_TIMEOUT_MS = 120_000;
+    private const int RANKING_TIMEOUT_MS = 180_000;
     [SlashCommand("전투력랭킹", "캐릭터의 전투력 랭킹을 가져옵니다.")]
     public async Task Command_Rank1(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
@@ -130,7 +130,7 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
         {
             Console.WriteLine($"[랭킹] 페이지 준비 시간 초과: {ex.Message}");
             await ModifyOriginalResponseAsync(m => m.Content =
-                "랭킹 페이지의 보안 검사를 통과하지 못했어요. 잠시 후 다시 시도해주세요.");
+                $"랭킹 페이지 처리 시간이 초과되었어요. ({ex.Message})");
         }
         catch (Exception ex)
         {
