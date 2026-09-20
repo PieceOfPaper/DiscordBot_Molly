@@ -80,7 +80,7 @@ public static class MobiRankBrowser
     private const int CONTROL_READY_TIMEOUT = 10000;
     private const int SINGLE_ACTION_TIMEOUT = 2000;
     private const int SEARCH_SUBMIT_TIMEOUT = 10000;
-    private const int SEARCH_RESULT_TIMEOUT = 20000;
+    private const int SEARCH_RESULT_TIMEOUT = 45000;
     private const int POLL_INTERVAL = 1000;
 
     public class BrowserContainer : IAsyncDisposable
@@ -708,38 +708,37 @@ public static class MobiRankBrowser
         Action<string> log)
     {
         var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMs);
-        MobiRankResult? previous = null;
+        var lastReason = "아직 검사하지 않음";
+        var pollCount = 0;
 
         while (DateTimeOffset.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
+            pollCount++;
 
-            var current = await TryParseCompleteRankResultAsync(
+            var parsed = await TryParseCompleteRankResultAsync(
                 page, rankingIndex, nickname, requestedServer, requestedClass, keyword);
-            if (current is not null)
+            if (parsed.Result is not null)
             {
-                if (current == previous)
-                {
-                    log($"완성된 랭킹 결과 확인: {current.Rank}위, {current.ClassName}");
-                    return current;
-                }
-
-                previous = current;
-                log("랭킹 결과 필수 필드 확인 완료, 안정성 재확인 중");
+                log($"완성된 랭킹 결과 확인: {parsed.Result.Rank}위, {parsed.Result.ClassName}");
+                return parsed.Result;
             }
-            else
+
+            if (!string.Equals(lastReason, parsed.Reason, StringComparison.Ordinal)
+                || pollCount % 5 == 0)
             {
-                previous = null;
+                lastReason = parsed.Reason;
+                log($"랭킹 결과 대기 중: {lastReason}");
             }
 
             await Task.Delay(POLL_INTERVAL, ct);
         }
 
-        log($"'{nickname}'의 완성된 랭킹 결과가 {timeoutMs}ms 안에 나타나지 않았습니다.");
+        log($"'{nickname}'의 완성된 랭킹 결과가 {timeoutMs}ms 안에 나타나지 않았습니다. 마지막 상태: {lastReason}");
         return null;
     }
 
-    private static async Task<MobiRankResult?> TryParseCompleteRankResultAsync(
+    private static async Task<(MobiRankResult? Result, string Reason)> TryParseCompleteRankResultAsync(
         IPage page,
         int rankingIndex,
         string nickname,
@@ -749,14 +748,20 @@ public static class MobiRankBrowser
     {
         var block = await ExtractRecordBlockAsync(page, nickname, keyword);
         if (string.IsNullOrWhiteSpace(block))
-            return null;
+            return (null, "대상 캐릭터 항목을 찾지 못함");
 
         var rankMatch = Regex.Match(block, @"([\d,]+)\s*위");
         var powerMatch = Regex.Match(block, @$"{keyword}\s*([\d,]+)");
         var serverMatch = Regex.Match(block, @"서버명\s*([^\s]+)");
         var classMatch = Regex.Match(block, @"클래스\s*([^\s]+)");
-        if (!rankMatch.Success || !powerMatch.Success || !serverMatch.Success || !classMatch.Success)
-            return null;
+
+        var missingFields = new List<string>();
+        if (!rankMatch.Success) missingFields.Add("순위");
+        if (!powerMatch.Success) missingFields.Add(keyword);
+        if (!serverMatch.Success) missingFields.Add("서버");
+        if (!classMatch.Success) missingFields.Add("클래스");
+        if (missingFields.Count > 0)
+            return (null, $"기본 필드 부족: {string.Join(", ", missingFields)}");
 
         var rank = int.Parse(rankMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
         var power = int.Parse(powerMatch.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
@@ -764,21 +769,26 @@ public static class MobiRankBrowser
         var className = classMatch.Groups[1].Value;
 
         if (rankingIndex != 4)
-            return new MobiRankResult(rank, power, serverName, className);
+            return (new MobiRankResult(rank, power, serverName, className), "완료");
 
         var overall = await ExtractOverallScoresAsync(page, nickname);
-        if (overall.Total is null || overall.Combat is null || overall.Charm is null || overall.Life is null)
-            return null;
+        missingFields.Clear();
+        if (overall.Total is null) missingFields.Add("종합 점수");
+        if (overall.Combat is null) missingFields.Add("전투력");
+        if (overall.Charm is null) missingFields.Add("매력");
+        if (overall.Life is null) missingFields.Add("생활력");
+        if (missingFields.Count > 0)
+            return (null, $"종합 랭킹 필드 부족: {string.Join(", ", missingFields)}");
 
-        return new MobiRankResult(
+        return (new MobiRankResult(
             rank,
-            overall.Total.Value,
+            overall.Total!.Value,
             serverName,
             className,
             overall.Total,
             overall.Combat,
             overall.Charm,
-            overall.Life);
+            overall.Life), "완료");
     }
 
 
