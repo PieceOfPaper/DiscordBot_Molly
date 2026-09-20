@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 
@@ -458,45 +459,54 @@ public static class MobiRankBrowser
         return int.Parse(m.Groups[1].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture);
     }
 
-    private static async Task<(int? Total, int? Combat, int? Charm, int? Life)> ExtractOverallScoresAsync(IPage page, string nickname)
+    private sealed record OverallRankFields(
+        string? Rank,
+        string? ServerName,
+        string? ClassName,
+        string? TotalScore,
+        string? Combat,
+        string? Charm,
+        string? Life);
+
+    private static async Task<OverallRankFields?> ExtractOverallRankFieldsAsync(IPage page, string nickname)
     {
-        try
-        {
-            var item = page.Locator("li.item").Filter(new() { Has = page.Locator($"dd[data-charactername='{nickname}']") });
-            if (await item.CountAsync() == 0)
-            {
-                item = page.Locator("li.item").Filter(new() { Has = page.Locator($"dd:has-text('{nickname}')") });
-            }
+        // 결과 항목을 찾고 필드를 읽는 일을 하나의 DOM 평가에서 끝냅니다. 닉네임을
+        // CSS selector에 삽입하지 않아 특수문자가 있어도 selector가 깨지지 않습니다.
+        var json = await page.EvaluateAsync<string?>(
+            @"nickname => {
+                const normalize = value => (value || """").replace(/\s+/g, "" "").trim();
+                const character = Array.from(
+                    document.querySelectorAll(""li.item dd[data-charactername]""))
+                    .find(node => node.getAttribute(""data-charactername"") === nickname);
+                const item = character?.closest(""li.item"");
+                if (!item)
+                    return null;
 
-            if (await item.CountAsync() == 0)
-                return (null, null, null, null);
+                const dlFor = label => Array.from(item.querySelectorAll(""dl""))
+                    .find(dl => normalize(dl.querySelector(""dt"")?.textContent) === label);
+                const textFor = label => normalize(dlFor(label)?.querySelector(""dd"")?.textContent);
+                const scoreDl = Array.from(item.querySelectorAll(""dl""))
+                    .find(dl => normalize(dl.querySelector(""dt"")?.textContent)
+                        .startsWith(""종합 점수""));
+                const rank = Array.from(item.querySelectorAll(""dt""))
+                    .map(node => normalize(node.textContent))
+                    .find(text => /^\d+위$/.test(text)) || """";
 
-            var root = item.First;
+                return JSON.stringify({
+                    Rank: rank,
+                    ServerName: textFor(""서버명""),
+                    ClassName: textFor(""클래스""),
+                    TotalScore: normalize(scoreDl?.querySelector(""dt"")?.textContent),
+                    Combat: normalize(scoreDl?.querySelector(""span.type_1"")?.textContent),
+                    Charm: normalize(scoreDl?.querySelector(""span.type_2"")?.textContent),
+                    Life: normalize(scoreDl?.querySelector(""span.type_3"")?.textContent)
+                });
+            }",
+            nickname);
 
-            var dt = root.Locator("dt").Filter(new() { HasTextString = "종합" });
-            if (await dt.CountAsync() == 0)
-                return (null, null, null, null);
-
-            var dtText = await dt.First.InnerTextAsync();
-            var total = ExtractKoreanNumber(dtText);
-
-            var dl = dt.First.Locator("xpath=..");
-            var dd = dl.Locator("dd").First;
-
-            int? combat = null;
-            int? charm = null;
-            int? life = null;
-
-            try { combat = ExtractKoreanNumber(await dd.Locator("span.type_1").InnerTextAsync()); } catch { }
-            try { charm = ExtractKoreanNumber(await dd.Locator("span.type_3").InnerTextAsync()); } catch { }
-            try { life = ExtractKoreanNumber(await dd.Locator("span.type_2").InnerTextAsync()); } catch { }
-
-            return (total, combat, charm, life);
-        }
-        catch
-        {
-            return (null, null, null, null);
-        }
+        return string.IsNullOrWhiteSpace(json)
+            ? null
+            : JsonSerializer.Deserialize<OverallRankFields>(json);
     }
 
     private static async Task WaitForRankingControlsAsync(
@@ -826,6 +836,39 @@ public static class MobiRankBrowser
         string? requestedClass,
         string keyword)
     {
+        if (rankingIndex == 4)
+        {
+            var overall = await ExtractOverallRankFieldsAsync(page, nickname);
+            if (overall is null)
+                return (null, "대상 캐릭터 항목을 찾지 못함");
+
+            var overallMissingFields = new List<string>();
+            var overallRank = ExtractKoreanNumber(overall.Rank);
+            var total = ExtractKoreanNumber(overall.TotalScore);
+            var combat = ExtractKoreanNumber(overall.Combat);
+            var charm = ExtractKoreanNumber(overall.Charm);
+            var life = ExtractKoreanNumber(overall.Life);
+            if (overallRank is null) overallMissingFields.Add("순위");
+            if (string.IsNullOrWhiteSpace(overall.ServerName)) overallMissingFields.Add("서버");
+            if (string.IsNullOrWhiteSpace(overall.ClassName)) overallMissingFields.Add("클래스");
+            if (total is null) overallMissingFields.Add("종합 점수");
+            if (combat is null) overallMissingFields.Add("전투력");
+            if (charm is null) overallMissingFields.Add("매력");
+            if (life is null) overallMissingFields.Add("생활력");
+            if (overallMissingFields.Count > 0)
+                return (null, $"종합 랭킹 필드 부족: {string.Join(", ", overallMissingFields)}");
+
+            return (new MobiRankResult(
+                overallRank!.Value,
+                total!.Value,
+                overall.ServerName!,
+                overall.ClassName!,
+                total,
+                combat,
+                charm,
+                life), "완료");
+        }
+
         var block = await ExtractRecordBlockAsync(page, nickname, keyword);
         if (string.IsNullOrWhiteSpace(block))
             return (null, "대상 캐릭터 항목을 찾지 못함");
@@ -848,27 +891,7 @@ public static class MobiRankBrowser
         var serverName = serverMatch.Groups[1].Value;
         var className = classMatch.Groups[1].Value;
 
-        if (rankingIndex != 4)
-            return (new MobiRankResult(rank, power, serverName, className), "완료");
-
-        var overall = await ExtractOverallScoresAsync(page, nickname);
-        missingFields.Clear();
-        if (overall.Total is null) missingFields.Add("종합 점수");
-        if (overall.Combat is null) missingFields.Add("전투력");
-        if (overall.Charm is null) missingFields.Add("매력");
-        if (overall.Life is null) missingFields.Add("생활력");
-        if (missingFields.Count > 0)
-            return (null, $"종합 랭킹 필드 부족: {string.Join(", ", missingFields)}");
-
-        return (new MobiRankResult(
-            rank,
-            overall.Total!.Value,
-            serverName,
-            className,
-            overall.Total,
-            overall.Combat,
-            overall.Charm,
-            overall.Life), "완료");
+        return (new MobiRankResult(rank, power, serverName, className), "완료");
     }
 
 

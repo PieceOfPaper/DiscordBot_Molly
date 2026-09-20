@@ -111,7 +111,7 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
                 await FollowupAsync(
                     $"🏆 [{result.ServerName}] {rankScope} {result.Rank:n0}위\n" +
                     $"👤 {nickname}\n" +
-                    $"👑 점수: {totalScore:n0}점 = ⚔{combatText} + 🌱{charmText} + 💕{lifeText}",
+                    $"👑 점수: {totalScore:n0}점 = ⚔{combatText} + 🌱{lifeText} + 💕{charmText}",
                     ephemeral: false);
             }
             else if (string.IsNullOrWhiteSpace(className) || className == "전체 클래스")
