@@ -651,31 +651,57 @@ public static class MobiRankBrowser
 
             try
             {
-                var input = page.Locator("input[name='search']").First;
-                var button = page.Locator("button[data-searchtype='search']").First;
+                // 동적 재렌더링 중 Locator가 오래된 노드를 기다리지 않도록 현재 DOM에서 입력만 수행합니다.
+                var actualValue = await page.EvaluateAsync<string?>(
+                    @"nickname => {
+                        const input = document.querySelector(""input[name='search']"");
+                        if (!(input instanceof HTMLInputElement))
+                            return null;
 
-                if (await input.CountAsync() == 0 || await button.CountAsync() == 0)
-                {
-                    await Task.Delay(POLL_INTERVAL, ct);
-                    continue;
-                }
+                        const setter = Object.getOwnPropertyDescriptor(
+                            HTMLInputElement.prototype, ""value"")?.set;
+                        if (setter)
+                            setter.call(input, nickname);
+                        else
+                            input.value = nickname;
 
-                // 사이트의 입력 상태가 반영되기 전에 검색 버튼을 누르면 기본 랭킹이 그대로 남을 수 있습니다.
-                // Playwright 입력으로 실제 input 이벤트를 발생시키고, 상태 갱신 후 별도 작업으로 버튼을 클릭합니다.
-                await input.FillAsync(nickname, new() { Timeout = SINGLE_ACTION_TIMEOUT });
-                await Task.Delay(300, ct);
+                        input.dispatchEvent(new InputEvent(""input"", {
+                            bubbles: true,
+                            inputType: ""insertText"",
+                            data: nickname
+                        }));
+                        input.dispatchEvent(new Event(""change"", { bubbles: true }));
+                        return input.value;
+                    }",
+                    nickname);
 
-                var actualValue = await input.InputValueAsync(new() { Timeout = SINGLE_ACTION_TIMEOUT });
                 if (!string.Equals(actualValue, nickname, StringComparison.Ordinal))
                 {
-                    log($"캐릭터 검색 입력값 불일치 - 요청: '{nickname}', 실제: '{actualValue}'");
+                    log($"캐릭터 검색 입력값 불일치 - 요청: '{nickname}', 실제: '{actualValue ?? "입력창 없음"}'");
                     await Task.Delay(POLL_INTERVAL, ct);
                     continue;
                 }
 
+                // 프런트엔드 상태 갱신을 한 이벤트 루프 이상 기다린 뒤 별도 DOM 작업으로 클릭합니다.
+                await Task.Delay(500, ct);
                 var beforeNames = await GetVisibleCharacterNamesAsync(page);
-                await button.ClickAsync(new() { Timeout = SINGLE_ACTION_TIMEOUT });
-                await Task.Delay(300, ct);
+                var clicked = await page.EvaluateAsync<bool>(
+                    @"() => {
+                        const button = document.querySelector(
+                            ""button[data-searchtype='search']"");
+                        if (!(button instanceof HTMLElement))
+                            return false;
+
+                        button.click();
+                        return true;
+                    }");
+
+                if (!clicked)
+                {
+                    log("캐릭터 검색 버튼을 현재 DOM에서 찾지 못해 재시도합니다.");
+                    await Task.Delay(POLL_INTERVAL, ct);
+                    continue;
+                }
 
                 log(
                     $"캐릭터 검색 입력 및 실행 완료 - 실제 입력값: '{actualValue}', " +
