@@ -103,15 +103,6 @@ public static class MobiRankBrowser
             Log("init browser");
 
             m_BrowserContext = await m_Browser.NewContextAsync(s_BrowserNewContextOpt);
-            await m_BrowserContext.RouteAsync("**/*",
-                async route =>
-                {
-                    var t = route.Request.ResourceType;
-                    if (t is "image" or "media" or "font")
-                        await route.AbortAsync();
-                    else
-                        await route.ContinueAsync();
-                });
             m_BrowserContext.SetDefaultTimeout(10000); // 일반 동작(클릭/채우기)은 10초
             m_BrowserContext.SetDefaultNavigationTimeout(60000); // 네비게이션은 60초로 별도 설정
             Log("init browser context");
@@ -160,8 +151,6 @@ public static class MobiRankBrowser
             {
                 page = await m_BrowserContext.NewPageAsync();
                 Log("NewPageAsync success");
-                await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
-                Log("page.RouteAsync success");
                 var navigationResponse = await page.GotoAsync(
                     $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
                     s_PageGotoOpt);
