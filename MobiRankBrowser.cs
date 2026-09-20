@@ -154,6 +154,63 @@ public static class MobiRankBrowser
             m_IsInited = true;
         }
 
+        // Run()의 세션 준비 구간과 예열(WarmUpAsync)이 공유합니다. 초기화, 탭 확보,
+        // 페이지 이동, 403 보안 검사 우회, 기능 UI 대기까지를 담당합니다.
+        private async Task<IPage> EnsureRankingPageReadyAsync(
+            int targetRankingIndex,
+            CancellationToken ct,
+            Action<string> log)
+        {
+            // Init 실패도 호출부 finally에서 예약을 해제해야 다음 요청이 복구할 수 있습니다.
+            if (!m_IsInited) await Init(ct, log);
+
+            var page = await GetRankingPageAsync(log);
+            var rankingUrl = $"https://mabinogimobile.nexon.com/Ranking/List?t={targetRankingIndex}";
+            var navigationResponse = await page.GotoAsync(rankingUrl, s_PageGotoOpt);
+            log($"랭킹 페이지 초기 응답 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+
+            if (navigationResponse?.Status == 403)
+            {
+                log("랭킹 페이지 보안 검사 감지 - 공식 홈페이지 선행 방문 후 재시도");
+                var homeResponse = await page.GotoAsync(
+                    "https://mabinogimobile.nexon.com/",
+                    s_PageGotoOpt);
+                log($"공식 홈페이지 초기 응답 - HTTP 상태: {homeResponse?.Status.ToString() ?? "응답 없음"}");
+                await Task.Delay(POLL_INTERVAL, ct);
+
+                navigationResponse = await page.GotoAsync(rankingUrl, s_PageGotoOpt);
+                log($"랭킹 페이지 재시도 응답 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+            }
+
+            await WaitForRankingControlsAsync(page, PAGE_READY_TIMEOUT, ct, log);
+            return page;
+        }
+
+        // 봇 시작 직후 Discord 연결과 별개로 호출되어 브라우저 기동과 세션 확보(403 우회)를
+        // 미리 끝내둡니다. 실패해도 다른 기능에 영향이 없도록 예외를 밖으로 던지지 않습니다.
+        public async Task WarmUpAsync(CancellationToken ct = default, Action<string>? log = null)
+        {
+            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {index}: {msg}");
+
+            IPage? page = null;
+            try
+            {
+                page = await EnsureRankingPageReadyAsync(rankingIndex, ct, Log);
+                Log("예열 완료 - 랭킹 페이지 세션 준비됨");
+            }
+            catch (Exception ex)
+            {
+                Log($"예열 중 예외: {ex.GetType().Name}: {ex.Message}");
+                await LogPageOnExceptionAsync(page, Log);
+                if (page?.IsClosed == true)
+                    m_RankingPage = null;
+            }
+            finally
+            {
+                ReleaseReservation();
+            }
+        }
+
         public async Task<MobiRankResult?> Run(
             string nickname,
             MobiServer server,
@@ -166,9 +223,6 @@ public static class MobiRankBrowser
             IPage? page = null;
             try
             {
-                // Init 실패도 finally에서 예약을 해제해야 다음 요청이 복구할 수 있습니다.
-                if (!m_IsInited) await Init(ct, log);
-
                 var keyword = rankingIndex switch
                 {
                     2 => "매력",
@@ -182,27 +236,8 @@ public static class MobiRankBrowser
 
                 Log($"start search(nickname='{nickname}', server={server}, class='{className ?? "전체 클래스"}')");
 
-                page = await GetRankingPageAsync(Log);
-                var rankingUrl = $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}";
-                var navigationResponse = await page.GotoAsync(rankingUrl, s_PageGotoOpt);
-                Log($"랭킹 페이지 초기 응답 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+                page = await EnsureRankingPageReadyAsync(rankingIndex, ct, Log);
 
-                if (navigationResponse?.Status == 403)
-                {
-                    Log("랭킹 페이지 보안 검사 감지 - 공식 홈페이지 선행 방문 후 재시도");
-                    var homeResponse = await page.GotoAsync(
-                        "https://mabinogimobile.nexon.com/",
-                        s_PageGotoOpt);
-                    Log($"공식 홈페이지 초기 응답 - HTTP 상태: {homeResponse?.Status.ToString() ?? "응답 없음"}");
-                    await Task.Delay(POLL_INTERVAL, ct);
-
-                    navigationResponse = await page.GotoAsync(rankingUrl, s_PageGotoOpt);
-                    Log($"랭킹 페이지 재시도 응답 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
-                }
-
-                await WaitForRankingControlsAsync(page, PAGE_READY_TIMEOUT, ct, Log);
-    
-    
                 // 서버 선택
                 var serverId = (int)server;          // 예: 칼릭스=7, 몰리=8
                 var serverOk = await SelectByDataAsync(
@@ -308,6 +343,30 @@ public static class MobiRankBrowser
         }
 
         return true;
+    }
+
+    // 봇 시작 직후 호출되어 풀의 브라우저들을 미리 기동하고 세션을 확보합니다.
+    // 실제 사용자 요청이 먼저 컨테이너를 예약했다면 그 컨테이너는 건너뛰고,
+    // 해당 요청 처리 과정에서 자연스럽게 초기화됩니다.
+    public static async Task WarmUpAllAsync(CancellationToken ct = default, Action<string>? log = null)
+    {
+        var containers = new List<BrowserContainer>();
+        lock (m_BrowserLock)
+        {
+            for (var i = 0; i < BROWSER_COUNT; i++)
+            {
+                if (i >= m_BrowserPool.Count)
+                    m_BrowserPool.Add(new() { index = i });
+
+                if (m_BrowserPool[i].TryReserve(1))
+                    containers.Add(m_BrowserPool[i]);
+            }
+        }
+
+        if (containers.Count == 0)
+            return;
+
+        await Task.WhenAll(containers.Select(c => c.WarmUpAsync(ct, log)));
     }
 
     public static async Task<MobiRankResult?> GetRankBySearchAsync(
