@@ -126,5 +126,17 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
         {
             await ModifyOriginalResponseAsync(m => m.Content = $"⏱️ 작업이 제한 시간({timeoutSeconds}초)을 초과했어요.");
         }
+        catch (TimeoutException ex)
+        {
+            Console.WriteLine($"[랭킹] 페이지 준비 시간 초과: {ex.Message}");
+            await ModifyOriginalResponseAsync(m => m.Content =
+                "랭킹 페이지의 보안 검사를 통과하지 못했어요. 잠시 후 다시 시도해주세요.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[랭킹] 조회 실패: {ex}");
+            await ModifyOriginalResponseAsync(m => m.Content =
+                "랭킹을 조회하는 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.");
+        }
     }
 }
