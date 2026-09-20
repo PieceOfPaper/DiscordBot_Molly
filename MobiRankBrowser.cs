@@ -366,27 +366,29 @@ public static class MobiRankBrowser
     }
 
     // 봇 시작 직후 호출되어 풀의 브라우저들을 미리 기동하고 세션을 확보합니다.
-    // 실제 사용자 요청이 먼저 컨테이너를 예약했다면 그 컨테이너는 건너뛰고,
-    // 해당 요청 처리 과정에서 자연스럽게 초기화됩니다.
+    // 헤드풀 Chromium을 동시에 여러 개 기동·탐색시키면 자원이 제한된 환경(Lightsail 등)에서
+    // 프로세스 전체가 눌려 Discord 인터랙션 처리(DeferAsync 등)까지 지연될 수 있어,
+    // 한 번에 컨테이너 하나씩만 예약·예열합니다. 실제 사용자 요청이 먼저 컨테이너를
+    // 예약했다면 그 컨테이너는 건너뛰고, 해당 요청 처리 과정에서 자연스럽게 초기화됩니다.
     public static async Task WarmUpAllAsync(CancellationToken ct = default, Action<string>? log = null)
     {
-        var containers = new List<BrowserContainer>();
-        lock (m_BrowserLock)
+        for (var i = 0; i < BROWSER_COUNT; i++)
         {
-            for (var i = 0; i < BROWSER_COUNT; i++)
+            BrowserContainer? container = null;
+            lock (m_BrowserLock)
             {
                 if (i >= m_BrowserPool.Count)
                     m_BrowserPool.Add(new() { index = i });
 
                 if (m_BrowserPool[i].TryReserve(1))
-                    containers.Add(m_BrowserPool[i]);
+                    container = m_BrowserPool[i];
             }
+
+            if (container is null)
+                continue;
+
+            await container.WarmUpAsync(ct, log);
         }
-
-        if (containers.Count == 0)
-            return;
-
-        await Task.WhenAll(containers.Select(c => c.WarmUpAsync(ct, log)));
     }
 
     public static async Task<MobiRankResult?> GetRankBySearchAsync(
