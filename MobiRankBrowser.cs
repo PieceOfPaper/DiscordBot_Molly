@@ -164,10 +164,22 @@ public static class MobiRankBrowser
                 Log("NewPageAsync success");
                 await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
                 Log("page.RouteAsync success");
-                var navigationResponse = await page.GotoAsync(
-                    $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
-                    s_PageGotoOpt);
-                Log($"랭킹 페이지 응답 시작 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+                var rankingUrl = $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}";
+                var navigationResponse = await page.GotoAsync(rankingUrl, s_PageGotoOpt);
+                Log($"랭킹 페이지 초기 응답 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+
+                if (navigationResponse?.Status == 403)
+                {
+                    Log("랭킹 페이지 보안 검사 감지 - 공식 홈페이지 선행 방문 후 재시도");
+                    var homeResponse = await page.GotoAsync(
+                        "https://mabinogimobile.nexon.com/",
+                        s_PageGotoOpt);
+                    Log($"공식 홈페이지 초기 응답 - HTTP 상태: {homeResponse?.Status.ToString() ?? "응답 없음"}");
+                    await Task.Delay(POLL_INTERVAL, ct);
+
+                    navigationResponse = await page.GotoAsync(rankingUrl, s_PageGotoOpt);
+                    Log($"랭킹 페이지 재시도 응답 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+                }
 
                 await WaitForRankingControlsAsync(page, PAGE_READY_TIMEOUT, ct, Log);
     
