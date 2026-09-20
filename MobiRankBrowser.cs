@@ -73,11 +73,12 @@ public static class MobiRankBrowser
     };
     private static readonly PageGotoOptions s_PageGotoOpt = new()
     {
-        WaitUntil = WaitUntilState.DOMContentLoaded,
-        Timeout = 30000,
+        WaitUntil = WaitUntilState.Commit,
+        Timeout = 15000,
     };
-    private const int SELECT_TIMEOUT = 8000;
-    private const int SELECT_RENDER_WAIT_TIME = 2000; //무언가 선택했을 때 렌더링까지 대기하는 시간
+    private const int PAGE_READY_TIMEOUT = 60000; // headed 브라우저에서 보안 검사 후 랭킹 UI가 나타날 때까지의 실측 기반 상한
+    private const int SELECT_TIMEOUT = 5000;
+    private const int SEARCH_RESULT_TIMEOUT = 8000;
 
     public class BrowserContainer : IAsyncDisposable
     {
@@ -164,11 +165,19 @@ public static class MobiRankBrowser
                 var navigationResponse = await page.GotoAsync(
                     $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
                     s_PageGotoOpt);
+                Log($"랭킹 페이지 응답 시작 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+
+                await page.Locator("div.select_box").First.WaitForAsync(new()
+                {
+                    State = WaitForSelectorState.Visible,
+                    Timeout = PAGE_READY_TIMEOUT,
+                });
+                Log("랭킹 페이지 기능 UI 준비 완료");
+
                 var actualUserAgent = await page.EvaluateAsync<string>("() => navigator.userAgent");
                 var actualPlatform = await page.EvaluateAsync<string>("() => navigator.platform");
                 var pageTitle = await page.TitleAsync();
 
-                Log($"랭킹 페이지 이동 완료 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
                 Log($"실제 브라우저 User-Agent: {actualUserAgent}");
                 Log($"실제 브라우저 플랫폼: {actualPlatform}");
                 Log($"페이지 제목: {pageTitle}");
@@ -177,7 +186,6 @@ public static class MobiRankBrowser
                 // 서버 선택
                 var serverId = (int)server;          // 예: 칼릭스=7, 몰리=8
                 var serverOk = await SelectByDataAsync(page, "serverid", serverId.ToString(), server.ToString(), SELECT_TIMEOUT, Log);
-                await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
                 Log($"select server - {serverOk}");
     
                 
@@ -199,15 +207,30 @@ public static class MobiRankBrowser
                     SELECT_TIMEOUT,
                     Log
                 );
-                await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME);
                 Log($"select class - {classOk}");
     
     
                 // 3) 닉네임 검색
                 var nicknameFillResult = await TryFill(page, "input[name='search']", nickname, SELECT_TIMEOUT);
                 var nicknameClickResult = await TryClick(page, "button[data-searchtype='search']", SELECT_TIMEOUT);
-                await page.WaitForTimeoutAsync(SELECT_RENDER_WAIT_TIME); // 부분 렌더링 안정 대기
                 Log($"send nickname - {nicknameFillResult}, {nicknameClickResult}");
+
+                try
+                {
+                    await page.Locator("dd[data-charactername]")
+                        .Filter(new() { HasTextString = nickname })
+                        .First
+                        .WaitForAsync(new()
+                        {
+                            State = WaitForSelectorState.Visible,
+                            Timeout = SEARCH_RESULT_TIMEOUT,
+                        });
+                    Log("검색 대상 캐릭터 행 준비 완료");
+                }
+                catch (TimeoutException)
+                {
+                    Log($"검색 대상 캐릭터 행이 {SEARCH_RESULT_TIMEOUT}ms 안에 나타나지 않았습니다.");
+                }
     
                 // 4) 결과 파싱
                 var allText = await page.EvaluateAsync<string>("() => document.documentElement.innerText || ''");
