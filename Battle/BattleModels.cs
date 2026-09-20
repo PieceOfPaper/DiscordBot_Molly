@@ -10,6 +10,7 @@ public sealed class BattleDataSnapshot
     public IReadOnlyDictionary<string, BattleClass> Classes { get; init; } = new ReadOnlyDictionary<string, BattleClass>(new Dictionary<string, BattleClass>());
     public IReadOnlyDictionary<string, BattleSkill> Skills { get; init; } = new ReadOnlyDictionary<string, BattleSkill>(new Dictionary<string, BattleSkill>());
     public IReadOnlyDictionary<string, BattleResource> Resources { get; init; } = new ReadOnlyDictionary<string, BattleResource>(new Dictionary<string, BattleResource>());
+    public IReadOnlyDictionary<string, BattleStatus> Statuses { get; init; } = new ReadOnlyDictionary<string, BattleStatus>(new Dictionary<string, BattleStatus>());
     public IReadOnlyList<BattleDerivation> Derivations { get; init; } = Array.Empty<BattleDerivation>();
     public DateTimeOffset LoadedAt { get; init; }
     public bool IsUsable => Rules.Count > 0 && Classes.Count > 0 && Skills.Count > 0;
@@ -32,6 +33,7 @@ public sealed record BattleEffect(
     string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
     string? NumericReferenceMode);
 public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
+public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description);
 public sealed record BattleDerivation(string Id, string ParentSkillId, string ChildSkillId, string ActivationMode,
     double Weight, double Chance, string? ConditionType, string? ConditionValue, bool AllowDuplicate, string Timing, int Priority);
 

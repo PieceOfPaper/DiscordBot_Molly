@@ -323,8 +323,11 @@ public sealed class BattleEngine
     {
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
-            var amount = Math.Max(1, baseDamage - target.Defense * rules.DefenseCoefficient) * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
-            var critical = random.NextDouble() < rules.CriticalChance;
+            var outgoing = 1d + actor.StatusValue("주는피해증가");
+            var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소"));
+            var amount = Math.Max(1, baseDamage - target.Defense * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
+            var criticalChance = Math.Clamp(rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가"), 0d, 1d);
+            var critical = random.NextDouble() < criticalChance;
             if (critical) { amount *= rules.CriticalMultiplier; events.Add(new("CriticalHit", actor.Name, target.Name)); }
             var damage = Math.Max(1, (int)Math.Round(amount)); target.Hp = Math.Max(0, target.Hp - damage);
             events.Add(new("DamageDealt", actor.Name, target.Name, damage));
@@ -354,7 +357,7 @@ public sealed class BattleEngine
 
     private sealed class Fighter
     {
-        public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds; public required IReadOnlyDictionary<string, BattleResource> ResourceDefinitions;
+        public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds; public required IReadOnlyDictionary<string, BattleResource> ResourceDefinitions; public required IReadOnlyDictionary<string, BattleStatus> StatusDefinitions;
         public int SurpriseCount; public string? LastSkillId;
         public string? PendingSkillId;
         public Dictionary<string, int> Cooldowns { get; } = new(StringComparer.Ordinal);
@@ -365,12 +368,18 @@ public sealed class BattleEngine
         public static Fighter Create(CharacterBattleSnapshot source, double scale, Rules rules, BattleDataSnapshot data)
         {
             var c = data.Classes[source.ClassId]; var max = Math.Max(1, (int)Math.Round(rules.BaseHp * scale));
-            var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds, ResourceDefinitions = data.Resources };
+            var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds, ResourceDefinitions = data.Resources, StatusDefinitions = data.Statuses };
             foreach (var id in c.SkillIds) if (data.Skills.TryGetValue(id, out var skill)) fighter.Cooldowns[id] = skill.InitialCooldown;
             foreach (var resource in data.Resources.Values) fighter.Resources[resource.Id] = resource.InitialValue;
             return fighter;
         }
-        public void TickCooldowns() { foreach (var id in Cooldowns.Keys.ToArray()) Cooldowns[id] = Math.Max(0, Cooldowns[id] - 1); }
+        public void TickCooldowns()
+        {
+            var reduction = Math.Max(1, 1 + (int)Math.Round(StatusValue("쿨다운감소")));
+            foreach (var id in Cooldowns.Keys.ToArray()) Cooldowns[id] = Math.Max(0, Cooldowns[id] - reduction);
+        }
+
+        public double StatusValue(string effectType) => Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.EffectType == effectType ? status.Value : 0d);
         public void TickResources(List<BattleEvent> events)
         {
             foreach (var id in ResourceTurns.Keys.ToArray())
@@ -387,9 +396,13 @@ public sealed class BattleEngine
         }
         public void ApplyStatus(string id, int duration, string sourceSkillId, List<BattleEvent> events)
         {
-            Statuses[id] = Math.Max(Statuses.GetValueOrDefault(id), duration);
+            var previous = Statuses.GetValueOrDefault(id);
+            var applied = Math.Max(previous, duration);
+            if (applied == previous) return;
+            Statuses[id] = applied;
             StatusSources[id] = sourceSkillId;
-            events.Add(new("StatusApplied", Name, Detail: id));
+            var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
+            events.Add(new("StatusApplied", Name, Amount: applied, Detail: name));
         }
         public IReadOnlyList<(string Id, string SourceSkillId)> TickStatuses(List<BattleEvent> events)
         {
@@ -401,7 +414,8 @@ public sealed class BattleEngine
                 Statuses.Remove(id);
                 var source = StatusSources.GetValueOrDefault(id) ?? string.Empty;
                 StatusSources.Remove(id);
-                events.Add(new("StatusExpired", Name, Detail: id));
+                var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
+                events.Add(new("StatusExpired", Name, Detail: name));
                 if (!string.IsNullOrEmpty(source)) expired.Add((id, source));
             }
             return expired;

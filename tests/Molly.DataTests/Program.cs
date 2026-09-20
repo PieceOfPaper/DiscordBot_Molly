@@ -286,6 +286,15 @@ var impactSnapshot = new BattleDataSnapshot { Rules = impactRules, Classes = new
 var impactBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), impactSnapshot, new FixedBattleRandom(new[] { 0d, .9d, 0d, .5d, 0d, 0d }.Concat(Enumerable.Repeat(.5d, 100))));
 var firstTwoHits = impactBattle.Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Take(2).ToArray();
 Check(impactBattle.Events.Any(x => x.Type == "CriticalHit") && impactBattle.Events.Any(x => x.Type == "AdditionalHit") && firstTwoHits.Length == 2 && firstTwoHits.Sum(x => x.Amount ?? 0) < 80, "효과 행의 다단 피해를 타수만큼 분배하고 치명타·추가타를 처리");
+var statusStrike = new BattleSkill("status_strike", "현기증 일격", "일반", null, true, 2, 0, 1, 1,
+    [new BattleEffect("apply_dizziness", 1, "상태효과", "상대", 0, 1, 1, 3, "dizziness", 1, null, null, null, null, null, null, null, null), new BattleEffect("refresh_dizziness", 2, "상태효과", "상대", 0, 1, 1, 3, "dizziness", 1, null, null, null, null, null, null, null, null), new BattleEffect("dizzy_damage", 3, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var statusBaseSnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["status_strike"]) }, Skills = new Dictionary<string, BattleSkill> { ["status_strike"] = statusStrike }, LoadedAt = DateTimeOffset.UtcNow };
+var statusSnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = statusBaseSnapshot.Classes, Skills = statusBaseSnapshot.Skills, Statuses = new Dictionary<string, BattleStatus> { ["dizziness"] = new("dizziness", "현기증", "받는피해증가", .15, "받는 피해가 15% 증가") }, LoadedAt = DateTimeOffset.UtcNow };
+var statusRandom = new[] { 0d, .5d, .5d, .5d, .5d }.Concat(Enumerable.Repeat(.5d, 100));
+var baselineDamage = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), statusBaseSnapshot, new FixedBattleRandom(statusRandom)).Events.First(x => x.Type == "DamageDealt" && x.Actor == "A").Amount ?? 0;
+var statusBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), statusSnapshot, new FixedBattleRandom(statusRandom));
+var statusDamage = statusBattle.Events.First(x => x.Type == "DamageDealt" && x.Actor == "A").Amount ?? 0;
+Check(statusBattle.Events.Count(x => x.Type == "StatusApplied" && x.Actor == "B" && x.Detail == "현기증" && x.Amount == 3) == 1 && statusDamage > baselineDamage, "상태효과 시트의 받는 피해 증가와 중복 적용 로그 억제를 처리");
 var parentSkill = new BattleSkill("parent", "부모 스킬", "일반", null, true, 1, 0, 1, 1, Array.Empty<BattleEffect>());
 var childSkill = new BattleSkill("child", "파생 스킬", "파생", "parent", true, 1, 0, 1, 1, [new BattleEffect("child_damage", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
 var derivationSnapshot = new BattleDataSnapshot

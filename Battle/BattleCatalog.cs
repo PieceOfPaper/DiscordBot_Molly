@@ -11,10 +11,10 @@ public interface IBattleDataSource
     Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct);
 }
 
-/// <summary>전투용 9개 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
+/// <summary>전투용 10개 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
 public sealed class GoogleSheetsBattleSource(HttpClient client, string spreadsheetId) : IBattleDataSource
 {
-    public static readonly string[] SheetNames = ["클래스", "스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀자원", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과"];
+    public static readonly string[] SheetNames = ["클래스", "스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과"];
     public string CacheKey => spreadsheetId;
 
     public async Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct)
@@ -106,15 +106,17 @@ public sealed class BattleCatalog
         var effects = BattleCsv.Read(tables["배틀스킬효과"], "배틀스킬효과");
         var derivations = BattleCsv.Read(tables["배틀스킬파생"], "배틀스킬파생");
         var resources = BattleCsv.Read(tables["배틀자원"], "배틀자원");
+        var statuses = BattleCsv.Read(tables["배틀상태효과"], "배틀상태효과");
         var rules = BattleCsv.Read(tables["배틀규칙"], "배틀규칙");
         // 나머지 표도 누락/깨진 CSV를 허용하지 않습니다. 상세 효과는 이후 엔진 단계에서 공통 모델로 확장합니다.
-        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀자원", "배틀규칙"])) BattleCsv.Read(tables[name], name);
+        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀자원", "배틀상태효과", "배틀규칙"])) BattleCsv.Read(tables[name], name);
         BattleCsv.Headers(classes, "클래스", "ID", "이름", "스킬1", "스킬2", "스킬3", "스킬4", "스킬5", "궁극기");
         BattleCsv.Headers(skills, "스킬", "ID", "이름", "스킬구분", "부모스킬ID");
         BattleCsv.Headers(battleSkills, "배틀스킬", "ID", "활성화", "기본쿨다운", "최초쿨다운", "사용우선순위", "자원유형", "자원소모", "자원획득");
         BattleCsv.Headers(effects, "배틀스킬효과", "ID", "스킬ID", "실행순서", "효과유형", "대상", "고정값", "횟수", "발동확률", "지속턴", "상태효과ID", "최대중첩", "효과문구", "조건대상", "조건유형", "조건ID", "조건연산자", "조건값", "수치참조ID", "수치참조방식");
         BattleCsv.Headers(derivations, "배틀스킬파생", "ID", "부모스킬ID", "파생스킬ID", "발동방식", "가중치", "발동확률", "조건유형", "조건값", "중복허용", "실행시점", "우선순위");
         BattleCsv.Headers(resources, "배틀자원", "ID", "이름", "분류", "최대값", "초기값", "지속턴", "중첩방식", "전투종료시제거");
+        BattleCsv.Headers(statuses, "배틀상태효과", "ID", "이름", "효과유형", "값", "설명");
         BattleCsv.Headers(rules, "배틀규칙", "ID", "분류", "값유형", "값", "설명");
 
         var ruleMap = Unique(rules, "배틀규칙").ToDictionary(x => x.Required("ID", "배틀규칙", 0), x => new BattleRule(x["ID"], x["분류"], x["값유형"], x["값"], x["설명"]), StringComparer.Ordinal);
@@ -150,6 +152,7 @@ public sealed class BattleCatalog
             if (!classMap.TryAdd(id, new BattleClass(id, row.Required("이름", "클래스", index), isBattleReady ? ids : Array.Empty<string>(), isBattleReady))) throw new InvalidDataException($"클래스 ID '{id}'가 중복되었습니다.");
         }
         var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]), StringComparer.Ordinal);
+        var statusMap = Unique(statuses, "배틀상태효과").ToDictionary(x => x["ID"], x => new BattleStatus(x["ID"], x["이름"], x["효과유형"], BattleCsv.Double(x["값"], "배틀상태효과", 0, "값"), x["설명"]), StringComparer.Ordinal);
         foreach (var effect in effectMap.Values.SelectMany(x => x))
         {
             if (effect.Type is "자원설정" or "자원증가" or "자원소모")
@@ -162,7 +165,7 @@ public sealed class BattleCatalog
         }
         var derivationList = Unique(derivations, "배틀스킬파생").Select((x, i) => new BattleDerivation(x["ID"], x["부모스킬ID"], x["파생스킬ID"], x["발동방식"], BattleCsv.Double(x["가중치"], "배틀스킬파생", i + 2, "가중치"), BattleCsv.Double(x["발동확률"], "배틀스킬파생", i + 2, "발동확률", 0, 1), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건값"]), string.IsNullOrWhiteSpace(x["중복허용"]) ? false : BattleCsv.Bool(x["중복허용"], "배틀스킬파생", i + 2, "중복허용"), x["실행시점"], string.IsNullOrWhiteSpace(x["우선순위"]) ? 0 : BattleCsv.Int(x["우선순위"], "배틀스킬파생", i + 2, "우선순위"))).ToArray();
         if (derivationList.Any(x => !skillMap.ContainsKey(x.ParentSkillId) || !skillMap.ContainsKey(x.ChildSkillId))) throw new InvalidDataException("배틀스킬파생 시트가 존재하지 않는 배틀 스킬 ID를 참조합니다.");
-        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Derivations = derivationList, LoadedAt = loadedAt };
+        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LoadedAt = loadedAt };
     }
 
     private static IEnumerable<Dictionary<string, string>> Unique(IReadOnlyList<Dictionary<string, string>> rows, string sheet)
