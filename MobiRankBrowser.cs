@@ -58,7 +58,6 @@ public static class MobiRankBrowser
             "--disable-setuid-sandbox", // 보조
             "--disable-dev-shm-usage",
             "--no-default-browser-check",
-            "--disable-background-networking",
             "--disable-features=Translate,BackForwardCache",
             "--mute-audio",
             "--no-zygote", // (선택) 프로세스 수 감축
