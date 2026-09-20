@@ -276,6 +276,12 @@ var battleSnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new
 var fixedRandom = new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(0.5d, 200)));
 var battle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), battleSnapshot, fixedRandom);
 Check(battle.Outcome == BattleOutcome.FighterAWin && battle.MajorActions == 3 && battle.Events.Count(x => x.Type == "DamageDealt") == 3, "배틀 엔진은 고정 난수에서 동일한 일반 공격 결과를 생성");
+var battleSessions = new BattleSessions();
+Check(battleSessions.TryEnter(1, out var firstSession) && !battleSessions.TryEnter(1, out _) && battleSessions.TryStop(1) && firstSession.IsStopRequested && firstSession.CancellationToken.IsCancellationRequested,
+    "배틀 세션은 길드당 하나만 진행하고 강제 종료 신호를 전달");
+battleSessions.Leave(1, firstSession);
+Check(battleSessions.TryEnter(1, out var nextSession), "종료된 배틀 세션은 같은 길드에서 새 배틀을 시작할 수 있다");
+battleSessions.Leave(1, nextSession);
 var impactRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
 impactRules["base_attack"] = new("base_attack", "전투능력치", "number", "20", "");
 impactRules["base_critical_chance"] = new("base_critical_chance", "치명타", "number", "1", "");
