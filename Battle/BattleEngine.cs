@@ -20,10 +20,16 @@ public sealed class BattleEngine
             var target = ReferenceEquals(actor, left) ? right : left;
             events.Add(new("TurnStarted", actor.Name, target.Name));
             actor.TickCooldowns();
+            actor.TickResources(events);
+            foreach (var expired in actor.TickStatuses(events))
+            {
+                var scheduled = SelectDerivation(actor, expired.SourceSkillId, "상태만료 시", data, random, expired.Id);
+                if (scheduled is not null) actor.PendingSkillId = scheduled.Value.Child.Id;
+            }
             var surpriseMultiplier = TrySurprise(actor, random, rules, ref surpriseCooldown, events);
             var actorHealed = false;
             var targetDamaged = false;
-            var skill = ChooseSkill(actor, data, random);
+            var skill = actor.TakePendingSkill(data) ?? ChooseSkill(actor, data, random);
             if (skill is null)
             {
                 events.Add(new("NormalAttackUsed", actor.Name, target.Name));
@@ -33,13 +39,23 @@ public sealed class BattleEngine
             {
                 var selectedId = skill.Id;
                 skill = ResolveReuse(actor, skill, data) ?? skill;
+                SpendSkillResource(actor, skill, data, events);
                 actor.Cooldowns[selectedId] = Math.Max(skill.Cooldown, rules.MinimumSkillCooldown);
                 actor.LastSkillId = skill.Id;
-                var derivedSkills = SelectImmediateDerivations(actor, skill, data, random).ToArray();
-                var hideParent = skill.Effects.Count == 0 && derivedSkills.Length == 1 && data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.ChildSkillId == derivedSkills[0].Id && x.ActivationMode == "무작위");
+                // 효과로 자원을 얻은 뒤에 조건 파생을 판정해야 한다. 다만 효과가 없는 무작위 부모는
+                // 실제로 발동한 자식 스킬만 제목으로 보여주기 위해 미리 한 번 선택한다.
+                var preselectedDerivations = skill.Effects.Count == 0 ? SelectImmediateDerivations(actor, skill, data, random).ToArray() : [];
+                // 부모 효과가 악상을 만든 뒤에 그 악상으로 실제 연주곡을 고르는 스킬이 있다.
+                // 이 경우 부모는 버튼/선택용 가상 스킬이므로, 효과 로그도 실제 연주곡 제목 아래에 둔다.
+                var effectEvents = new List<BattleEvent>();
+                var resolved = ExecuteEffects(actor, target, skill, surpriseMultiplier, random, rules, effectEvents);
+                var derivedSkills = preselectedDerivations.Length > 0 ? preselectedDerivations : SelectImmediateDerivations(actor, skill, data, random).ToArray();
+                var replacement = derivedSkills.Length == 1 && data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.ChildSkillId == derivedSkills[0].Id && x.ActivationMode == "대체");
+                var hiddenRandomParent = preselectedDerivations.Length == 1 && data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.ChildSkillId == preselectedDerivations[0].Id && x.ActivationMode == "무작위");
+                var hideParent = replacement || hiddenRandomParent;
                 if (!hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: skill.Name));
                 if (hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: derivedSkills[0].Name));
-                var resolved = ExecuteEffects(actor, target, skill, surpriseMultiplier, random, rules, events);
+                events.AddRange(effectEvents);
                 foreach (var derived in derivedSkills)
                 {
                     if (!hideParent) events.Add(new("DerivedSkillUsed", actor.Name, target.Name, Detail: derived.Name));
@@ -47,6 +63,7 @@ public sealed class BattleEngine
                     resolved.TargetDamaged |= child.TargetDamaged;
                     resolved.ActorHealed |= child.ActorHealed;
                 }
+                GainSkillResource(actor, skill, data, events);
                 targetDamaged = resolved.TargetDamaged;
                 actorHealed = resolved.ActorHealed;
             }
@@ -92,8 +109,12 @@ public sealed class BattleEngine
     }
     private static BattleSkill? ChooseSkill(Fighter actor, BattleDataSnapshot data, IBattleRandom random)
     {
-        var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && actor.Cooldowns.GetValueOrDefault(x.Id) == 0 && x.Weight > 0).Cast<BattleSkill>().ToArray();
+        var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && (actor.Cooldowns.GetValueOrDefault(x.Id) == 0 || ResolveReuse(actor, x, data) is not null) && x.Weight > 0 && CanPaySkillResource(actor, x, data)).Cast<BattleSkill>().ToArray();
         if (choices.Length == 0) return null;
+        // 재사용 파생은 플레이어가 같은 버튼을 다시 누른 동작을 자동전투에서 표현하는 경로다.
+        // 진행 중인 상태를 끝내는 재사용 후보가 있으면 일반 후보보다 먼저 선택한다.
+        var reusable = choices.Where(x => ResolveReuse(actor, x, data) is not null).ToArray();
+        if (reusable.Length > 0) choices = reusable;
         var varied = choices.Where(x => x.Id != actor.LastSkillId).ToArray();
         if (varied.Length > 0) choices = varied;
         var point = random.NextDouble() * choices.Sum(x => x.Weight * (1d + x.Priority / 100d));
@@ -102,25 +123,60 @@ public sealed class BattleEngine
     }
 
     private static BattleSkill? ResolveReuse(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
-        => data.Derivations.Where(x => x.ParentSkillId == skill.Id && x.Timing == "재사용 시" && IsDerivationEligible(actor, x))
-            .OrderByDescending(x => x.Priority).Select(x => data.Skills[x.ChildSkillId]).FirstOrDefault();
+        => SelectDerivation(actor, skill.Id, "재사용 시", data, null)?.Child;
 
     private static IEnumerable<BattleSkill> SelectImmediateDerivations(Fighter actor, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random)
     {
-        var candidates = data.Derivations.Where(x => x.ParentSkillId == skill.Id && x.Timing == "즉시" && IsDerivationEligible(actor, x)).GroupBy(x => x.Priority).OrderByDescending(x => x.Key).FirstOrDefault();
-        if (candidates is null) return [];
-        var available = candidates.Where(x => x.ActivationMode != "확률" || random.NextDouble() < x.Chance).ToArray();
-        if (available.Length == 0) return [];
-        var point = random.NextDouble() * available.Sum(x => Math.Max(1, x.Weight));
-        foreach (var rule in available) { point -= Math.Max(1, rule.Weight); if (point <= 0) return [data.Skills[rule.ChildSkillId]]; }
-        return [data.Skills[available[^1].ChildSkillId]];
+        var selected = SelectDerivation(actor, skill.Id, "즉시", data, random);
+        return selected is null ? [] : [selected.Value.Child];
     }
 
-    private static bool IsDerivationEligible(Fighter actor, BattleDerivation rule)
+    private static (BattleDerivation Rule, BattleSkill Child)? SelectDerivation(Fighter actor, string parentSkillId, string timing, BattleDataSnapshot data, IBattleRandom? random, string? expiringStatusId = null)
     {
-        if (rule.ConditionType != "자원보유") return rule.ActivationMode is "무작위" or "확률";
-        var parts = rule.ConditionValue?.Split(['=', '>'], 2) ?? [];
-        return parts.Length == 2 && int.TryParse(parts[1], out var value) && actor.Resources.GetValueOrDefault(parts[0]) >= value;
+        foreach (var group in data.Derivations.Where(x => x.ParentSkillId == parentSkillId && x.Timing == timing && IsDerivationEligible(actor, x, expiringStatusId)).GroupBy(x => x.Priority).OrderByDescending(x => x.Key))
+        {
+            var available = group.Where(x => x.ActivationMode != "확률" || random is null || random.NextDouble() < x.Chance).ToArray();
+            if (available.Length == 0) continue;
+            var selectable = available.Where(x => x.ActivationMode != "확률" || random is not null).ToArray();
+            if (selectable.Length == 0) continue;
+            var selected = random is null || selectable.All(x => x.Weight <= 0)
+                ? selectable[0]
+                : PickWeighted(selectable, random);
+            return (selected, data.Skills[selected.ChildSkillId]);
+        }
+        return null;
+    }
+
+    private static BattleDerivation PickWeighted(IReadOnlyList<BattleDerivation> rules, IBattleRandom random)
+    {
+        var point = random.NextDouble() * rules.Sum(x => Math.Max(1, x.Weight));
+        foreach (var rule in rules) { point -= Math.Max(1, rule.Weight); if (point <= 0) return rule; }
+        return rules[^1];
+    }
+
+    private static bool IsDerivationEligible(Fighter actor, BattleDerivation rule, string? expiringStatusId = null)
+        => rule.ConditionType switch
+        {
+            null or "" => true,
+            "자원보유" => ResourceCondition(actor, rule.ConditionValue),
+            "상태효과보유" => rule.ConditionValue is { } id && (actor.Statuses.ContainsKey(id) || expiringStatusId == id),
+            // 현재 악상 데이터는 바즈 테일이 세 곡 중 하나를 고르는 선택 표식이다.
+            // 실제 보유 자원을 조건으로 쓰는 파생은 자원보유 형식으로 명시한다.
+            "악상" when rule.ActivationMode == "무작위" => true,
+            "새로운영감" when rule.ActivationMode == "확률" => true,
+            _ => false
+        };
+
+    private static bool ResourceCondition(Fighter fighter, string? expression)
+    {
+        if (string.IsNullOrWhiteSpace(expression)) return false;
+        var match = System.Text.RegularExpressions.Regex.Match(expression, "^(?<id>[a-z0-9_]+)\\s*(?<op>==|=|>=|<=|>|<)\\s*(?<value>\\d+)$");
+        // 시트에서 자원 ID만 적은 경우도 '1 이상 보유'라는 자연스러운 축약형으로 허용한다.
+        // 비교식을 쓰면 기존처럼 정확한 수치 조건을 판정한다.
+        if (!match.Success) return fighter.Resources.GetValueOrDefault(expression.Trim()) > 0;
+        var value = fighter.Resources.GetValueOrDefault(match.Groups["id"].Value);
+        var expected = int.Parse(match.Groups["value"].Value);
+        return match.Groups["op"].Value switch { "=" or "==" => value == expected, ">" => value > expected, ">=" => value >= expected, "<" => value < expected, "<=" => value <= expected, _ => false };
     }
 
     private static EffectResolution ExecuteEffects(Fighter actor, Fighter target, BattleSkill skill, double surpriseMultiplier, IBattleRandom random, Rules rules, List<BattleEvent> events)
@@ -130,6 +186,7 @@ public sealed class BattleEngine
         {
             if (actor.Hp <= 0 || target.Hp <= 0) break;
             var receiver = effect.Target == "자신" ? actor : target;
+            if (!CanApplyEffect(actor, target, effect)) continue;
             switch (effect.Type)
             {
                 case "피해":
@@ -140,6 +197,14 @@ public sealed class BattleEngine
                     {
                         if (random.NextDouble() >= effect.Chance) continue;
                         resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events);
+                    }
+                    break;
+                case "추가피해":
+                    if (random.NextDouble() < effect.Chance)
+                    {
+                        var damage = ResolveFixedAmount(actor, effect);
+                        ApplyAdditionalDamage(actor, receiver, damage, events);
+                        resolution.TargetDamaged = true;
                     }
                     break;
                 case "회복":
@@ -156,22 +221,103 @@ public sealed class BattleEngine
                         }
                     }
                     break;
-                case "자원설정":
-                    SetResource(actor, effect.StatusId, effect.FixedValue, events);
+                case "자원설정" when effect.StatusId is { } resourceId:
+                    SetResource(receiver, resourceId, ResolveFixedAmount(receiver, effect), events);
                     break;
                 case "자원소모" when effect.StatusId is { } resourceId:
-                    SetResource(actor, resourceId, effect.NumericReferenceMode == "전부" ? 0 : actor.Resources.GetValueOrDefault(resourceId) - effect.FixedValue, events);
+                    SetResource(receiver, resourceId, effect.NumericReferenceMode == "전부" ? 0 : receiver.Resources.GetValueOrDefault(resourceId) - ResolveFixedAmount(receiver, effect), events);
+                    break;
+                case "자원증가" when effect.StatusId is { } resourceId:
+                    AddResource(receiver, resourceId, ResolveFixedAmount(receiver, effect), events);
+                    break;
+                default:
+                    if (effect.StatusId is { } statusId && effect.Duration > 0)
+                        receiver.ApplyStatus(statusId, effect.Duration, skill.Id, events);
                     break;
             }
         }
         return resolution;
     }
-    private static void SetResource(Fighter fighter, string? id, int value, List<BattleEvent> events)
+
+    private static bool CanApplyEffect(Fighter actor, Fighter target, BattleEffect effect)
     {
-        if (id is null || !fighter.ResourceDefinitions.TryGetValue(id, out var definition)) return;
+        if (effect.ConditionType is null or "") return true;
+        var conditionOwner = effect.ConditionTarget == "상대" ? target : actor;
+        return effect.ConditionType switch
+        {
+            "자원보유" when effect.ConditionId is { } id => ResourceCondition(conditionOwner, id + (effect.ConditionOperator ?? "=") + (effect.ConditionValue ?? "0")),
+            // 악상처럼 같은 분류에서 하나만 유지하는 자원은, 이미 다른 값이 있으면 새 값을 만들지 않는다.
+            "분류자원미보유" when effect.ConditionId is { } kind => !conditionOwner.ResourceDefinitions.Values.Any(x => x.Kind == kind && conditionOwner.Resources.GetValueOrDefault(x.Id) > 0),
+            _ => false
+        };
+    }
+
+    private static int ResolveFixedAmount(Fighter fighter, BattleEffect effect)
+    {
+        if (effect.NumericReferenceId is not { } referenceId || !fighter.Resources.TryGetValue(referenceId, out var current)) return effect.FixedValue;
+        return effect.NumericReferenceMode switch
+        {
+            "소모중첩배율" => checked(effect.FixedValue * current),
+            "현재값" => current,
+            "최대값" when fighter.ResourceDefinitions.TryGetValue(referenceId, out var resource) => resource.Maximum,
+            _ => effect.FixedValue
+        };
+    }
+
+    private static void ApplyAdditionalDamage(Fighter actor, Fighter target, int amount, List<BattleEvent> events)
+    {
+        var damage = Math.Max(1, amount);
+        target.Hp = Math.Max(0, target.Hp - damage);
+        events.Add(new("AdditionalDamage", actor.Name, target.Name, damage));
+        if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+    }
+
+    private static void SetResource(Fighter fighter, string id, int value, List<BattleEvent> events)
+    {
+        if (!fighter.ResourceDefinitions.TryGetValue(id, out var definition)) return;
         var capped = definition.Maximum == 0 ? Math.Max(0, value) : Math.Clamp(value, 0, definition.Maximum);
-        fighter.Resources[id] = capped;
-        events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + capped));
+        if (capped > 0 && definition.Stacking == "상호배타")
+            foreach (var peer in fighter.ResourceDefinitions.Values.Where(x => x.Id != id && x.Kind == definition.Kind && x.Stacking == "상호배타"))
+                if (fighter.Resources.GetValueOrDefault(peer.Id) > 0) ChangeResource(fighter, peer, 0, events);
+        ChangeResource(fighter, definition, capped, events);
+    }
+
+    private static void AddResource(Fighter fighter, string id, int amount, List<BattleEvent> events)
+    {
+        if (!fighter.ResourceDefinitions.TryGetValue(id, out var definition)) return;
+        SetResource(fighter, id, fighter.Resources.GetValueOrDefault(id) + amount, events);
+    }
+
+    private static void ChangeResource(Fighter fighter, BattleResource definition, int value, List<BattleEvent> events)
+    {
+        var previous = fighter.Resources.GetValueOrDefault(definition.Id);
+        if (previous == value) return;
+        fighter.Resources[definition.Id] = value;
+        if (definition.Duration > 0) fighter.ResourceTurns[definition.Id] = definition.Duration;
+        events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + (value > previous ? "+" : "") + (value - previous) + " (현재 " + value + ")"));
+    }
+
+    private static bool CanPaySkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
+        => ResolveSkillResource(skill, data) is not { } resource || !int.TryParse(skill.ResourceCost, out var cost) || actor.Resources.GetValueOrDefault(resource.Id) >= cost;
+
+    private static void SpendSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
+    {
+        if (ResolveSkillResource(skill, data) is not { } resource || !int.TryParse(skill.ResourceCost, out var cost) || cost == 0) return;
+        SetResource(actor, resource.Id, actor.Resources.GetValueOrDefault(resource.Id) - cost, events);
+    }
+
+    private static void GainSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
+    {
+        if (ResolveSkillResource(skill, data) is not { } resource || !int.TryParse(skill.ResourceGain, out var gain) || gain == 0) return;
+        AddResource(actor, resource.Id, gain, events);
+    }
+
+    private static BattleResource? ResolveSkillResource(BattleSkill skill, BattleDataSnapshot data)
+    {
+        if (skill.ResourceId is not { } id) return null;
+        if (data.Resources.TryGetValue(id, out var resource)) return resource;
+        var matches = data.Resources.Values.Where(x => x.Kind == id).ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
     private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
@@ -210,8 +356,12 @@ public sealed class BattleEngine
     {
         public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds; public required IReadOnlyDictionary<string, BattleResource> ResourceDefinitions;
         public int SurpriseCount; public string? LastSkillId;
+        public string? PendingSkillId;
         public Dictionary<string, int> Cooldowns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, int> Resources { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, int> ResourceTurns { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, int> Statuses { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> StatusSources { get; } = new(StringComparer.Ordinal);
         public static Fighter Create(CharacterBattleSnapshot source, double scale, Rules rules, BattleDataSnapshot data)
         {
             var c = data.Classes[source.ClassId]; var max = Math.Max(1, (int)Math.Round(rules.BaseHp * scale));
@@ -221,6 +371,47 @@ public sealed class BattleEngine
             return fighter;
         }
         public void TickCooldowns() { foreach (var id in Cooldowns.Keys.ToArray()) Cooldowns[id] = Math.Max(0, Cooldowns[id] - 1); }
+        public void TickResources(List<BattleEvent> events)
+        {
+            foreach (var id in ResourceTurns.Keys.ToArray())
+            {
+                ResourceTurns[id]--;
+                if (ResourceTurns[id] > 0) continue;
+                ResourceTurns.Remove(id);
+                if (Resources.GetValueOrDefault(id) > 0 && ResourceDefinitions.TryGetValue(id, out var resource))
+                {
+                    Resources[id] = 0;
+                    events.Add(new("ResourceChanged", Name, Detail: resource.Name + "이(가) 사라졌습니다."));
+                }
+            }
+        }
+        public void ApplyStatus(string id, int duration, string sourceSkillId, List<BattleEvent> events)
+        {
+            Statuses[id] = Math.Max(Statuses.GetValueOrDefault(id), duration);
+            StatusSources[id] = sourceSkillId;
+            events.Add(new("StatusApplied", Name, Detail: id));
+        }
+        public IReadOnlyList<(string Id, string SourceSkillId)> TickStatuses(List<BattleEvent> events)
+        {
+            var expired = new List<(string Id, string SourceSkillId)>();
+            foreach (var id in Statuses.Keys.ToArray())
+            {
+                Statuses[id]--;
+                if (Statuses[id] > 0) continue;
+                Statuses.Remove(id);
+                var source = StatusSources.GetValueOrDefault(id) ?? string.Empty;
+                StatusSources.Remove(id);
+                events.Add(new("StatusExpired", Name, Detail: id));
+                if (!string.IsNullOrEmpty(source)) expired.Add((id, source));
+            }
+            return expired;
+        }
+        public BattleSkill? TakePendingSkill(BattleDataSnapshot data)
+        {
+            if (PendingSkillId is not { } id) return null;
+            PendingSkillId = null;
+            return data.Skills.GetValueOrDefault(id);
+        }
     }
 
     private sealed class Rules(IReadOnlyDictionary<string, BattleRule> values)

@@ -300,6 +300,83 @@ var derivationBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1
 var derivedHeaderIndex = derivationBattle.Events.ToList().FindIndex(x => x.Type == "SkillUsed" && x.Detail == "파생 스킬");
 var derivedCriticalIndex = derivationBattle.Events.ToList().FindIndex(x => x.Type == "CriticalHit");
 Check(derivedHeaderIndex >= 0 && derivedCriticalIndex > derivedHeaderIndex, "무작위 파생 스킬의 제목은 치명타·피해 효과보다 먼저 기록");
+var resourceDefinitions = new Dictionary<string, BattleResource>
+{
+    ["focus"] = new("focus", "집중", "자원", 3, 0, 0, "가산"),
+    ["grace"] = new("grace", "우아", "태세", 1, 0, 0, "상호배타"),
+    ["passion"] = new("passion", "정열", "태세", 1, 0, 0, "상호배타")
+};
+var resourceParent = new BattleSkill("resource_parent", "집중 준비", "일반", null, true, 3, 0, 1, 1,
+    [new BattleEffect("focus_gain", 1, "자원증가", "자신", 1, 1, 1, 0, "focus", 0, null, null, null, null, null, null, null, null)]);
+var resourceChild = new BattleSkill("resource_child", "집중 일격", "파생", "resource_parent", true, 0, 0, 1, 1,
+    [new BattleEffect("focus_damage", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var stanceSkill = new BattleSkill("stance", "태세 전환", "일반", null, true, 4, 0, 1, 1,
+    [new BattleEffect("grace_set", 1, "자원설정", "자신", 1, 1, 1, 0, "grace", 0, null, null, null, null, null, null, null, null), new BattleEffect("passion_set", 2, "자원설정", "자신", 1, 1, 1, 0, "passion", 0, null, null, null, null, null, null, null, null)]);
+var resourceSnapshot = new BattleDataSnapshot
+{
+    Rules = impactRules,
+    Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["resource_parent", "stance"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["resource_parent"] = resourceParent, ["resource_child"] = resourceChild, ["stance"] = stanceSkill },
+    Resources = resourceDefinitions,
+    Derivations = [new BattleDerivation("focus_child", "resource_parent", "resource_child", "조건", 0, 1, "자원보유", "focus>=1", false, "즉시", 100)],
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var resourceBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), resourceSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 100)));
+var resourceEvents = resourceBattle.Events.ToList();
+Check(resourceEvents.Any(x => x.Type == "ResourceChanged" && x.Detail == "집중 +1 (현재 1)") && resourceEvents.Any(x => x.Type == "DerivedSkillUsed" && x.Detail == "집중 일격"), "자원 증감과 자원 조건 즉시 파생을 처리");
+var feign = new BattleSkill("feign", "죽은 척 하기", "일반", null, true, 6, 0, 1, 1,
+    [new BattleEffect("feign_state", 1, "받는피해감소", "자신", 0, 1, 1, 1, "feign_state", 1, null, null, null, null, null, null, null, null)]);
+var rising = new BattleSkill("rising", "라이징 윈드밀", "파생", "feign", true, 0, 0, 1, 1,
+    [new BattleEffect("rising_damage", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var feignSnapshot = new BattleDataSnapshot
+{
+    Rules = impactRules,
+    Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["feign"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["feign"] = feign, ["rising"] = rising },
+    Derivations = [new BattleDerivation("feign_expire", "feign", "rising", "조건", 0, 1, "상태효과보유", "feign_state", false, "상태만료 시", 100)],
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var feignBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), feignSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 100)));
+var feignEvents = feignBattle.Events.ToList();
+var stateExpiredIndex = feignEvents.FindIndex(x => x.Type == "StatusExpired" && x.Actor == "A" && x.Detail == "feign_state");
+var risingIndex = feignEvents.FindIndex(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "라이징 윈드밀");
+Check(stateExpiredIndex >= 0 && risingIndex > stateExpiredIndex, "상태 만료 파생은 다음 행동을 라이징 윈드밀로 교체");
+var heldFeign = feign with { Id = "held_feign", Effects = [new BattleEffect("held_feign_state", 1, "받는피해감소", "자신", 0, 1, 1, 2, "held_feign_state", 1, null, null, null, null, null, null, null, null)] };
+var reuseRising = rising with { ParentSkillId = "held_feign" };
+var reuseSnapshot = new BattleDataSnapshot
+{
+    Rules = impactRules,
+    Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["held_feign"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["held_feign"] = heldFeign, ["rising"] = reuseRising },
+    Derivations = [new BattleDerivation("held_feign_reuse", "held_feign", "rising", "조건", 0, 1, "상태효과보유", "held_feign_state", false, "재사용 시", 100)],
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var reuseBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), reuseSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 100)));
+Check(reuseBattle.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "라이징 윈드밀"), "유지 중인 상태의 재사용 파생은 쿨다운과 관계없이 실행");
+var melodyResources = new Dictionary<string, BattleResource>
+{
+    ["bard_valor"] = new("bard_valor", "용맹 악상", "악상", 1, 0, 0, "상호배타"),
+    ["bard_hope"] = new("bard_hope", "희망 악상", "악상", 1, 0, 0, "상호배타")
+};
+var melody = new BattleSkill("melody", "멜로디 쇼크", "일반", null, true, 4, 0, 1, 1,
+    [new BattleEffect("valor", 1, "자원설정", "자신", 1, 1, 1, 0, "bard_valor", 1, null, "자신", "분류자원미보유", "악상", "미보유", "0", null, null), new BattleEffect("hope_blocked", 2, "자원설정", "자신", 1, 1, 1, 0, "bard_hope", 1, null, "자신", "분류자원미보유", "악상", "미보유", "0", null, null)]);
+var bardTale = new BattleSkill("bard_tale", "바즈 테일", "일반", null, true, 2, 0, 1, 1,
+    [new BattleEffect("hope", 1, "자원설정", "자신", 1, 1, 1, 0, "bard_hope", 1, null, "자신", "분류자원미보유", "악상", "미보유", "0", null, null),
+     new BattleEffect("tale_damage", 2, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null),
+     new BattleEffect("tale_heal", 3, "회복", "자신", 0, 2, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var valorSong = new BattleSkill("valor_song", "용맹의 찬가", "파생", "bard_tale", true, 0, 0, 1, 1, Array.Empty<BattleEffect>());
+var hopeSong = new BattleSkill("hope_song", "희망의 송가", "파생", "bard_tale", true, 0, 0, 1, 1, Array.Empty<BattleEffect>());
+var melodySnapshot = new BattleDataSnapshot
+{
+    Rules = impactRules,
+    Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["melody", "bard_tale"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["melody"] = melody, ["bard_tale"] = bardTale, ["valor_song"] = valorSong, ["hope_song"] = hopeSong },
+    Resources = melodyResources,
+    Derivations = [new BattleDerivation("valor_path", "bard_tale", "valor_song", "대체", 0, 1, "자원보유", "bard_valor", false, "즉시", 100), new BattleDerivation("hope_path", "bard_tale", "hope_song", "대체", 0, 1, "자원보유", "bard_hope", false, "즉시", 100)],
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var melodyBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), melodySnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 100)));
+Check(melodyBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "용맹 악상 +1 (현재 1)") && !melodyBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Detail?.Contains("희망 악상 +1") == true) && melodyBattle.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "용맹의 찬가") && !melodyBattle.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "바즈 테일") && melodyBattle.Events.Any(x => x.Type == "DamageDealt" && x.Actor == "A"), "악상 생성은 비어 있을 때만 실행되고 바즈 테일을 실제 연주곡으로 대체");
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)

@@ -73,7 +73,7 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
             if (x.Type == "CriticalHit") { pendingCritical = true; continue; }
             var text = x.Type switch
             {
-                "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
+                "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "AdditionalDamage" => "✨ " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해를 입혔습니다!", "ResourceChanged" => x.Actor + "의 " + x.Detail, "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
             };
             pendingCritical = false;
             if (text is not null) current.Add("　↳ " + text);
