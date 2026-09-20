@@ -238,21 +238,41 @@ public static class MobiRankBrowser
 
                 page = await EnsureRankingPageReadyAsync(rankingIndex, ct, Log);
 
-                // 서버 선택
                 var serverId = (int)server;          // 예: 칼릭스=7, 몰리=8
+                long classId = 0;
+                if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
+                    classId = cid;
+                var classDisplay = classId == 0 ? "전체 클래스" : className?.Trim();
+
+                // 0) 공식 JS(mmRanking.list)가 쓰는 rankdata를 페이지 컨텍스트에서 직접 호출합니다.
+                // UI 클릭·폴링을 모두 건너뛰므로 훨씬 빠르지만, 실패하면 기존 브라우저 조작 흐름으로 그대로 넘어갑니다.
+                var (fastHtml, fastReason) = await TryFetchRankDataFragmentAsync(
+                    page, rankingIndex, nickname, serverId, classId, ct, Log);
+                if (fastHtml != null)
+                {
+                    var fastParsed = await TryParseCompleteRankResultAsync(
+                        page, rankingIndex, nickname, server, className, keyword, fastHtml);
+                    if (fastParsed.Result is not null)
+                    {
+                        Log($"rankdata 직접 호출로 결과 확인: {fastParsed.Result.Rank}위, {fastParsed.Result.ClassName}");
+                        return fastParsed.Result;
+                    }
+                    Log($"rankdata 직접 호출 응답은 받았지만 결과 파싱 실패({fastParsed.Reason}) - 브라우저 흐름으로 재시도");
+                }
+                else
+                {
+                    Log($"rankdata 직접 호출 실패({fastReason}) - 브라우저 흐름으로 재시도");
+                }
+
+                // 서버 선택
                 var serverOk = await SelectByDataAsync(
                     page, "serverid", serverId.ToString(), server.ToString(), CONTROL_READY_TIMEOUT, ct, Log);
                 Log($"select server - {serverOk}");
                 if (!serverOk)
                     throw new TimeoutException($"서버 '{server}' 선택 준비 시간이 초과되었습니다.");
-    
-                
+
+
                 // -------------------- 클래스 선택 --------------------
-                long classId = 0;
-                if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
-                    classId = cid;
-    
-                var classDisplay = classId == 0 ? "전체 클래스" : className?.Trim();
                 var classOk = await SelectByDataAsync(
                     page, "classid", classId.ToString(), classDisplay, CONTROL_READY_TIMEOUT, ct, Log);
                 Log($"select class - {classOk}");
@@ -462,17 +482,90 @@ public static class MobiRankBrowser
         return text[start..end];
     }
 
-    private static async Task<string> ExtractRecordBlockAsync(IPage page, string nickname, string keyword)
+    private sealed record RankDataFetchResult(bool Ok, string? Html, string? Reason);
+
+    // 공식 mmRanking.js(list 함수)가 검색 시 호출하는 것과 같은 요청을 페이지 컨텍스트
+    // 안에서 직접 보냅니다. 이미 보안 검사를 통과한 탭에서 실행하므로 쿠키는 same-origin
+    // fetch 기본 동작으로 자동 전송됩니다. 실패하면 호출부가 기존 브라우저 조작 흐름으로
+    // 넘어갈 수 있도록 (null, 실패사유)를 돌려줍니다.
+    private static async Task<(string? Html, string Reason)> TryFetchRankDataFragmentAsync(
+        IPage page,
+        int rankingIndex,
+        string nickname,
+        int serverId,
+        long classId,
+        CancellationToken ct,
+        Action<string> log)
+    {
+        try
+        {
+            var json = await page.EvaluateAsync<string>(
+                @"async (args) => {
+                    const form = new FormData();
+                    form.append(""t"", String(args.rankingIndex));
+                    form.append(""pageno"", ""1"");
+                    form.append(""s"", String(args.serverId));
+                    form.append(""c"", String(args.classId));
+                    form.append(""search"", args.nickname);
+
+                    let response;
+                    try {
+                        response = await fetch(""/Ranking/List/rankdata"", {
+                            method: ""POST"",
+                            cache: ""no-cache"",
+                            headers: { ""X-Requested-With"": ""XMLHttpRequest"" },
+                            body: form
+                        });
+                    } catch (e) {
+                        return JSON.stringify({ Ok: false, Reason: ""fetch 예외: "" + (e?.message || String(e)) });
+                    }
+
+                    if (!response.ok)
+                        return JSON.stringify({ Ok: false, Reason: ""HTTP "" + response.status });
+
+                    const text = await response.text();
+                    try {
+                        const parsed = JSON.parse(text);
+                        if (parsed && typeof parsed === ""object"")
+                            return JSON.stringify({ Ok: false, Reason: parsed.ResultMessage || ""서버가 JSON 오류 응답을 반환함"" });
+                    } catch (e) { /* JSON이 아니면 정상 HTML 응답 */ }
+
+                    if (text.indexOf(""결과가 없습니다."") > -1)
+                        return JSON.stringify({ Ok: false, Reason: ""검색 결과 없음"" });
+
+                    return JSON.stringify({ Ok: true, Html: text });
+                }",
+                new { rankingIndex, nickname, serverId, classId });
+
+            var result = JsonSerializer.Deserialize<RankDataFetchResult>(json);
+            if (result is { Ok: true })
+                return (result.Html, "완료");
+
+            return (null, result?.Reason ?? "알 수 없는 실패");
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            log($"rankdata 직접 호출 예외: {ex.GetType().Name}: {ex.Message}");
+            return (null, $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    // html이 없으면 실제 페이지(document)를, 있으면 rankdata 직접 호출로 받은 HTML 조각을
+    // 대상으로 탐색합니다. 조각은 document에 붙이지 않은 임시 div에 innerHTML로 채워 넣습니다.
+    private static async Task<string> ExtractRecordBlockAsync(IPage page, string nickname, string keyword, string? html = null)
     {
         // 검색 결과가 재렌더링되는 도중 Locator 개수와 실제 노드가 달라지는 경쟁 조건을 피하기 위해
         // 한 번의 브라우저 DOM 평가 안에서 후보 탐색과 텍스트 추출을 끝냅니다.
         return await page.EvaluateAsync<string>(
             @"args => {
                 const normalize = value => (value || """").replace(/\s+/g, "" "").trim();
+                const root = args.html != null
+                    ? Object.assign(document.createElement(""div""), { innerHTML: args.html })
+                    : document;
                 const expectedCharacter = `캐릭터명 ${args.nickname}`;
 
                 const candidates = Array.from(
-                    document.querySelectorAll(""li, div, article, section, tr""))
+                    root.querySelectorAll(""li, div, article, section, tr""))
                     .map(element => normalize(element.innerText || element.textContent))
                     .filter(text =>
                         text.includes(expectedCharacter)
@@ -486,7 +579,7 @@ public static class MobiRankBrowser
                 candidates.sort((left, right) => left.length - right.length);
                 return candidates[0];
             }",
-            new { nickname, keyword });
+            new { nickname, keyword, html });
     }
 
     private static string SliceOneRecordFromPlain(string all, string nickname)
@@ -527,16 +620,20 @@ public static class MobiRankBrowser
         string? Charm,
         string? Life);
 
-    private static async Task<OverallRankFields?> ExtractOverallRankFieldsAsync(IPage page, string nickname)
+    // html이 없으면 실제 페이지(document)를, 있으면 rankdata 직접 호출로 받은 HTML 조각을 대상으로 탐색합니다.
+    private static async Task<OverallRankFields?> ExtractOverallRankFieldsAsync(IPage page, string nickname, string? html = null)
     {
         // 결과 항목을 찾고 필드를 읽는 일을 하나의 DOM 평가에서 끝냅니다. 닉네임을
         // CSS selector에 삽입하지 않아 특수문자가 있어도 selector가 깨지지 않습니다.
         var json = await page.EvaluateAsync<string?>(
-            @"nickname => {
+            @"args => {
                 const normalize = value => (value || """").replace(/\s+/g, "" "").trim();
+                const root = args.html != null
+                    ? Object.assign(document.createElement(""div""), { innerHTML: args.html })
+                    : document;
                 const character = Array.from(
-                    document.querySelectorAll(""li.item dd[data-charactername]""))
-                    .find(node => node.getAttribute(""data-charactername"") === nickname);
+                    root.querySelectorAll(""li.item dd[data-charactername]""))
+                    .find(node => node.getAttribute(""data-charactername"") === args.nickname);
                 const item = character?.closest(""li.item"");
                 if (!item)
                     return null;
@@ -563,7 +660,7 @@ public static class MobiRankBrowser
                     Life: normalize(scoreDl?.querySelector(""span.type_3"")?.textContent)
                 });
             }",
-            nickname);
+            new { nickname, html });
 
         return string.IsNullOrWhiteSpace(json)
             ? null
@@ -895,11 +992,12 @@ public static class MobiRankBrowser
         string nickname,
         MobiServer requestedServer,
         string? requestedClass,
-        string keyword)
+        string keyword,
+        string? html = null)
     {
         if (rankingIndex == 4)
         {
-            var overall = await ExtractOverallRankFieldsAsync(page, nickname);
+            var overall = await ExtractOverallRankFieldsAsync(page, nickname, html);
             if (overall is null)
                 return (null, "대상 캐릭터 항목을 찾지 못함");
 
@@ -930,7 +1028,7 @@ public static class MobiRankBrowser
                 life), "완료");
         }
 
-        var block = await ExtractRecordBlockAsync(page, nickname, keyword);
+        var block = await ExtractRecordBlockAsync(page, nickname, keyword, html);
         if (string.IsNullOrWhiteSpace(block))
             return (null, "대상 캐릭터 항목을 찾지 못함");
 
