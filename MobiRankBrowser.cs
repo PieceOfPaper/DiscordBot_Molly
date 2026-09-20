@@ -74,10 +74,10 @@ public static class MobiRankBrowser
     private static readonly PageGotoOptions s_PageGotoOpt = new()
     {
         WaitUntil = WaitUntilState.DOMContentLoaded,
-        Timeout = 60000,
+        Timeout = 30000,
     };
-    private const int SELECT_TIMEOUT = 16000;
-    private const int SELECT_RENDER_WAIT_TIME = 4000; //무언가 선택했을 때 렌더링까지 대기하는 시간
+    private const int SELECT_TIMEOUT = 8000;
+    private const int SELECT_RENDER_WAIT_TIME = 2000; //무언가 선택했을 때 렌더링까지 대기하는 시간
 
     public class BrowserContainer : IAsyncDisposable
     {
@@ -102,8 +102,17 @@ public static class MobiRankBrowser
             Log("init browser");
 
             m_BrowserContext = await m_Browser.NewContextAsync(s_BrowserNewContextOpt);
-            m_BrowserContext.SetDefaultTimeout(10000); // 일반 동작(클릭/채우기)은 10초
-            m_BrowserContext.SetDefaultNavigationTimeout(60000); // 네비게이션은 60초로 별도 설정
+            await m_BrowserContext.RouteAsync("**/*",
+                async route =>
+                {
+                    var t = route.Request.ResourceType;
+                    if (t is "image" or "media" or "font")
+                        await route.AbortAsync();
+                    else
+                        await route.ContinueAsync();
+                });
+            m_BrowserContext.SetDefaultTimeout(5000); // 일반 동작(클릭/채우기)은 5초
+            m_BrowserContext.SetDefaultNavigationTimeout(30000); // 네비게이션은 30초로 별도 설정
             Log("init browser context");
 
             m_IsInited = true;
@@ -150,13 +159,8 @@ public static class MobiRankBrowser
             {
                 page = await m_BrowserContext.NewPageAsync();
                 Log("NewPageAsync success");
-                var homeResponse = await page.GotoAsync(
-                    "https://mabinogimobile.nexon.com/",
-                    s_PageGotoOpt);
-                var homeTitle = await page.TitleAsync();
-                Log($"공식 홈페이지 이동 완료 - HTTP 상태: {homeResponse?.Status.ToString() ?? "응답 없음"}");
-                Log($"공식 홈페이지 제목: {homeTitle}");
-
+                await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
+                Log("page.RouteAsync success");
                 var navigationResponse = await page.GotoAsync(
                     $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
                     s_PageGotoOpt);
@@ -575,7 +579,7 @@ public static class MobiRankBrowser
         await option.ClickAsync(new() { Timeout = timeoutMs });
 
         // 4) 렌더링 안정화 약간
-        await page.WaitForTimeoutAsync(300);
+        await page.WaitForTimeoutAsync(150);
 
         // 5) 선택 검증
         // (A) 기대 텍스트가 있으면 .selected에 포함되는지 확인
@@ -602,7 +606,7 @@ public static class MobiRankBrowser
             // 최악의 경우 한 번 더 드롭다운을 열어 현재 표시 텍스트로 재검증
             if (!string.IsNullOrWhiteSpace(expectSelectedText))
             {
-                await selectBox.Locator(".selected").ClickAsync(new() { Timeout = 2000 });
+                await selectBox.Locator(".selected").ClickAsync(new() { Timeout = 1000 });
                 var selText = (await selectBox.Locator(".selected").InnerTextAsync()).Trim();
                 var ok = selText.Contains(expectSelectedText!, StringComparison.OrdinalIgnoreCase);
                 log($"select re-verify: '{selText}' vs '{expectSelectedText}' -> {ok}");
@@ -622,7 +626,7 @@ public static class MobiRankBrowser
     {
         // 페이지에 select_box가 최소 2개 나타날 때까지 대기
         var boxes = page.Locator("div.select_box");
-        await boxes.First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = Math.Max(timeoutMs, 8000) });
+        await boxes.First.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = Math.Max(timeoutMs, 4000) });
 
         var boxCount = await boxes.CountAsync();
         if (boxCount == 0)
@@ -644,7 +648,7 @@ public static class MobiRankBrowser
             // 2) 올바른 타입의 항목이 나타나는지 짧게 확인
             var pattern = $"li[data-searchtype='{dataType}']";
             var found = await page.Locator(pattern).First.WaitForAsync(
-                new() { State = WaitForSelectorState.Visible, Timeout = 2400 }
+                new() { State = WaitForSelectorState.Visible, Timeout = 1200 }
             ).ContinueWith(t => t.Status == TaskStatus.RanToCompletion);
 
             if (!found)
@@ -659,7 +663,7 @@ public static class MobiRankBrowser
             await option.ClickAsync(new() { Timeout = timeoutMs });
 
             // 4) 약간의 안정화
-            await page.WaitForTimeoutAsync(300);
+            await page.WaitForTimeoutAsync(150);
 
             // 5) 선택 검증
             try
