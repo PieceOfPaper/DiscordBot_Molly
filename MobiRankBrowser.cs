@@ -67,7 +67,6 @@ public static class MobiRankBrowser
     };
     private static readonly BrowserNewContextOptions s_BrowserNewContextOpt = new()
     {
-        UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         Locale = "ko-KR",
         TimezoneId = "Asia/Seoul",
         ServiceWorkers = ServiceWorkerPolicy.Block,
@@ -165,8 +164,17 @@ public static class MobiRankBrowser
                 Log("NewPageAsync success");
                 await page.RouteAsync("**/*.{png,jpg,jpeg,gif,webp,mp4,mp3,woff,woff2,ttf}", r => r.AbortAsync());
                 Log("page.RouteAsync success");
-                await page.GotoAsync($"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}", s_PageGotoOpt);
-                Log("page.GotoAsync success");
+                var navigationResponse = await page.GotoAsync(
+                    $"https://mabinogimobile.nexon.com/Ranking/List?t={rankingIndex}",
+                    s_PageGotoOpt);
+                var actualUserAgent = await page.EvaluateAsync<string>("() => navigator.userAgent");
+                var actualPlatform = await page.EvaluateAsync<string>("() => navigator.platform");
+                var pageTitle = await page.TitleAsync();
+
+                Log($"페이지 이동 완료 - HTTP 상태: {navigationResponse?.Status.ToString() ?? "응답 없음"}");
+                Log($"실제 브라우저 User-Agent: {actualUserAgent}");
+                Log($"실제 브라우저 플랫폼: {actualPlatform}");
+                Log($"페이지 제목: {pageTitle}");
     
     
                 // 서버 선택
