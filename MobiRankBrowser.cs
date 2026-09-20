@@ -597,7 +597,8 @@ public static class MobiRankBrowser
                     if (await selected.CountAsync() == 0)
                         continue;
 
-                    var selectedText = (await selected.InnerTextAsync()).Trim();
+                    var selectedText = (await selected.EvaluateAsync<string>(
+                        "element => (element.textContent || '').trim()")).Trim();
                     if (!string.IsNullOrWhiteSpace(expectSelectedText)
                         && selectedText.Contains(expectSelectedText, StringComparison.OrdinalIgnoreCase))
                     {
@@ -605,17 +606,19 @@ public static class MobiRankBrowser
                         return true;
                     }
 
-                    await selected.ClickAsync(new() { Timeout = SINGLE_ACTION_TIMEOUT });
+                    // 동적 렌더링 중에는 Playwright의 화면 클릭 가능 판정이 오래 걸릴 수 있습니다.
+                    // DOM에 연결된 최신 요소를 매 폴링마다 다시 찾아 직접 클릭합니다.
+                    await selected.EvaluateAsync("element => element.click()");
 
-                    var option = page.Locator(optionSelector).First;
+                    var option = box.Locator(optionSelector).First;
                     if (await option.CountAsync() == 0)
-                    {
-                        await page.Keyboard.PressAsync("Escape");
                         continue;
-                    }
 
-                    await option.ClickAsync(new() { Timeout = SINGLE_ACTION_TIMEOUT });
-                    selectedText = (await selected.InnerTextAsync()).Trim();
+                    await option.EvaluateAsync("element => element.click()");
+                    await Task.Delay(250, ct);
+
+                    selectedText = (await selected.EvaluateAsync<string>(
+                        "element => (element.textContent || '').trim()")).Trim();
                     if (string.IsNullOrWhiteSpace(expectSelectedText)
                         || selectedText.Contains(expectSelectedText, StringComparison.OrdinalIgnoreCase))
                     {
@@ -623,7 +626,7 @@ public static class MobiRankBrowser
                         return true;
                     }
                 }
-                catch (PlaywrightException)
+                catch (Exception) when (!ct.IsCancellationRequested)
                 {
                     // 동적 재렌더링으로 기존 요소가 교체될 수 있으므로 다음 폴링에서 다시 찾습니다.
                 }
