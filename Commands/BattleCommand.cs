@@ -20,12 +20,14 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         catch { await RespondAsync("상대는 현재 이 서버의 사용자여야 해요.", ephemeral: true); return; }
         if (!Program.instance.Battles.Current.IsUsable) { await RespondAsync("배틀 데이터가 아직 준비되지 않았어요. 시트 데이터와 마지막 갱신 상태를 확인해주세요.", ephemeral: true); return; }
         if (!Program.instance.BattleSessions.TryEnter(Context.Guild.Id, out var session)) { await RespondAsync("이 서버에서는 이미 배틀이 진행 중이에요.", ephemeral: true); return; }
-        await DeferAsync(ephemeral: true);
         IThreadChannel? thread = null;
         string? aLabel = null;
         string? bLabel = null;
         try
         {
+            // DeferAsync를 try 밖에서 호출하면 실패 시 finally의 세션 해제가 실행되지 않아
+            // 길드의 배틀 슬롯이 영구히 "진행 중" 상태로 남으므로 반드시 try 안에서 호출합니다.
+            await DeferAsync(ephemeral: true);
             var a = await ResolveAsync(Context.User.Id, Context.Guild.Id, session.CancellationToken);
             var b = await ResolveAsync(opponent.Id, Context.Guild.Id, session.CancellationToken);
             session.CancellationToken.ThrowIfCancellationRequested();
