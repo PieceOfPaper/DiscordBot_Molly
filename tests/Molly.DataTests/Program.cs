@@ -124,6 +124,8 @@ var searchTable = RuneCsvReader.Parse(header + "2,전설,무기,전사,거대한
 Check(RuneSearch.Find(searchTable, " 분노 ").Count == 3, "이름 부분 일치 전체 검색 및 앞뒤 공백 제거");
 Check(RuneSearch.Find(searchTable, "분노".Normalize(System.Text.NormalizationForm.FormD)).Count == 3, "한글 유니코드 정규화 검색");
 Check(RuneSearch.Find(searchTable, "없는이름").Count == 0, "검색 결과 없음");
+Check(RuneSearch.Find(searchTable, "거대한분노").Count == 1, "룬 이름의 띄어쓰기를 무시하고 검색");
+Check(RuneSearch.Find(searchTable, "분 노 의 힘").Count == 1, "검색어의 띄어쓰기도 무시");
 foreach (var empty in new string?[] { null, "", " ", "\t\r\n", "　" })
 {
     try { RuneSearch.Find(searchTable, empty); throw new Exception("빈 검색어 허용"); }

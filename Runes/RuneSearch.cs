@@ -8,10 +8,15 @@ public static class RuneSearch
     {
         if (string.IsNullOrWhiteSpace(keyword))
             throw new ArgumentException("검색할 룬 이름을 입력해주세요.", nameof(keyword));
-        var query = keyword.Trim().Normalize(NormalizationForm.FormC);
-        return table.Items.Where(r => r.Name.Normalize(NormalizationForm.FormC)
+        var query = RemoveWhitespace(keyword.Normalize(NormalizationForm.FormC));
+        return table.Items.Where(r => RemoveWhitespace(r.Name.Normalize(NormalizationForm.FormC))
             .Contains(query, StringComparison.OrdinalIgnoreCase)).ToArray();
     }
+
+    // 룬 이름 표기가 띄어쓰기까지 정확히 일치해야만 검색되는 것을 막기 위해
+    // 비교 전 모든 공백을 제거합니다.
+    private static string RemoveWhitespace(string value)
+        => string.Concat(value.Where(c => !char.IsWhiteSpace(c)));
 
     public static string Format(IReadOnlyList<RuneData> results)
         => $"룬 검색 결과: {results.Count}개\n\n" + string.Join("\n\n", results.Select(r =>
