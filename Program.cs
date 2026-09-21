@@ -90,7 +90,6 @@ class Program
                 Console.WriteLine($"[Discord] interaction 수신 type={inter.Type} name={commandName} id={inter.Id}");
                 if (inter is SocketSlashCommand slashCommand)
                     Console.WriteLine($"[Discord] 수신 옵션: {string.Join(", ", slashCommand.Data.Options.Select(o => $"{o.Name}={o.Value}"))}");
-                Console.WriteLine($"[Discord] 로컬 슬래시 명령: {string.Join(", ", m_InteractionService.SlashCommands.Select(x => x.Name))}");
                 var ctx = new SocketInteractionContext(m_Client, inter);
                 var result = await m_InteractionService.ExecuteCommandAsync(ctx, null);
                 Console.WriteLine($"[Discord] interaction 처리 결과 success={result.IsSuccess} reason={result.ErrorReason}");
