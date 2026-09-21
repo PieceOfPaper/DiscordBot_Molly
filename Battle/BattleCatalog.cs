@@ -163,6 +163,7 @@ public sealed class BattleCatalog
                 throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'가 존재하지 않는 상태 효과 ID '{statusId}'를 참조합니다.");
             if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
             if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
+            if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
             if (effect.NumericReferenceId is { } referenceId && !resourceMap.ContainsKey(referenceId)) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 수치 참조 자원이 올바르지 않습니다.");
         }
         var derivationList = Unique(derivations, "배틀스킬파생").Select((x, i) => new BattleDerivation(x["ID"], x["부모스킬ID"], x["파생스킬ID"], x["발동방식"], BattleCsv.Double(x["가중치"], "배틀스킬파생", i + 2, "가중치"), BattleCsv.Double(x["발동확률"], "배틀스킬파생", i + 2, "발동확률", 0, 1), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건값"]), string.IsNullOrWhiteSpace(x["중복허용"]) ? false : BattleCsv.Bool(x["중복허용"], "배틀스킬파생", i + 2, "중복허용"), x["실행시점"], string.IsNullOrWhiteSpace(x["우선순위"]) ? 0 : BattleCsv.Int(x["우선순위"], "배틀스킬파생", i + 2, "우선순위"))).ToArray();

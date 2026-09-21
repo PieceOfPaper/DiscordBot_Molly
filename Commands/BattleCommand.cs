@@ -89,7 +89,10 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
     }
 
     private static string CombatantName(IUser user, CharacterBattleSnapshot character)
-        => user.Mention + "(" + character.CharacterName + ")";
+    {
+        var className = Program.instance.Battles.Current.Classes.TryGetValue(character.ClassId, out var battleClass) ? battleClass.Name : character.ClassId;
+        return user.Mention + "(" + character.CharacterName + " · " + className + ")";
+    }
 
     private static async Task SendAsync(IMessageChannel channel, string text, AllowedMentions? allowedMentions = null)
     {

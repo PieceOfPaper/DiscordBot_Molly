@@ -281,6 +281,9 @@ public sealed class BattleEngine
             "자원보유" when effect.ConditionId is { } id => ResourceCondition(conditionOwner, id + (effect.ConditionOperator ?? "=") + (effect.ConditionValue ?? "0")),
             // 악상처럼 같은 분류에서 하나만 유지하는 자원은, 이미 다른 값이 있으면 새 값을 만들지 않는다.
             "분류자원미보유" when effect.ConditionId is { } kind => !conditionOwner.ResourceDefinitions.Values.Any(x => x.Kind == kind && conditionOwner.Resources.GetValueOrDefault(x.Id) > 0),
+            // 배틀스킬파생의 상태효과보유 판정과 동일한 의미다. 조건대상=상대로 상대의 상태를 검사할 수 있다.
+            "상태효과보유" when effect.ConditionId is { } statusId => conditionOwner.Statuses.ContainsKey(statusId),
+            "상태효과미보유" when effect.ConditionId is { } statusId => !conditionOwner.Statuses.ContainsKey(statusId),
             _ => false
         };
     }

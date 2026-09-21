@@ -523,6 +523,92 @@ var melodySnapshot = new BattleDataSnapshot
 };
 var melodyBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), melodySnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 100)));
 Check(melodyBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "용맹 악상 +1 (현재 1)") && !melodyBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Detail?.Contains("희망 악상 +1") == true) && melodyBattle.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "용맹의 찬가") && !melodyBattle.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "바즈 테일") && melodyBattle.Events.Any(x => x.Type == "DamageDealt" && x.Actor == "A"), "악상 생성은 비어 있을 때만 실행되고 바즈 테일을 실제 연주곡으로 대체");
+var swordResources = new Dictionary<string, BattleResource>
+{
+    ["sw_secret_ready"] = new("sw_secret_ready", "비검 준비", "자원", 1, 0, 0, "교체"),
+    ["sw_last_steel"] = new("sw_last_steel", "최근 기술: 강철", "최근기술", 1, 0, 0, "상호배타"),
+    ["sw_last_gale"] = new("sw_last_gale", "최근 기술: 질풍", "최근기술", 1, 0, 0, "상호배타")
+};
+var steelSkill = new BattleSkill("steel", "강철 쐐기", "일반", null, true, 2, 0, 1, 1,
+    [new BattleEffect("ready", 1, "자원설정", "자신", 1, 1, 1, 0, "sw_secret_ready", 1, null, null, null, null, null, null, null, null),
+     new BattleEffect("marker", 2, "자원설정", "자신", 1, 1, 1, 0, "sw_last_steel", 1, null, null, null, null, null, null, null, null)]);
+var secretSkill = new BattleSkill("secret", "비검", "일반", null, true, 2, 0, 1, 1, Array.Empty<BattleEffect>(), "sw_secret_ready", "1");
+var secretSteel = new BattleSkill("secret_steel", "비검: 강철", "파생", "secret", true, 0, 0, 1, 1,
+    [new BattleEffect("dmg", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var secretGale = new BattleSkill("secret_gale", "비검: 질풍", "파생", "secret", true, 0, 0, 1, 1,
+    [new BattleEffect("dmg", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var swordRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+swordRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "3", "");
+var swordSnapshot = new BattleDataSnapshot
+{
+    Rules = swordRules,
+    Classes = new Dictionary<string, BattleClass> { ["sword"] = new("sword", "검술사테스트", ["steel", "secret"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["steel"] = steelSkill, ["secret"] = secretSkill, ["secret_steel"] = secretSteel, ["secret_gale"] = secretGale },
+    Resources = swordResources,
+    Derivations =
+    [
+        new BattleDerivation("to_steel", "secret", "secret_steel", "대체", 0, 1, "자원보유", "sw_last_steel", false, "즉시", 100),
+        new BattleDerivation("to_gale", "secret", "secret_gale", "대체", 0, 1, "자원보유", "sw_last_gale", false, "즉시", 100)
+    ],
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var swordBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "sword", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "sword", 100, 0, 0), swordSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 200)));
+Check(swordBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "강철 쐐기") == 1
+    && swordBattle.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "비검: 강철")
+    && !swordBattle.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "비검"),
+    "검술사 비검은 준비 자원 없이는 사용되지 않고, 준비되면 마지막으로 사용한 기술에 따라 대체된다");
+var singleActionRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+singleActionRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "1", "");
+var markedStatus = new BattleStatus("marked", "표식", "없음", 0, "표식 상태");
+var conditionSkillWith = new BattleSkill("condition_with", "조건 스킬(마크)", "일반", null, true, 2, 0, 1, 1,
+    [new BattleEffect("mark", 1, "상태효과", "상대", 0, 1, 1, 3, "marked", 1, null, null, null, null, null, null, null, null),
+     new BattleEffect("bonus", 2, "피해", "상대", 0, 1, 1, 0, null, 0, null, "상대", "상태효과보유", "marked", null, null, null, null)]);
+var conditionSnapshotWith = new BattleDataSnapshot { Rules = singleActionRules, Classes = new Dictionary<string, BattleClass> { ["cond"] = new("cond", "조건", ["condition_with"]) }, Skills = new Dictionary<string, BattleSkill> { ["condition_with"] = conditionSkillWith }, Statuses = new Dictionary<string, BattleStatus> { ["marked"] = markedStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var conditionBattleWith = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "cond", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "cond", 100, 0, 0), conditionSnapshotWith, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(conditionBattleWith.Events.Count(x => x.Type == "DamageDealt" && x.Actor == "A") >= 1, "배틀스킬효과의 상태효과보유 조건은 같은 스킬 안에서 먼저 적용된 상대 상태를 인식한다");
+var conditionSkillWithout = new BattleSkill("condition_without", "조건 스킬(마크 없음)", "일반", null, true, 2, 0, 1, 1,
+    [new BattleEffect("bonus", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, "상대", "상태효과보유", "marked", null, null, null, null)]);
+var conditionSnapshotWithout = new BattleDataSnapshot { Rules = singleActionRules, Classes = new Dictionary<string, BattleClass> { ["cond"] = new("cond", "조건", ["condition_without"]) }, Skills = new Dictionary<string, BattleSkill> { ["condition_without"] = conditionSkillWithout }, Statuses = new Dictionary<string, BattleStatus> { ["marked"] = markedStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var conditionBattleWithout = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "cond", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "cond", 100, 0, 0), conditionSnapshotWithout, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(!conditionBattleWithout.Events.Any(x => x.Type == "DamageDealt" && x.Actor == "A"), "상태효과보유 조건은 대상이 해당 상태를 보유하지 않으면 발동하지 않는다");
+
+var twoActionRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+twoActionRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "6", "");
+twoActionRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+var gaugeResource = new BattleResource("gauge", "게이지", "자원", 100, 0, 0, "가산");
+var focusedStatus = new BattleStatus("focused", "집중", "치명타확률증가", 0.2, "치명타 확률 증가");
+var chargeSkill = new BattleSkill("charge", "충전", "일반", null, true, 2, 0, 1, 1,
+    [new BattleEffect("add", 1, "자원증가", "자신", 60, 1, 1, 0, "gauge", 1, null, null, null, null, null, null, null, null),
+     new BattleEffect("apply", 2, "상태효과", "자신", 0, 1, 1, 5, "focused", 1, null, "자신", "자원보유", "gauge", ">=", "100", null, null),
+     new BattleEffect("reset", 3, "자원소모", "자신", 0, 1, 1, 0, "gauge", 0, null, "자신", "자원보유", "gauge", ">=", "100", null, "전부")]);
+var gaugeSnapshot = new BattleDataSnapshot
+{
+    Rules = twoActionRules,
+    Classes = new Dictionary<string, BattleClass> { ["charger"] = new("charger", "충전자", ["charge"]), ["target"] = new("target", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["charge"] = chargeSkill },
+    Resources = new Dictionary<string, BattleResource> { ["gauge"] = gaugeResource },
+    Statuses = new Dictionary<string, BattleStatus> { ["focused"] = focusedStatus },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var gaugeBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "charger", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), gaugeSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 200))));
+Check(gaugeBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "충전") == 2
+    && gaugeBattle.Events.Any(x => x.Type == "StatusApplied" && x.Actor == "A" && x.Detail == "집중")
+    && gaugeBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail != null && x.Detail.Contains("게이지") && x.Detail.Contains("(현재 0)")),
+    "게이지 자원이 임계값에 도달하면 조건부 효과로 상태를 부여하고 자원을 초기화한다");
+
+var ultSkill = new BattleSkill("ult", "궁극기 스킬", "궁극기", null, true, 0, 0, 1, 1,
+    [new BattleEffect("dmg", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)],
+    "궁극기", "100");
+var ultClasses = new Dictionary<string, BattleClass> { ["ult"] = new("ult", "궁극기", ["ult"]) };
+var ultSkills = new Dictionary<string, BattleSkill> { ["ult"] = ultSkill };
+var ultSnapshotEmpty = new BattleDataSnapshot { Rules = battleRules, Classes = ultClasses, Skills = ultSkills, Resources = new Dictionary<string, BattleResource> { ["ult_gauge"] = new("ult_gauge", "궁극기 자원", "궁극기", 100, 0, 0, "가산") }, LoadedAt = DateTimeOffset.UtcNow };
+var ultBattleEmpty = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ult", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "ult", 100, 0, 0), ultSnapshotEmpty, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(!ultBattleEmpty.Events.Any(x => x.Type == "SkillUsed" && x.Detail == "궁극기 스킬") && ultBattleEmpty.Events.Any(x => x.Type == "NormalAttackUsed"),
+    "분류로만 일치하는 궁극기 자원도 비용을 만족하지 못하면 후보에서 제외된다");
+var ultSnapshotFull = new BattleDataSnapshot { Rules = battleRules, Classes = ultClasses, Skills = ultSkills, Resources = new Dictionary<string, BattleResource> { ["ult_gauge"] = new("ult_gauge", "궁극기 자원", "궁극기", 100, 100, 0, "가산") }, LoadedAt = DateTimeOffset.UtcNow };
+var ultBattleFull = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ult", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "ult", 100, 0, 0), ultSnapshotFull, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(ultBattleFull.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "궁극기 스킬"), "궁극기 자원이 비용을 만족하면 분류 일치만으로도 해당 스킬을 사용할 수 있다");
+
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)
