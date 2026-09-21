@@ -174,6 +174,10 @@ Discord에서 `/룬`을 선택하고 `이름` 옵션에 `분노`를 입력하면
 dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release
 # 실제 시트 다운로드와 파싱만 확인 (네트워크 필요, CI에서는 실행하지 않음)
 dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --live
+# 배틀 준비된 클래스끼리 전투력을 동일하게 맞춰 모의 전투를 반복하고 승률·스킬 사용 빈도를 출력
+# (기획 밸런스 점검용 개발 전용 명령, 네트워크 필요, CI에서는 실행하지 않음)
+# 두 번째 인자는 상대 클래스마다 반복할 전투 횟수(생략 시 300)
+dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --battle-balance 300
 ```
 
 ## 참고

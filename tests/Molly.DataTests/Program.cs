@@ -32,6 +32,68 @@ if (args.SequenceEqual(new[] { "--battle-live" }))
     Console.WriteLine($"실제 배틀 시트: 클래스 {snapshot.Classes.Count}개, 스킬 {snapshot.Skills.Count}개");
     return;
 }
+if (args.Length >= 1 && args[0] == "--battle-balance")
+{
+    // 기획 밸런스 점검 전용: 모든 배틀 준비 클래스를 동일 전투력으로 맞붙여 승률·스킬 사용 빈도를 뽑는다.
+    // 실제 봇 실행과 무관하며 CI(verify.sh)에서는 호출하지 않는다.
+    var iterations = args.Length >= 2 && int.TryParse(args[1], out var parsedIterations) ? parsedIterations : 300;
+    using var client = new HttpClient();
+    var source = new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId);
+    var data = BattleCatalog.Parse(await source.FetchAsync(default), DateTimeOffset.UtcNow);
+    var classes = data.Classes.Values.Where(x => x.IsBattleReady).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray();
+    if (classes.Length < 2) { Console.WriteLine("배틀 준비된 클래스가 2개 미만이라 밸런스 시뮬레이션을 할 수 없습니다."); return; }
+    const int power = 1000;
+    var engine = new BattleEngine();
+    var random = new SystemBattleRandom();
+    var wins = classes.ToDictionary(x => x.Id, _ => 0);
+    var draws = classes.ToDictionary(x => x.Id, _ => 0);
+    var matches = classes.ToDictionary(x => x.Id, _ => 0);
+    var skillUses = classes.ToDictionary(x => x.Id, _ => new Dictionary<string, int>(StringComparer.Ordinal));
+    long totalActions = 0;
+    var totalBattles = 0;
+    for (var i = 0; i < classes.Length; i++)
+        for (var j = i + 1; j < classes.Length; j++)
+        {
+            var (ca, cb) = (classes[i], classes[j]);
+            for (var k = 0; k < iterations; k++)
+            {
+                var a = new CharacterBattleSnapshot(0, ca.Name, ca.Id, power, power, power);
+                var b = new CharacterBattleSnapshot(0, cb.Name, cb.Id, power, power, power);
+                var result = engine.Simulate(a, b, data, random);
+                matches[ca.Id]++; matches[cb.Id]++; totalActions += result.MajorActions; totalBattles++;
+                if (result.Outcome == BattleOutcome.FighterAWin) wins[ca.Id]++;
+                else if (result.Outcome == BattleOutcome.FighterBWin) wins[cb.Id]++;
+                else { draws[ca.Id]++; draws[cb.Id]++; }
+                foreach (var e in result.Events)
+                {
+                    var skillName = e.Type switch { "SkillUsed" or "DerivedSkillUsed" => e.Detail, "NormalAttackUsed" => "(일반 공격)", _ => null };
+                    if (skillName is null) continue;
+                    var uses = skillUses[e.Actor == ca.Name ? ca.Id : cb.Id];
+                    uses[skillName] = uses.GetValueOrDefault(skillName) + 1;
+                }
+            }
+        }
+    Console.WriteLine($"=== 클래스 승률 (전투력 {power} 동일, 클래스당 상대별 {iterations}회, 총 {classes.Length}개 클래스) ===");
+    foreach (var c in classes.OrderByDescending(x => (double)wins[x.Id] / matches[x.Id]))
+    {
+        var (m, w, d) = (matches[c.Id], wins[c.Id], draws[c.Id]);
+        Console.WriteLine($"{c.Name,-10} 승 {w,5}/{m,-5} ({(double)w / m:P1})  무 {d,4} ({(double)d / m:P1})");
+    }
+    Console.WriteLine();
+    Console.WriteLine("=== 클래스별 스킬 사용 빈도 (상위 8개) ===");
+    foreach (var c in classes)
+    {
+        var uses = skillUses[c.Id];
+        var total = uses.Values.Sum();
+        if (total == 0) { Console.WriteLine($"[{c.Name}] 사용 스킬 없음"); continue; }
+        Console.WriteLine($"[{c.Name}] 총 {total}회");
+        foreach (var (skill, count) in uses.OrderByDescending(x => x.Value).Take(8))
+            Console.WriteLine($"  {skill,-16} {count,6}회 ({(double)count / total:P1})");
+    }
+    Console.WriteLine();
+    Console.WriteLine($"평균 전투 턴수: {(double)totalActions / totalBattles:F1} (총 {totalBattles}전)");
+    return;
+}
 void Check(bool value, string name)
 {
     if (!value) throw new Exception(name);
