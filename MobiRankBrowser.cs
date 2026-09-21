@@ -128,6 +128,48 @@ public static class MobiRankBrowser
             return m_RankingPage;
         }
 
+        // 탭이 마비노기 모바일 사이트에서 이미 보안 검사를 통과했는지(=페이지를 새로 열지 않고
+        // rankdata를 바로 호출해도 same-origin 쿠키가 실릴 수 있는지) 확인합니다.
+        // 새로 만든 탭은 about:blank 상태라 이 조건을 만족하지 않습니다.
+        private static bool IsPageReadyForQuickFetch(IPage page)
+            => Uri.TryCreate(page.Url, UriKind.Absolute, out var uri)
+                && uri.Host.Equals("mabinogimobile.nexon.com", StringComparison.OrdinalIgnoreCase);
+
+        // 공식 JS(mmRanking.list)가 쓰는 rankdata를 페이지 컨텍스트에서 직접 호출합니다.
+        // UI 클릭·폴링과 페이지 탐색을 모두 건너뛰므로 훨씬 빠르지만, 실패하면 null을 돌려주어
+        // 호출부가 기존 브라우저 조작 흐름으로 넘어갈 수 있게 합니다.
+        private async Task<MobiRankResult?> TryQuickRankFetchAsync(
+            IPage page,
+            string nickname,
+            MobiServer server,
+            string? className,
+            string keyword,
+            int serverId,
+            long classId,
+            CancellationToken ct,
+            Action<string> log,
+            string logPrefix)
+        {
+            var (html, reason) = await TryFetchRankDataFragmentAsync(
+                page, rankingIndex, nickname, serverId, classId, ct, log);
+            if (html == null)
+            {
+                log($"{logPrefix} rankdata 직접 호출 실패({reason})");
+                return null;
+            }
+
+            var parsed = await TryParseCompleteRankResultAsync(
+                page, rankingIndex, nickname, server, className, keyword, html);
+            if (parsed.Result is not null)
+            {
+                log($"{logPrefix} rankdata 직접 호출로 결과 확인: {parsed.Result.Rank}위, {parsed.Result.ClassName}");
+                return parsed.Result;
+            }
+
+            log($"{logPrefix} rankdata 직접 호출 응답은 받았지만 결과 파싱 실패({parsed.Reason})");
+            return null;
+        }
+
         private async Task Init(CancellationToken ct = default, Action<string>? log = null)
         {
             void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {index}: {msg}");
@@ -211,33 +253,36 @@ public static class MobiRankBrowser
 
                 Log($"start search(nickname='{nickname}', server={server}, class='{className ?? "전체 클래스"}')");
 
-                page = await EnsureRankingPageReadyAsync(rankingIndex, ct, Log);
-
                 var serverId = (int)server;          // 예: 칼릭스=7, 몰리=8
                 long classId = 0;
                 if (!string.IsNullOrWhiteSpace(className) && CLASSNAME_TO_ID.TryGetValue(className.Trim(), out var cid))
                     classId = cid;
                 var classDisplay = classId == 0 ? "전체 클래스" : className?.Trim();
 
-                // 0) 공식 JS(mmRanking.list)가 쓰는 rankdata를 페이지 컨텍스트에서 직접 호출합니다.
+                // 0) 이미 랭킹 사이트 탭이 열려 있다면 페이지를 다시 열지 않고 rankdata부터 바로 호출합니다.
+                // Init 실패도 호출부 finally에서 예약을 해제해야 다음 요청이 복구할 수 있습니다.
+                if (!m_IsInited) await Init(ct, Log);
+                page = await GetRankingPageAsync(Log);
+                if (IsPageReadyForQuickFetch(page))
+                {
+                    var quickResult = await TryQuickRankFetchAsync(
+                        page, nickname, server, className, keyword, serverId, classId, ct, Log, "기존 탭에서");
+                    if (quickResult is not null)
+                        return quickResult;
+
+                    Log("기존 탭에서 rankdata 직접 호출 실패 - 랭킹 페이지를 새로 준비합니다.");
+                }
+
+                page = await EnsureRankingPageReadyAsync(rankingIndex, ct, Log);
+
+                // 1) 페이지 탐색·보안 검사 우회를 마친 뒤 rankdata 직접 호출을 다시 시도합니다.
                 // UI 클릭·폴링을 모두 건너뛰므로 훨씬 빠르지만, 실패하면 기존 브라우저 조작 흐름으로 그대로 넘어갑니다.
-                var (fastHtml, fastReason) = await TryFetchRankDataFragmentAsync(
-                    page, rankingIndex, nickname, serverId, classId, ct, Log);
-                if (fastHtml != null)
-                {
-                    var fastParsed = await TryParseCompleteRankResultAsync(
-                        page, rankingIndex, nickname, server, className, keyword, fastHtml);
-                    if (fastParsed.Result is not null)
-                    {
-                        Log($"rankdata 직접 호출로 결과 확인: {fastParsed.Result.Rank}위, {fastParsed.Result.ClassName}");
-                        return fastParsed.Result;
-                    }
-                    Log($"rankdata 직접 호출 응답은 받았지만 결과 파싱 실패({fastParsed.Reason}) - 브라우저 흐름으로 재시도");
-                }
-                else
-                {
-                    Log($"rankdata 직접 호출 실패({fastReason}) - 브라우저 흐름으로 재시도");
-                }
+                var fastResult = await TryQuickRankFetchAsync(
+                    page, nickname, server, className, keyword, serverId, classId, ct, Log, "페이지 준비 후");
+                if (fastResult is not null)
+                    return fastResult;
+
+                Log("rankdata 직접 호출 실패 - 브라우저 흐름으로 재시도");
 
                 // 서버 선택
                 var serverOk = await SelectByDataAsync(
