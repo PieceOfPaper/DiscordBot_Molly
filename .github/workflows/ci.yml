@@ -8,6 +8,7 @@ on:
       - '.gitignore'
       - '.editorconfig'
       - 'LICENSE*'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
   workflow_dispatch:
 
