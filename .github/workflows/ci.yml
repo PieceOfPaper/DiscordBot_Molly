@@ -2,6 +2,12 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.gitignore'
+      - '.editorconfig'
+      - 'LICENSE*'
   pull_request:
   workflow_dispatch:
 
