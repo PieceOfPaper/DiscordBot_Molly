@@ -410,6 +410,19 @@ var breakSnapshot = new BattleDataSnapshot
 };
 var breakBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "breaker", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), breakSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
 Check(breakBattle.Events.Any(x => x.Type == "BreakActivated" && x.Target == "B") && breakBattle.Events.Any(x => x.Type == "BreakActionLost" && x.Target == "B"), "브레이크 게이지 완성 시 상대 행동을 취소한다");
+var multiHitBreakRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+multiHitBreakRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+multiHitBreakRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "60", "");
+multiHitBreakRules["break_gauge_maximum"] = new("break_gauge_maximum", "브레이크", "integer", "3", "");
+multiHitBreakRules["break_duration_turns"] = new("break_duration_turns", "브레이크", "integer", "1", "");
+var multiHitBreakSnapshot = new BattleDataSnapshot { Rules = multiHitBreakRules, Classes = breakSnapshot.Classes, Skills = breakSnapshot.Skills, Statuses = breakSnapshot.Statuses, LoadedAt = DateTimeOffset.UtcNow };
+var multiHitBreakBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "breaker", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), multiHitBreakSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 200))));
+var gaugeHits = multiHitBreakBattle.Events.Where(x => x.Type == "BreakGaugeChanged" && x.Target == "B").ToArray();
+Check(gaugeHits.Length >= 3 && gaugeHits[0].Amount == 1 && gaugeHits[1].Amount == 2 && gaugeHits[2].Amount == 3
+    && multiHitBreakBattle.Events.Any(x => x.Type == "BreakActivated" && x.Target == "B"), "브레이크 게이지 3칸은 세 번째 피해에서만 채워진다");
+var multiHitBreakActivatedCount = multiHitBreakBattle.Events.Count(x => x.Type == "BreakActivated" && x.Target == "B");
+var multiHitBreakActionLostCount = multiHitBreakBattle.Events.Count(x => x.Type == "BreakActionLost" && x.Target == "B");
+Check(multiHitBreakActivatedCount >= 1 && multiHitBreakActionLostCount == multiHitBreakActivatedCount, "브레이크 지속 1턴은 발동마다 상대의 행동을 정확히 한 번만 취소한다");
 var wardSkill = new BattleSkill("ward", "브레이크 방어", "일반", null, true, 5, 0, 1, 1, [new BattleEffect("ward", 1, "브레이크면역", "자신", 0, 1, 1, 2, "break_immunity", 1, null, null, null, null, null, null, null, null)]);
 var immunitySnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["breaker"] = new("breaker", "브레이커", ["break_skill"]), ["ward"] = new("ward", "방어", ["ward"]) }, Skills = new Dictionary<string, BattleSkill> { ["break_skill"] = breakSkill, ["ward"] = wardSkill }, Statuses = breakSnapshot.Statuses, LoadedAt = DateTimeOffset.UtcNow };
 var immunityBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "breaker", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "ward", 100, 0, 0), immunitySnapshot, new FixedBattleRandom(new[] { .9d }.Concat(Enumerable.Repeat(.5d, 100))));
