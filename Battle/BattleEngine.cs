@@ -442,8 +442,18 @@ public sealed class BattleEngine
         }
         public void TickCooldowns()
         {
-            var reduction = Math.Max(1, 1 + (int)Math.Round(StatusValue("쿨다운감소")));
-            foreach (var id in Cooldowns.Keys.ToArray()) Cooldowns[id] = Math.Max(0, Cooldowns[id] - reduction);
+            // 대상스킬ID가 없는 쿨다운감소는 기존처럼 모든 스킬에 적용하고, 대상스킬ID가 있으면 그 스킬에만 더 적용한다.
+            var genericReduction = Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType("쿨다운감소") && status.TargetSkillId is null ? status.Value : 0d);
+            var scopedReduction = Statuses.Keys
+                .Select(id => StatusDefinitions.GetValueOrDefault(id))
+                .Where(status => status is not null && status.HasEffectType("쿨다운감소") && status.TargetSkillId is not null)
+                .GroupBy(status => status!.TargetSkillId!)
+                .ToDictionary(group => group.Key, group => group.Sum(status => status!.Value));
+            foreach (var id in Cooldowns.Keys.ToArray())
+            {
+                var reduction = Math.Max(1, 1 + (int)Math.Round(genericReduction + scopedReduction.GetValueOrDefault(id)));
+                Cooldowns[id] = Math.Max(0, Cooldowns[id] - reduction);
+            }
         }
 
         public double StatusValue(string effectType) => Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType) ? status.Value : 0d);

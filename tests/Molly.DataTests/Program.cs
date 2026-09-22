@@ -609,6 +609,61 @@ var ultSnapshotFull = new BattleDataSnapshot { Rules = battleRules, Classes = ul
 var ultBattleFull = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ult", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "ult", 100, 0, 0), ultSnapshotFull, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
 Check(ultBattleFull.Events.Any(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "궁극기 스킬"), "궁극기 자원이 비용을 만족하면 분류 일치만으로도 해당 스킬을 사용할 수 있다");
 
+// GitHub Issue #1(검술사 배틀 검토) 필수 수정 회귀 테스트: sw_focus류 자원의 지속턴 만료와 대상스킬ID 쿨다운감소 분리.
+var focusRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+focusRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+var tempFocusResource = new BattleResource("temp_focus", "임시 집중", "임시", 1, 0, 3, "가산");
+var sparkSkill = new BattleSkill("spark", "반짝임", "일반", null, true, 0, 0, 1, 1,
+    [new BattleEffect("set", 1, "자원설정", "자신", 1, 1, 1, 0, "temp_focus", 1, null, null, null, null, null, null, null, null)]);
+var focusDurationSnapshot = new BattleDataSnapshot
+{
+    Rules = focusRules,
+    Classes = new Dictionary<string, BattleClass> { ["charger"] = new("charger", "충전자", ["spark"]), ["target"] = new("target", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["spark"] = sparkSkill },
+    Resources = new Dictionary<string, BattleResource> { ["temp_focus"] = tempFocusResource },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var focusDurationBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "charger", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), focusDurationSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 200))));
+var focusDurationEvents = focusDurationBattle.Events.ToList();
+var focusGrantedIndex = focusDurationEvents.FindIndex(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "임시 집중 +1 (현재 1)");
+var focusExpiredIndex = focusDurationEvents.FindIndex(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "임시 집중이(가) 사라졌습니다.");
+Check(focusGrantedIndex >= 0 && focusExpiredIndex > focusGrantedIndex, "지속턴이 있는 자원(sw_focus류)은 상태 효과처럼 정해진 턴 뒤 자동으로 사라진다");
+
+var scopedCooldownRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+scopedCooldownRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+scopedCooldownRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "40", "");
+var galeTargetClasses = new Dictionary<string, BattleClass> { ["gale_class"] = new("gale_class", "질풍 테스트", ["gale_test"]), ["target"] = new("target", "대상", Array.Empty<string>()) };
+var galeSkillBaseline = new BattleSkill("gale_test", "질풍 베기 테스트", "일반", null, true, 6, 0, 1, 1,
+    [new BattleEffect("dmg", 1, "피해", "상대", 1, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var scopedBaselineSnapshot = new BattleDataSnapshot { Rules = scopedCooldownRules, Classes = galeTargetClasses, Skills = new Dictionary<string, BattleSkill> { ["gale_test"] = galeSkillBaseline }, LoadedAt = DateTimeOffset.UtcNow };
+var scopedBaselineBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "gale_class", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), scopedBaselineSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 2000)));
+var scopedBaselineUses = scopedBaselineBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "질풍 베기 테스트");
+var galeHasteStatus = new BattleStatus("gale_haste", "질풍 가속", "쿨다운감소", 1, "질풍 베기 전용 쿨다운 추가 감소", "gale_test");
+var galeSkillHaste = galeSkillBaseline with { Effects = [.. galeSkillBaseline.Effects, new BattleEffect("haste", 2, "상태효과", "자신", 0, 1, 1, 20, "gale_haste", 1, null, null, null, null, null, null, null, null)] };
+var scopedHasteSnapshot = new BattleDataSnapshot { Rules = scopedCooldownRules, Classes = galeTargetClasses, Skills = new Dictionary<string, BattleSkill> { ["gale_test"] = galeSkillHaste }, Statuses = new Dictionary<string, BattleStatus> { ["gale_haste"] = galeHasteStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var scopedHasteBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "gale_class", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), scopedHasteSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 2000)));
+var scopedHasteUses = scopedHasteBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "질풍 베기 테스트");
+Check(scopedHasteUses > scopedBaselineUses, "대상스킬ID로 지정한 쿨다운감소 상태(sw_focus_haste)는 해당 스킬의 재사용 간격을 줄인다");
+
+var guardTargetClasses = new Dictionary<string, BattleClass> { ["guard_class"] = new("guard_class", "간파 테스트", ["guard_test"]), ["target"] = new("target", "대상", Array.Empty<string>()) };
+var guardSkillBaseline = new BattleSkill("guard_test", "간파 테스트", "일반", null, true, 6, 0, 1, 1,
+    [new BattleEffect("dmg", 1, "피해", "상대", 1, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var scopedControlBaselineSnapshot = new BattleDataSnapshot { Rules = scopedCooldownRules, Classes = guardTargetClasses, Skills = new Dictionary<string, BattleSkill> { ["guard_test"] = guardSkillBaseline }, LoadedAt = DateTimeOffset.UtcNow };
+var scopedControlBaselineBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "guard_class", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), scopedControlBaselineSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 2000)));
+var scopedControlBaselineUses = scopedControlBaselineBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "간파 테스트");
+var guardSkillWithUnrelatedHaste = guardSkillBaseline with { Effects = [.. guardSkillBaseline.Effects, new BattleEffect("haste", 2, "상태효과", "자신", 0, 1, 1, 20, "gale_haste", 1, null, null, null, null, null, null, null, null)] };
+var scopedControlHasteSnapshot = new BattleDataSnapshot { Rules = scopedCooldownRules, Classes = guardTargetClasses, Skills = new Dictionary<string, BattleSkill> { ["guard_test"] = guardSkillWithUnrelatedHaste }, Statuses = new Dictionary<string, BattleStatus> { ["gale_haste"] = galeHasteStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var scopedControlHasteBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "guard_class", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), scopedControlHasteSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 2000)));
+var scopedControlHasteUses = scopedControlHasteBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "간파 테스트");
+Check(scopedControlHasteUses == scopedControlBaselineUses, "대상스킬ID가 다른 스킬을 가리키는 쿨다운감소 상태는 관련 없는 스킬의 쿨다운에 영향을 주지 않는다");
+
+var globalHasteStatus = new BattleStatus("global_haste", "전체 가속", "쿨다운감소", 1, "대상스킬ID 없는 기존 전체형 쿨다운감소(하위 호환)");
+var guardSkillWithGlobalHaste = guardSkillBaseline with { Effects = [.. guardSkillBaseline.Effects, new BattleEffect("haste", 2, "상태효과", "자신", 0, 1, 1, 20, "global_haste", 1, null, null, null, null, null, null, null, null)] };
+var globalHasteSnapshot = new BattleDataSnapshot { Rules = scopedCooldownRules, Classes = guardTargetClasses, Skills = new Dictionary<string, BattleSkill> { ["guard_test"] = guardSkillWithGlobalHaste }, Statuses = new Dictionary<string, BattleStatus> { ["global_haste"] = globalHasteStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var globalHasteBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "guard_class", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), globalHasteSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 2000)));
+var globalHasteUses = globalHasteBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "간파 테스트");
+Check(globalHasteUses > scopedControlBaselineUses, "대상스킬ID가 없는 쿨다운감소 상태는 기존처럼 보유자의 모든 스킬에 적용된다(하위 호환)");
+
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)
