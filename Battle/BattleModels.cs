@@ -31,7 +31,7 @@ public sealed record BattleEffect(
     int Duration, string? StatusId, int MaxStacks, string? Message,
     string? ConditionTarget, string? ConditionType, string? ConditionId,
     string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
-    string? NumericReferenceMode);
+    string? NumericReferenceMode, double CriticalChanceMultiplierPerHit = 1d);
 public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
 public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description, string? TargetSkillId = null)
 {

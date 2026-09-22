@@ -677,6 +677,51 @@ var globalHasteBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(
 var globalHasteUses = globalHasteBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "간파 테스트");
 Check(globalHasteUses > scopedControlBaselineUses, "대상스킬ID가 없는 쿨다운감소 상태는 기존처럼 보유자의 모든 스킬에 적용된다(하위 호환)");
 
+// 석궁사수 슬라이딩 스텝 회귀 테스트: 쿨다운증가 상태(상대 이동 속도 감소의 단순화)는
+// 쿨다운감소와 대칭으로 동작하며, 값이 기본 감소분(1)과 같으면 보유 중 해당 쿨다운이 전혀 줄지 않는다.
+var slowStatus = new BattleStatus("gale_slow", "질풍 둔화", "쿨다운증가", 1, "테스트용 쿨다운증가(석궁사수 슬라이딩 스텝의 상대 이동 속도 감소 단순화)");
+var galeSkillSlowed = galeSkillBaseline with { Effects = [.. galeSkillBaseline.Effects, new BattleEffect("slow", 2, "상태효과", "자신", 0, 1, 1, 20, "gale_slow", 1, null, null, null, null, null, null, null, null)] };
+var scopedSlowSnapshot = new BattleDataSnapshot { Rules = scopedCooldownRules, Classes = galeTargetClasses, Skills = new Dictionary<string, BattleSkill> { ["gale_test"] = galeSkillSlowed }, Statuses = new Dictionary<string, BattleStatus> { ["gale_slow"] = slowStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var scopedSlowBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "gale_class", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), scopedSlowSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 2000)));
+var scopedSlowUses = scopedSlowBattle.Events.Count(x => x.Type == "SkillUsed" && x.Actor == "A" && x.Detail == "질풍 베기 테스트");
+Check(scopedSlowUses == 1, "쿨다운증가 상태는 쿨다운감소와 대칭으로 동작하며, 값이 기본 감소분과 같으면 쿨다운이 더는 줄지 않아 스킬을 다시 쓸 수 없다");
+
+// 석궁사수 거스팅 볼트 회귀 테스트: 다단 피해 효과의 연속치명타배율은 두 번째 타격부터
+// 누적 제곱으로 치명타 확률을 줄인다. 0으로 두면 첫 타격만 치명타가 가능하다.
+var critDecayRules = singleActionRules.ToDictionary(x => x.Key, x => x.Value);
+critDecayRules["base_critical_chance"] = new("base_critical_chance", "치명타", "number", "1", "");
+var critDecaySkill = new BattleSkill("crit_decay", "연사", "일반", null, true, 4, 0, 1, 1,
+    [new BattleEffect("burst", 1, "피해", "상대", 0, 3, 1, 0, null, 0, null, null, null, null, null, null, null, null, 0d)]);
+var critDecaySnapshot = new BattleDataSnapshot { Rules = critDecayRules, Classes = new Dictionary<string, BattleClass> { ["test"] = new("test", "테스트", ["crit_decay"]) }, Skills = new Dictionary<string, BattleSkill> { ["crit_decay"] = critDecaySkill }, LoadedAt = DateTimeOffset.UtcNow };
+var critDecayBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "test", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "test", 100, 0, 0), critDecaySnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(critDecayBattle.Events.Count(x => x.Type == "DamageDealt" && x.Actor == "A") == 3 && critDecayBattle.Events.Count(x => x.Type == "CriticalHit" && x.Actor == "A") == 1,
+    "연속치명타배율 0은 다단 피해의 첫 타격만 치명타를 허용하고 이후 타격은 치명타 확률을 0으로 만든다");
+
+// 석궁사수 강화 볼트 탄창 회귀 테스트: 최대값 3 이상인 일반 "자원"(분류=자원)이
+// 배틀스킬.자원유형/자원소모로 소모 스킬(gusting_bolt류)의 후보 게이팅에 쓰이고,
+// 다른 스킬의 효과 행 자원증가(buster_shot류)로 다시 채워지는 조합을 검증한다.
+var bulletRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+bulletRules["minimum_skill_cooldown"] = new("minimum_skill_cooldown", "행동", "integer", "0", "");
+bulletRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "8", "");
+bulletRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+var bulletResource = new BattleResource("bolt", "탄창", "자원", 3, 0, 0, "가산");
+var loadSkill = new BattleSkill("load", "장전", "일반", null, true, 0, 0, 1, 1,
+    [new BattleEffect("load_gain", 1, "자원증가", "자신", 1, 1, 1, 0, "bolt", 0, null, null, null, null, null, null, null, null)]);
+var consumeSkill = new BattleSkill("consume", "소모", "일반", null, true, 0, 0, 1, 1,
+    [new BattleEffect("consume_dmg", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)],
+    "bolt", "1");
+var bulletSnapshot = new BattleDataSnapshot
+{
+    Rules = bulletRules,
+    Classes = new Dictionary<string, BattleClass> { ["gunner"] = new("gunner", "총잡이", ["consume", "load"]), ["target"] = new("target", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["consume"] = consumeSkill, ["load"] = loadSkill },
+    Resources = new Dictionary<string, BattleResource> { ["bolt"] = bulletResource },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var bulletBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "gunner", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), bulletSnapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 200)));
+var bulletSkillOrder = bulletBattle.Events.Where(x => x.Type == "SkillUsed" && x.Actor == "A").Select(x => x.Detail).ToArray();
+Check(bulletSkillOrder.SequenceEqual(new[] { "장전", "소모", "장전", "소모" }), "소모형 자원은 바닥나면 소모 스킬을 후보에서 제외하고, 다른 스킬이 채워주면 다시 소모할 수 있게 한다");
+
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)

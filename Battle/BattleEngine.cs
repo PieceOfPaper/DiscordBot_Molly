@@ -213,7 +213,9 @@ public sealed class BattleEngine
                     for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
                     {
                         if (random.NextDouble() >= effect.Chance) continue;
-                        resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events, skill);
+                        // 연속치명타배율 <1이면 타격마다(0번째 제외) 누적 제곱으로 치명타 확률이 감소한다(거스팅 볼트: 매 발사 0.75배).
+                        var criticalChanceMultiplier = Math.Pow(effect.CriticalChanceMultiplierPerHit, hit);
+                        resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events, skill, criticalChanceMultiplier);
                     }
                     break;
                 case "지속피해" when effect.StatusId is { } periodicStatusId && effect.Duration > 0:
@@ -376,7 +378,7 @@ public sealed class BattleEngine
         var matches = data.Resources.Values.Where(x => x.Kind == id).ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
-    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null)
+    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null, double criticalChanceMultiplier = 1d)
     {
         // 대상 해제는 다단의 매 타격이 아니라 다음 공격 효과 전체를 한 번 회피하는 판정이다.
         if (target.HasStatusEffect("대상해제") && random.NextDouble() < rules.TargetReleaseEvasionChance)
@@ -390,7 +392,7 @@ public sealed class BattleEngine
             var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill);
             var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소"));
             var amount = Math.Max(1, baseDamage - target.Defense * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
-            var criticalChance = Math.Clamp(rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가"), 0d, 1d);
+            var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가")) * criticalChanceMultiplier, 0d, 1d);
             var critical = random.NextDouble() < criticalChance;
             if (critical) { amount *= rules.CriticalMultiplier; events.Add(new("CriticalHit", actor.Name, target.Name)); }
             var damage = Math.Max(1, (int)Math.Round(amount)); target.Hp = Math.Max(0, target.Hp - damage);
@@ -442,16 +444,23 @@ public sealed class BattleEngine
         }
         public void TickCooldowns()
         {
-            // 대상스킬ID가 없는 쿨다운감소는 기존처럼 모든 스킬에 적용하고, 대상스킬ID가 있으면 그 스킬에만 더 적용한다.
+            // 대상스킬ID가 없는 쿨다운감소·쿨다운증가는 기존처럼 모든 스킬에 적용하고, 대상스킬ID가 있으면 그 스킬에만 더 적용한다.
+            // 쿨다운증가(상대의 이동·행동 속도 저하 단순화)는 기본 감소분을 상쇄해 그 턴의 쿨다운 감소를 늦추거나 없앨 뿐, 남은 쿨다운을 늘리지는 않는다.
             var genericReduction = Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType("쿨다운감소") && status.TargetSkillId is null ? status.Value : 0d);
+            var genericSlow = Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType("쿨다운증가") && status.TargetSkillId is null ? status.Value : 0d);
             var scopedReduction = Statuses.Keys
                 .Select(id => StatusDefinitions.GetValueOrDefault(id))
                 .Where(status => status is not null && status.HasEffectType("쿨다운감소") && status.TargetSkillId is not null)
                 .GroupBy(status => status!.TargetSkillId!)
                 .ToDictionary(group => group.Key, group => group.Sum(status => status!.Value));
+            var scopedSlow = Statuses.Keys
+                .Select(id => StatusDefinitions.GetValueOrDefault(id))
+                .Where(status => status is not null && status.HasEffectType("쿨다운증가") && status.TargetSkillId is not null)
+                .GroupBy(status => status!.TargetSkillId!)
+                .ToDictionary(group => group.Key, group => group.Sum(status => status!.Value));
             foreach (var id in Cooldowns.Keys.ToArray())
             {
-                var reduction = Math.Max(1, 1 + (int)Math.Round(genericReduction + scopedReduction.GetValueOrDefault(id)));
+                var reduction = Math.Max(0, 1 + (int)Math.Round(genericReduction + scopedReduction.GetValueOrDefault(id) - genericSlow - scopedSlow.GetValueOrDefault(id)));
                 Cooldowns[id] = Math.Max(0, Cooldowns[id] - reduction);
             }
         }

@@ -131,7 +131,8 @@ public sealed class BattleCatalog
         var effectMap = effects.GroupBy(x => x.Required("스킬ID", "배틀스킬효과", 0), StringComparer.Ordinal).ToDictionary(g => g.Key, g => (IReadOnlyList<BattleEffect>)g.Select((x, i) => new BattleEffect(
             x.Required("ID", "배틀스킬효과", i + 2), BattleCsv.Int(x.Required("실행순서", "배틀스킬효과", i + 2), "배틀스킬효과", i + 2, "실행순서", 1), x["효과유형"], x["대상"], BattleCsv.Int(x["고정값"], "배틀스킬효과", i + 2, "고정값"), BattleCsv.Int(x["횟수"], "배틀스킬효과", i + 2, "횟수", 1), BattleCsv.Double(x["발동확률"], "배틀스킬효과", i + 2, "발동확률", 0, 1),
             BattleCsv.Int(x["지속턴"], "배틀스킬효과", i + 2, "지속턴"), EmptyAsNull(x["상태효과ID"]), BattleCsv.Int(x["최대중첩"], "배틀스킬효과", i + 2, "최대중첩"), EmptyAsNull(x["효과문구"]),
-            EmptyAsNull(x["조건대상"]), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건ID"]), EmptyAsNull(x["조건연산자"]), EmptyAsNull(x["조건값"]), EmptyAsNull(x["수치참조ID"]), EmptyAsNull(x["수치참조방식"]))).OrderBy(x => x.Order).ToArray());
+            EmptyAsNull(x["조건대상"]), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건ID"]), EmptyAsNull(x["조건연산자"]), EmptyAsNull(x["조건값"]), EmptyAsNull(x["수치참조ID"]), EmptyAsNull(x["수치참조방식"]),
+            EmptyAsNull(x.GetValueOrDefault("연속치명타배율", "")) is { } criticalMultiplier ? BattleCsv.Double(criticalMultiplier, "배틀스킬효과", i + 2, "연속치명타배율", 0, 1) : 1d)).OrderBy(x => x.Order).ToArray());
         var skillMap = new Dictionary<string, BattleSkill>(StringComparer.Ordinal);
         foreach (var (row, index) in battleSkills.Select((x, i) => (x, i + 2)))
         {
