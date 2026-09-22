@@ -103,6 +103,13 @@ public sealed class BattleEngine
         var variation = (uint)StringComparer.Ordinal.GetHashCode(skill.Id) % 100 / 100d;
         return rules.SkillDamageMinMultiplier + variation * (rules.SkillDamageMaxMultiplier - rules.SkillDamageMinMultiplier);
     }
+    // 회복도 피해와 동일하게 공격력 기반 배율(또는 고정값)로 계산한다. 최대 HP 비율 기반 회복은 스킬 위력과 무관해지므로 쓰지 않는다.
+    private static double HealMultiplier(BattleSkill skill, Rules rules)
+    {
+        if (skill.Kind == "궁극기" || skill.Id.Contains("finale", StringComparison.OrdinalIgnoreCase) || skill.Id.Contains("symphony", StringComparison.OrdinalIgnoreCase)) return rules.UltimateHealMultiplier;
+        var variation = (uint)StringComparer.Ordinal.GetHashCode(skill.Id) % 100 / 100d;
+        return rules.SkillHealMinMultiplier + variation * (rules.SkillHealMaxMultiplier - rules.SkillHealMinMultiplier);
+    }
 
     private static double TrySurprise(Fighter actor, IBattleRandom random, Rules rules, ref int cooldown, List<BattleEvent> events)
     {
@@ -234,10 +241,13 @@ public sealed class BattleEngine
                     }
                     break;
                 case "회복":
+                    // 피해와 동일한 구조: 다단 효과의 총 회복량은 유지하고 타격마다 나눈다.
+                    var totalBaseHeal = effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * HealMultiplier(skill, rules);
+                    var healPerTick = totalBaseHeal / effect.Count;
                     for (var healIndex = 0; healIndex < effect.Count; healIndex++)
                     {
                         if (random.NextDouble() >= effect.Chance) continue;
-                        var amount = Math.Max(1, (int)Math.Round(actor.MaxHp * rules.SkillHealRatio));
+                        var amount = Math.Max(1, (int)Math.Round(healPerTick));
                         var healed = Math.Min(amount, receiver.MaxHp - receiver.Hp);
                         receiver.Hp += healed;
                         if (healed > 0)
@@ -563,7 +573,8 @@ public sealed class BattleEngine
         public double CriticalChance => Number("base_critical_chance"); public double CriticalMultiplier => Number("critical_damage_multiplier");
         public int MaxActions => checked((int)Number("max_major_actions")); public double DrawThreshold => Number("draw_hp_ratio_threshold"); public double TargetReleaseEvasionChance => Number("target_release_evasion_chance");
         public double NormalAttackMultiplier => Number("normal_attack_multiplier"); public double SkillDamageMinMultiplier => Number("skill_damage_min_multiplier"); public double SkillDamageMaxMultiplier => Number("skill_damage_max_multiplier"); public double UltimateDamageMultiplier => Number("ultimate_damage_multiplier");
-        public int MinimumSkillCooldown => checked((int)Number("minimum_skill_cooldown")); public double SkillHealRatio => Number("skill_heal_ratio"); public int MaxSurpriseEvents => checked((int)Number("max_surprise_events_per_actor")); public int SurpriseCooldown => checked((int)Number("surprise_event_global_cooldown"));
+        public double SkillHealMinMultiplier => Number("skill_heal_min_multiplier"); public double SkillHealMaxMultiplier => Number("skill_heal_max_multiplier"); public double UltimateHealMultiplier => Number("ultimate_heal_multiplier");
+        public int MinimumSkillCooldown => checked((int)Number("minimum_skill_cooldown")); public int MaxSurpriseEvents => checked((int)Number("max_surprise_events_per_actor")); public int SurpriseCooldown => checked((int)Number("surprise_event_global_cooldown"));
         public double LifeSurpriseHpRatioThreshold => Number("life_surprise_hp_ratio_threshold"); public double LifeSurpriseHealRatio => Number("life_surprise_heal_ratio"); public double CharmSurpriseDamageMultiplier => Number("charm_surprise_damage_multiplier");
         public double AdditionalHitChance => Number("additional_hit_chance"); public double AdditionalHitDamageRatio => Number("additional_hit_damage_ratio");
         public int BreakGaugeMaximum => checked((int)Number("break_gauge_maximum")); public int BreakDuration => checked((int)Number("break_duration_turns"));

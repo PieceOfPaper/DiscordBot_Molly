@@ -580,12 +580,15 @@ feign_death
 ```text
 스킬 총 기본 피해 = 공격력 × 스킬별 전투 배율
 다단 1회 기본 피해 = 스킬 총 기본 피해 ÷ 횟수
-회복 = 최대 HP × skill_heal_ratio × 횟수
+스킬 총 기본 회복 = 공격력 × 스킬별 회복 배율
+다단 1회 기본 회복 = 스킬 총 기본 회복 ÷ 횟수
 ```
 
 피해와 회복 효과는 각 반복마다 발동확률을 판정한다. 피해는 방어, 편차, 치명타와 사망도 개별 판정한다. 자원 효과의 세부 판정은 자원 처리기 도입 시 확정한다.
 
-`고정값`이 양수인 피해 행은 공격력 계수 대신 해당 값을 **한 타격의 기본 피해**로 사용한다. 실제 화면의 피해 단위와 배틀 HP 단위 차이는 `배틀규칙.fixed_damage_scale`로 공통 환산한다. 따라서 타수와 고정 피해 구조는 보존하면서 밸런스만 시트에서 조정할 수 있다. `대상=주변적`은 1:1 자동전투에서 대상이 없으므로 처리하지 않는다.
+`고정값`이 양수인 피해·회복 행은 공격력 계수 대신 해당 값을 **한 타격(또는 한 틱)의 기본 수치**로 사용한다(`고정값 × 횟수 × fixed_damage_scale`을 총량으로 삼아 다시 횟수로 나눈다). 실제 화면의 피해·회복 단위와 배틀 HP 단위 차이는 `배틀규칙.fixed_damage_scale`로 공통 환산한다. 따라서 타수와 고정 수치 구조는 보존하면서 밸런스만 시트에서 조정할 수 있다. `대상=주변적`은 1:1 자동전투에서 대상이 없으므로 처리하지 않는다.
+
+> 2026-09-23 수정: 회복은 원래 `최대 HP × skill_heal_ratio(6%) × 횟수`로 계산했다. 이 공식은 `고정값`을 전혀 참조하지 않고 다단 횟수만큼 총량이 그대로 커지는 구조라, 음유시인의 `heroic_hymn`·`counter_overture`·`song_of_hope`(횟수 5) 는 매번 최대 HP의 30%를, `feign_death`(횟수 8)는 48%를 회복했다. 이 세 노래가 음유시인 행동의 약 20% 이상을 차지해 동일 전투력 기준 승률이 82~86%까지 치우치는 핵심 원인이었다(다른 클래스는 회복 효과가 아예 없다). 피해와 동일하게 "공격력 × 배율" 구조로 바꾸고 다단 총량을 횟수로 나누도록 고쳐, 다단이어도 총 회복량이 커지지 않게 했다. 새 배율은 `skill_heal_min_multiplier`(1.5)·`skill_heal_max_multiplier`(2.0)·`ultimate_heal_multiplier`(2.4, 현재 사용하는 궁극기는 없어 예비값)로 `배틀규칙`에 추가했고, 기존 `skill_heal_ratio`는 제거했다. 수정 후 동일 조건 시뮬레이션(2,000회 × 상대 3클래스)에서 음유시인 승률은 약 59~62%로 낮아져 다른 클래스와 비슷한 범위에 들어왔다.
 
 현재 엔진은 `피해`, `회복`, `추가피해`, `지속피해`, `자원설정`, `자원증가`, `자원소모`, 브레이크와 지속 상태 효과를 `실행순서`대로 처리한다. 피해와 회복은 각 반복마다 발동확률을 판정하며, 피해는 치명타·추가타까지 적용한다. 자원 조건은 같은 스킬의 앞선 효과로 자원이 바뀐 뒤에 판정하며, `소모중첩배율`·`현재값`·`최대값` 수치 참조를 지원한다.
 
@@ -665,7 +668,11 @@ feign_death
 | `전투종료시제거` | 불리언 | 전투 스냅샷 종료 시 제거 여부 |
 | `설명` | 문자열 | 동작과 제약 설명 |
 
-현재 댄서 확장용 자원은 `dance_grace`(우아), `dance_passion`(정열), `rhythm`(리듬), `tempo`(템포), `performance_heat`(공연의 열기)다. 우아와 정열은 상호배타 태세이며, 아직 캡처만으로 확정할 수 없는 최대값은 0으로 표시한다. 태세에 맞는 내추럴 턴·윈드밀·프론트 스텝·피루엣과 애드리브 파생은 리듬을 생성한다. 피날레는 공연의 열기와 템포를 설정하고 `피날레의 고조` 상태로 5턴 동안 쿨다운을 추가 감소시키며, 재사용 마무리는 열기를 모두 소모한 뒤 소모량 비례 추가 피해를 준다.
+현재 댄서 확장용 자원은 `dance_grace`(우아), `dance_passion`(정열), `rhythm`(리듬), `performance_heat`(공연의 열기)다. 우아와 정열은 상호배타 태세이며, 아직 캡처만으로 확정할 수 없는 최대값은 0으로 표시한다. 태세에 맞는 내추럴 턴·윈드밀·프론트 스텝·피루엣과 애드리브 파생은 리듬을 생성한다. 피날레는 공연의 열기를 설정하고 `피날레의 고조` 상태로 5턴 동안 쿨다운을 추가 감소시키며, 재사용 마무리는 열기를 모두 소모한 뒤 소모량 비례 추가 피해를 준다.
+
+> 2026-09-23 검토: 승률 검사 결과 리듬이 어떤 효과에서도 소비·참조되지 않는 죽은 자원이었다. 피날레에 리듬 보유량 비례 추가 피해(1스택당 200, 사용 후 전량 소모)를 추가해 실제 소비처를 만들었다(`finale_rhythm_bonus`/`finale_rhythm_reset`). 같은 검토에서 `tempo`(템포)는 `performance_heat`와 역할이 완전히 겹치는데도 실제로는 최대값이 0인 자원을 참조해 매번 0으로 설정되는 죽은 효과(`finale_02`)만 갖고 있었음을 확인해, 자원과 해당 효과 행을 함께 제거했다.
+>
+> 또한 `dance_grace`·`dance_passion` 자체를 부여하는 효과 행이 시트 전체에 없다는 것도 함께 확인했다. 즉 내추럴 턴·윈드밀·프론트 스텝·피루엣의 "태세일 때 리듬 추가 생성" 조건은 항상 거짓이라 리듬은 애드리브 파생(무조건 발동)에서만 쌓인다. 어느 스킬이 원본에서 우아·정열 태세를 실제로 부여하는지 원본 설명만으로 확인되지 않아 이번에는 수정하지 않았다(GitHub Issue #4 참고).
 
 음유시인 악상은 `bard_valor`(용맹), `bard_hope`(희망), `bard_counter`(반격) 3종이다. 모두 `분류=악상`, `최대값=1`, `중첩방식=상호배타`로 정의한다. 악상 생성 효과에는 `조건유형=분류자원미보유`, `조건ID=악상`을 지정한다. 따라서 이미 악상이 있으면 새 악상 생성 효과는 실행되지 않고 기존 악상을 유지한다.
 
@@ -695,12 +702,14 @@ feign_death
 | --- | ---: | --- |
 | 기본 스킬·궁극기 | 6 | 내추럴 턴, 윈드밀, 프론트 스텝, 피루엣, 애드리브, 피날레 |
 | 파생 스킬 | 4 | 애드리브 정열·우아·화합, 피날레 마무리 |
-| 배틀 효과 | 25 | 피해, 자원, 태세 조건, 브레이크, 기본 공격 변경, 궁극기 강화 |
+| 배틀 효과 | 26 | 피해, 자원, 태세 조건, 브레이크, 기본 공격 변경, 궁극기 강화, 리듬 소비 |
 | 파생 규칙 | 4 | 애드리브 3종 선택과 피날레 재사용 |
 
 댄서 캡처에는 기준 공격력이 표시되지 않았으므로 현재 피해량은 `계수=0`, `고정값=화면 표시 수치`로 저장한다. 기준 공격력을 확인하면 공격력 계수로 변환한다. 재사용 대기 시간은 내추럴 턴 2행동, 윈드밀 4행동, 프론트 스텝·애드리브 3행동, 피루엣 5행동으로 임시 변환했다.
 
 애드리브는 화합형을 우선순위 200으로 먼저 판정하고, 실패하면 현재 우아·정열 태세에 맞는 파생을 우선순위 100으로 실행한다. 피날레 마무리는 `performance_heat` 보유 중 재사용할 때 실행하며 기본 피해 20,690과 소모 중첩당 추가 피해 13,793을 별도 효과로 계산한다.
+
+> 2026-09-23 수정: 문서에는 위와 같이 적혀 있었지만 실제 `배틀스킬파생` 시트의 `ad_lib_harmony`·`ad_lib_grace`·`ad_lib_passion` 우선순위 칸이 모두 비어 있어(로더 기본값 0) 세 파생이 같은 그룹에서 동시에 추첨되고 있었다(화합 발동 확률이 의도한 20%가 아니라 약 10%였다). 시트 값을 문서대로 200/100/100으로 채워 넣었다.
 
 ### 8.11 음유시인 배틀 데이터 기준
 
@@ -734,6 +743,8 @@ feign_death
 | 배틀 심포니 쿨다운 감소 2초 × 5 | 모든 스킬 2턴 감소로 단순화 |
 
 시간 변환과 배틀 계수는 확정 규칙이 아니다. 실제 시뮬레이션에서 평균 주요 행동 수와 승률을 측정한 뒤 변경한다.
+
+`heroic_hymn`·`counter_overture`·`song_of_hope`의 회복 효과와 `feign_death`의 회복 효과는 2026-09-23에 최대 HP 비율 기반에서 공격력 배율 기반으로 계산 방식을 바꿨다. 원인과 수정 내용은 8.7(회복 공식과 신규 배틀규칙)을 참고한다.
 
 ### 8.12 검술사 배틀 데이터 기준
 
@@ -786,7 +797,7 @@ feign_death
 | 신규 배틀자원 | 1 | `cb_bolt_magazine`(강화 볼트 탄창) |
 | 신규 배틀상태효과 | 3 | `cb_haste`(가속), `cb_guard`(회피 기동), `cb_slowed`(둔화) |
 
-고정 난수로 4개 클래스를 상대별 2,000회씩(총 12,000전) 오프라인 시뮬레이션한 결과 예외 없이 완주했고, 석궁사수의 모든 기본 스킬과 궁극기가 최소 1회 이상 발동했다. 동일 전투력 기준 석궁사수의 통합 승률은 약 51~55%로 4개 클래스 중 두 번째로 높았다(쿨다운증가·연속치명타배율 반영 전후로 큰 차이는 없었다). 다만 이번 시뮬레이션에서 음유시인이 약 82~86%, 댄서가 약 19~20%로 나타난 것은 석궁사수 추가와 무관하게 기존에도 보고되어 있던(8.12 참고) 세 클래스 간 밸런스 문제이며, 이번 작업 범위를 벗어나므로 조정하지 않았다. 정밀한 클래스 간 밸런스는 10,000회 단위 시뮬레이션으로 추후 조정한다는 기존 방침(10.3, 17장 참고)을 따른다.
+고정 난수로 4개 클래스를 상대별 2,000회씩(총 12,000전) 오프라인 시뮬레이션한 결과 예외 없이 완주했고, 석궁사수의 모든 기본 스킬과 궁극기가 최소 1회 이상 발동했다. 동일 전투력 기준 석궁사수의 통합 승률은 약 51~61%로 4개 클래스 중 상위권이었다(쿨다운증가·연속치명타배율 반영 전후로 큰 차이는 없었다). 이 시점에는 음유시인이 약 82~86%, 댄서가 약 19~20%로 나타났는데, 이는 석궁사수 추가와 무관하게 기존에도 보고되어 있던(8.12 참고) 음유시인 회복 공식 문제와 댄서 리듬 자원 미사용 문제였다. 이후 별도 검토로 두 문제를 수정했고(8.9, 8.11 참고), 수정 후에는 4개 클래스 승률이 약 26~61% 범위로 모였다(댄서는 자기 회복 수단이 없다는 구조적 차이가 남아 있어 여전히 가장 낮다). 정밀한 클래스 간 밸런스는 10,000회 단위 시뮬레이션으로 추후 조정한다는 기존 방침(10.3, 17장 참고)을 따른다.
 
 ### 8.14 데이터 로딩과 검증
 
@@ -1240,7 +1251,7 @@ UserCharacter
 새 클래스의 스킬 데이터를 `배틀스킬`·`배틀스킬효과` 등 기존 스키마에 채워 넣는 반복 작업은 이 절차가 아니라 `new-class-workflow.md`를 따른다. 이 절은 스키마 자체(새 효과유형·조건유형·상태·규칙 상수)를 바꿀 때만 적용한다.
 
 1. `Battle/BattleModels.cs`의 불변 입력 모델과 `Battle/BattleCatalog.cs`의 헤더·참조 검증을 먼저 함께 갱신한다.
-2. 새 규칙 상수는 `배틀규칙.ID`에 영문 `snake_case`로 추가한다. 현재 기본 엔진이 요구하는 ID는 `base_max_hp`, `base_attack`, `base_defense`, `power_scale_exponent`, `power_scale_min`, `power_scale_max`, `defense_coefficient`, `damage_variance_min`, `damage_variance_max`, `base_critical_chance`, `critical_damage_multiplier`, `additional_hit_chance`, `additional_hit_damage_ratio`, `max_major_actions`, `draw_hp_ratio_threshold`, `normal_attack_multiplier`, `skill_damage_min_multiplier`, `skill_damage_max_multiplier`, `ultimate_damage_multiplier`, `minimum_skill_cooldown`, `skill_heal_ratio`, `life_surprise_hp_ratio_threshold`, `life_surprise_base_chance`, `life_surprise_stat_reference`, `life_surprise_stat_coefficient`, `life_surprise_max_chance`, `life_surprise_heal_ratio`, `charm_surprise_base_chance`, `charm_surprise_stat_reference`, `charm_surprise_stat_coefficient`, `charm_surprise_max_chance`, `charm_surprise_damage_multiplier`다.
+2. 새 규칙 상수는 `배틀규칙.ID`에 영문 `snake_case`로 추가한다. 현재 기본 엔진이 요구하는 ID는 `base_max_hp`, `base_attack`, `base_defense`, `power_scale_exponent`, `power_scale_min`, `power_scale_max`, `defense_coefficient`, `damage_variance_min`, `damage_variance_max`, `base_critical_chance`, `critical_damage_multiplier`, `additional_hit_chance`, `additional_hit_damage_ratio`, `max_major_actions`, `draw_hp_ratio_threshold`, `normal_attack_multiplier`, `skill_damage_min_multiplier`, `skill_damage_max_multiplier`, `ultimate_damage_multiplier`, `minimum_skill_cooldown`, `skill_heal_min_multiplier`, `skill_heal_max_multiplier`, `ultimate_heal_multiplier`, `life_surprise_hp_ratio_threshold`, `life_surprise_base_chance`, `life_surprise_stat_reference`, `life_surprise_stat_coefficient`, `life_surprise_max_chance`, `life_surprise_heal_ratio`, `charm_surprise_base_chance`, `charm_surprise_stat_reference`, `charm_surprise_stat_coefficient`, `charm_surprise_max_chance`, `charm_surprise_damage_multiplier`다.
 3. 시트 전체를 검증한 새 `BattleDataSnapshot`을 캐시에 저장할 수 있을 때만 공개한다. 일부 탭만 성공한 데이터나 미검증 자유문자열을 전투 엔진에 전달하지 않는다.
 4. 새 효과·조건·상태·자원은 `BattleEffect`와 명시적 enum/처리기로 정규화한 뒤 `BattleEngine`에 추가한다. 알 수 없는 값은 조용히 무시하지 말고 로드 오류로 처리한다.
 5. 고정 난수로 재현 가능한 오프라인 회귀 테스트를 `tests/Molly.DataTests`에 추가하고 `bash scripts/verify.sh`를 실행한다.
