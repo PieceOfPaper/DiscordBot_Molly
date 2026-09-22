@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Issue 작성 가이드
+    url: https://github.com/PieceOfPaper/DiscordBot_Molly/blob/main/.github/ISSUE_TEMPLATE/README.md
+    about: 버그와 건의사항 작성 방법, 공개하면 안 되는 정보를 확인합니다.
