@@ -48,7 +48,7 @@ public sealed class BattleEngine
             {
                 events.Add(new("NormalAttackUsed", actor.Name, target.Name));
                 var normalAttackMultiplier = rules.NormalAttackMultiplier * (1d + actor.StatusValue("기본공격피해증가"));
-                targetDamaged = Attack(actor, target, actor.Attack * normalAttackMultiplier * surpriseMultiplier, 1, random, rules, events);
+                targetDamaged = Attack(actor, target, actor.Attack * normalAttackMultiplier * surpriseMultiplier, 1, random, rules, events, normalAttack: true);
             }
             else
             {
@@ -249,6 +249,9 @@ public sealed class BattleEngine
     /// <summary>효과 한 행을 실행한다. <paramref name="skill"/>이 null이면 패시브 트리거에서 직접 발동한 효과다(고정값 기반 효과만 안전하게 지원).</summary>
     private static void ApplyEffect(Fighter actor, Fighter target, Fighter receiver, BattleEffect effect, BattleSkill? skill, double surpriseMultiplier, IBattleRandom random, Rules rules, List<BattleEvent> events, EffectResolution resolution)
     {
+        // 피해·회복·추가피해·브레이크피해는 아래에서 타격마다 발동확률을 판정한다. 나머지 효과(자원·상태·다음행동지정 등)는
+        // 효과 한 행 단위로 한 번 판정한다. 확률이 1이면 난수를 소비하지 않아 기존 고정 난수 시퀀스를 바꾸지 않는다.
+        if (effect.Type is not ("피해" or "회복" or "추가피해" or "브레이크피해") && effect.Chance < 1 && random.NextDouble() >= effect.Chance) return;
         switch (effect.Type)
         {
             case "피해":
@@ -469,7 +472,7 @@ public sealed class BattleEngine
         var matches = data.Resources.Values.Where(x => x.Kind == id).ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
-    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null, double criticalChanceMultiplier = 1d, double extraDamageMultiplier = 0d)
+    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null, double criticalChanceMultiplier = 1d, double extraDamageMultiplier = 0d, bool normalAttack = false)
     {
         // 대상 해제는 다단의 매 타격이 아니라 다음 공격 효과 전체를 한 번 회피하는 판정이다.
         if (target.HasStatusEffect("대상해제") && random.NextDouble() < rules.TargetReleaseEvasionChance)
@@ -481,16 +484,18 @@ public sealed class BattleEngine
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
             var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill) + extraDamageMultiplier;
-            var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (sourceSkill is null ? target.StatusValue("받는기본공격피해감소") : 0d));
+            var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (normalAttack ? target.StatusValue("받는기본공격피해감소") : 0d));
             var amount = Math.Max(1, baseDamage - target.Defense * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
-            var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가")) * criticalChanceMultiplier, 0d, 1d);
+            var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가") - target.StatusValue("받는치명타확률감소")) * criticalChanceMultiplier, 0d, 1d);
             var critical = random.NextDouble() < criticalChance;
             if (critical)
             {
                 amount *= rules.CriticalMultiplier + actor.StatusValue("치명타피해증가");
                 events.Add(new("CriticalHit", actor.Name, target.Name));
-                if (sourceSkill is not null) FirePassiveTrigger(actor, target, "치명타적중시", sourceSkill.Id, null, random, rules, events);
+                // 일반 공격·패시브 피해도 치명타 판정 대상이다. 특정 스킬로 한정한 패시브는 대상스킬ID가 맞지 않아 반응하지 않는다.
+                FirePassiveTrigger(actor, target, "치명타적중시", sourceSkill?.Id, null, random, rules, events);
             }
+            else FirePassiveTrigger(actor, target, "치명타미적중시", sourceSkill?.Id, null, random, rules, events);
             var damage = Math.Max(1, (int)Math.Round(amount)); target.Hp = Math.Max(0, target.Hp - damage);
             damaged = true;
             events.Add(new("DamageDealt", actor.Name, target.Name, damage));
@@ -504,6 +509,8 @@ public sealed class BattleEngine
                 if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
             }
         }
+        // 선수필승처럼 "상대에게 먼저 공격받았는지"에 반응하는 패시브를 피격자 관점에서 발동한다.
+        if (damaged && target.Hp > 0) FirePassiveTrigger(target, actor, "피격시", sourceSkill?.Id, null, random, rules, events);
         return damaged;
     }
 
@@ -547,18 +554,18 @@ public sealed class BattleEngine
         {
             // 대상스킬ID가 없는 쿨다운감소·쿨다운증가는 기존처럼 모든 스킬에 적용하고, 대상스킬ID가 있으면 그 스킬에만 더 적용한다.
             // 쿨다운증가(상대의 이동·행동 속도 저하 단순화)는 기본 감소분을 상쇄해 그 턴의 쿨다운 감소를 늦추거나 없앨 뿐, 남은 쿨다운을 늘리지는 않는다.
-            var genericReduction = Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType("쿨다운감소") && status.TargetSkillId is null ? status.Value : 0d);
-            var genericSlow = Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType("쿨다운증가") && status.TargetSkillId is null ? status.Value : 0d);
-            var scopedReduction = Statuses.Keys
-                .Select(id => StatusDefinitions.GetValueOrDefault(id))
-                .Where(status => status is not null && status.HasEffectType("쿨다운감소") && status.TargetSkillId is not null)
-                .GroupBy(status => status!.TargetSkillId!)
-                .ToDictionary(group => group.Key, group => group.Sum(status => status!.Value));
-            var scopedSlow = Statuses.Keys
-                .Select(id => StatusDefinitions.GetValueOrDefault(id))
-                .Where(status => status is not null && status.HasEffectType("쿨다운증가") && status.TargetSkillId is not null)
-                .GroupBy(status => status!.TargetSkillId!)
-                .ToDictionary(group => group.Key, group => group.Sum(status => status!.Value));
+            // 패시브가 전투시작에 부여한 영구 상태(예: 퀵 어택)도 쿨다운 감소에 포함한다.
+            var active = ActiveStatusIds().Select(id => StatusDefinitions.GetValueOrDefault(id)).Where(status => status is not null).Cast<BattleStatus>().ToArray();
+            var genericReduction = active.Where(status => status.HasEffectType("쿨다운감소") && status.TargetSkillId is null).Sum(ScaledValue);
+            var genericSlow = active.Where(status => status.HasEffectType("쿨다운증가") && status.TargetSkillId is null).Sum(ScaledValue);
+            var scopedReduction = active
+                .Where(status => status.HasEffectType("쿨다운감소") && status.TargetSkillId is not null)
+                .GroupBy(status => status.TargetSkillId!)
+                .ToDictionary(group => group.Key, group => group.Sum(ScaledValue));
+            var scopedSlow = active
+                .Where(status => status.HasEffectType("쿨다운증가") && status.TargetSkillId is not null)
+                .GroupBy(status => status.TargetSkillId!)
+                .ToDictionary(group => group.Key, group => group.Sum(ScaledValue));
             foreach (var id in Cooldowns.Keys.ToArray())
             {
                 var reduction = Math.Max(0, 1 + (int)Math.Round(genericReduction + scopedReduction.GetValueOrDefault(id) - genericSlow - scopedSlow.GetValueOrDefault(id)));
@@ -566,7 +573,10 @@ public sealed class BattleEngine
             }
         }
 
-        public double StatusValue(string effectType) => Statuses.Keys.Concat(PermanentStatuses).Distinct(StringComparer.Ordinal).Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType) ? status.Value : 0d);
+        private IEnumerable<string> ActiveStatusIds() => Statuses.Keys.Concat(PermanentStatuses).Distinct(StringComparer.Ordinal);
+        // 중첩자원ID가 있는 상태는 그 자원의 현재 보유량(중첩 수)만큼 값을 곱한다. 자원이 0이면 효과도 0이다.
+        private double ScaledValue(BattleStatus status) => status.StackResourceId is { } stackResourceId ? status.Value * Resources.GetValueOrDefault(stackResourceId) : status.Value;
+        public double StatusValue(string effectType) => ActiveStatusIds().Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType) ? ScaledValue(status) : 0d);
         public bool HasStatusEffect(string effectType) => Statuses.Keys.Concat(PermanentStatuses).Any(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType));
         public double MelodySkillDamageBonus(BattleSkill? skill)
         {

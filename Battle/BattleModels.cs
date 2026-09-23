@@ -40,7 +40,7 @@ public sealed record BattleEffect(
     string? NumericReferenceMode, double CriticalChanceMultiplierPerHit = 1d,
     string? Trigger = null, string? TriggerSkillId = null, string? TriggerResourceId = null);
 public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
-public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description, string? TargetSkillId = null)
+public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description, string? TargetSkillId = null, string? StackResourceId = null)
 {
     /// <summary>복합 상태는 시트에서 <c>효과A|효과B</c>로 선언한다.</summary>
     public bool HasEffectType(string effectType)

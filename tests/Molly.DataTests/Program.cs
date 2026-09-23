@@ -36,10 +36,13 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
 {
     // 기획 밸런스 점검 전용: 모든 배틀 준비 클래스를 동일 전투력으로 맞붙여 승률·스킬 사용 빈도를 뽑는다.
     // 실제 봇 실행과 무관하며 CI(verify.sh)에서는 호출하지 않는다.
+    // 세 번째 인자로 CSV 폴더({시트이름}.csv)를 주면 실시간 시트 대신 그 파일로 시뮬레이션한다(시트 입력 전 수치 조정용).
     var iterations = args.Length >= 2 && int.TryParse(args[1], out var parsedIterations) ? parsedIterations : 300;
     using var client = new HttpClient();
-    var source = new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId);
-    var data = BattleCatalog.Parse(await source.FetchAsync(default), DateTimeOffset.UtcNow);
+    var tables = args.Length >= 3
+        ? GoogleSheetsBattleSource.SheetNames.ToDictionary(x => x, x => File.ReadAllText(Path.Combine(args[2], x + ".csv")))
+        : await new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId).FetchAsync(default);
+    var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow);
     var classes = data.Classes.Values.Where(x => x.IsBattleReady).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray();
     if (classes.Length < 2) { Console.WriteLine("배틀 준비된 클래스가 2개 미만이라 밸런스 시뮬레이션을 할 수 없습니다."); return; }
     const int power = 1000;
@@ -828,6 +831,73 @@ var exhaustSnapshot = new BattleDataSnapshot
 };
 var exhaustBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "exhauster", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "exhausttarget", 100, 0, 0), exhaustSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
 Check(exhaustBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "소진 카운터 +1 (현재 1)"), "패시브는 지속턴 만료로 자원이 자연 소진될 때도(TickResources 경로) 자원소진시 트리거로 반응한다");
+
+// 발동확률은 피해 계열뿐 아니라 자원·상태 효과에도 적용되어야 한다(과거에는 무시되어 댄서 영감의 우아/정열 50%가 항상 우아였다).
+var oneActionRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+oneActionRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "1", "");
+var chanceMarkSkill = new BattleSkill("maybe_mark", "확률 표식", "일반", null, true, 0, 0, 1, 1, [new BattleEffect("maybe_mark_eff", 1, "자원설정", "자신", 1, 1, .5, 0, "chance_mark", 0, null, null, null, null, null, null, null, null)]);
+BattleDataSnapshot ChanceSnapshot() => new()
+{
+    Rules = oneActionRules,
+    Classes = new Dictionary<string, BattleClass> { ["chancer"] = new("chancer", "확률", ["maybe_mark"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["maybe_mark"] = chanceMarkSkill },
+    Resources = new Dictionary<string, BattleResource> { ["chance_mark"] = new("chance_mark", "확률 표식", "표식", 1, 0, 0, "교체") },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+// 난수 순서: 선공 판정, 매력 돌발 판정, 스킬 추첨, 효과 발동확률 판정
+var chanceMissBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "chancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), ChanceSnapshot(), new FixedBattleRandom([0d, .9d, .5d, .9d]));
+var chanceHitBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "chancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), ChanceSnapshot(), new FixedBattleRandom([0d, .9d, .5d, .1d]));
+Check(!chanceMissBattle.Events.Any(x => x.Type == "ResourceChanged") && chanceHitBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "확률 표식 +1 (현재 1)"),
+    "자원설정 같은 비피해 효과도 발동확률을 판정한다");
+
+// 중첩자원ID가 있는 상태는 그 자원의 보유량만큼 값이 곱해진다(날카로운 눈·드라이빙 포스·퀵 어택).
+var stackStatus = new Dictionary<string, BattleStatus> { ["stack_power"] = new("stack_power", "중첩 위력", "주는피해증가", .5, "중첩당 +50%", StackResourceId: "power_stack") };
+var stackSkill = new BattleSkill("stack_strike", "중첩 타격", "일반", null, true, 0, 0, 1, 1, [
+    new BattleEffect("stack_hit_1", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null),
+    new BattleEffect("stack_gain", 2, "자원증가", "자신", 2, 1, 1, 0, "power_stack", 0, null, null, null, null, null, null, null, null),
+    new BattleEffect("stack_hit_2", 3, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var stackRules = oneActionRules.ToDictionary(x => x.Key, x => x.Value);
+stackRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+var stackSnapshot = new BattleDataSnapshot
+{
+    Rules = stackRules,
+    Classes = new Dictionary<string, BattleClass> { ["stacker"] = new("stacker", "중첩", ["stack_strike"], true, ["stack_passive"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["stack_strike"] = stackSkill },
+    Passives = new Dictionary<string, BattlePassive> { ["stack_passive"] = new("stack_passive", true, [new BattleEffect("stack_perm", 1, "주는피해증가", "자신", 0, 1, 1, 0, "stack_power", 0, null, null, null, null, null, null, null, null, Trigger: "전투시작")]) },
+    Resources = new Dictionary<string, BattleResource> { ["power_stack"] = new("power_stack", "위력 중첩", "중첩", 3, 0, 0, "가산") },
+    Statuses = stackStatus,
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var stackDamages = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "stacker", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), stackSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))))
+    .Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Select(x => x.Amount ?? 0).ToArray();
+Check(stackDamages.Length == 2 && Math.Abs(stackDamages[1] - stackDamages[0] * 2) <= 1,
+    "중첩자원ID 상태는 자원이 0이면 효과가 없고, 2중첩이면 값×2(+100%)가 적용된다");
+
+// 치명타미적중시(날카로운 눈 초기화)와 피격시(선수필승 상실) 트리거, 그리고 패시브 피해는 일반 공격이 아니므로
+// 받는기본공격피해감소를 적용하지 않는다.
+var missPassive = new BattlePassive("miss_test", true, [
+    new BattleEffect("miss_react", 1, "자원증가", "자신", 1, 1, 1, 0, "miss_counter", 0, null, null, null, null, null, null, null, null, Trigger: "치명타미적중시"),
+    new BattleEffect("passive_hit", 2, "피해", "상대", 40, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null, Trigger: "스킬사용완료시")]);
+var hurtPassive = new BattlePassive("hurt_test", true, [new BattleEffect("hurt_react", 1, "자원증가", "자신", 1, 1, 1, 0, "hurt_counter", 0, null, null, null, null, null, null, null, null, Trigger: "피격시")]);
+var guardPassive = new BattlePassive("guard_test", true, [new BattleEffect("guard_perm", 1, "받는기본공격피해감소", "자신", 0, 1, 1, 0, "basic_guard", 0, null, null, null, null, null, null, null, null, Trigger: "전투시작")]);
+BattleDataSnapshot TriggerSnapshot(bool guarded) => new()
+{
+    Rules = stackRules,
+    Classes = new Dictionary<string, BattleClass> { ["missing"] = new("missing", "비치명", ["p_strike"], true, ["miss_test"]), ["hurt"] = new("hurt", "피격", Array.Empty<string>(), true, guarded ? ["hurt_test", "guard_test"] : ["hurt_test"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["p_strike"] = passiveStrike },
+    Passives = new Dictionary<string, BattlePassive> { ["miss_test"] = missPassive, ["hurt_test"] = hurtPassive, ["guard_test"] = guardPassive },
+    Resources = new Dictionary<string, BattleResource> { ["miss_counter"] = new("miss_counter", "비치명 카운터", "카운터", 0, 0, 0, "가산"), ["hurt_counter"] = new("hurt_counter", "피격 카운터", "카운터", 0, 0, 0, "가산") },
+    Statuses = new Dictionary<string, BattleStatus> { ["basic_guard"] = new("basic_guard", "기본 공격 방어", "받는기본공격피해감소", .5, "") },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var triggerBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "missing", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "hurt", 100, 0, 0), TriggerSnapshot(false), new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+var guardedBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "missing", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "hurt", 100, 0, 0), TriggerSnapshot(true), new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(triggerBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "비치명 카운터 +1 (현재 1)")
+    && triggerBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "B" && x.Detail == "피격 카운터 +1 (현재 1)"),
+    "패시브는 치명타가 아닌 적중(치명타미적중시)과 상대에게 공격받았을 때(피격시)에 반응한다");
+var unguardedPassiveHit = triggerBattle.Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Select(x => x.Amount).Last();
+var guardedPassiveHit = guardedBattle.Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Select(x => x.Amount).Last();
+Check(unguardedPassiveHit == guardedPassiveHit, "패시브가 주는 피해는 일반 공격이 아니므로 받는기본공격피해감소가 적용되지 않는다");
 
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 

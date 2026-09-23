@@ -178,11 +178,14 @@ public sealed class BattleCatalog
             if (!passiveMap.TryAdd(id, passive)) throw new InvalidDataException($"배틀패시브 ID '{id}'가 중복되었습니다.");
         }
         var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]), StringComparer.Ordinal);
-        var statusMap = Unique(statuses, "배틀상태효과").ToDictionary(x => x["ID"], x => new BattleStatus(x["ID"], x["이름"], x["효과유형"], BattleCsv.Double(x["값"], "배틀상태효과", 0, "값"), x["설명"], EmptyAsNull(x["대상스킬ID"])), StringComparer.Ordinal);
+        var statusMap = Unique(statuses, "배틀상태효과").ToDictionary(x => x["ID"], x => new BattleStatus(x["ID"], x["이름"], x["효과유형"], BattleCsv.Double(x["값"], "배틀상태효과", 0, "값"), x["설명"], EmptyAsNull(x["대상스킬ID"]), EmptyAsNull(x.GetValueOrDefault("중첩자원ID", ""))), StringComparer.Ordinal);
         foreach (var status in statusMap.Values)
             if (status.TargetSkillId is { } targetSkillId && !skillMap.ContainsKey(targetSkillId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 대상스킬ID가 존재하지 않는 배틀 스킬 ID '{targetSkillId}'를 참조합니다.");
-        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "치명타적중시", "회복적용시"], StringComparer.Ordinal);
+        foreach (var status in statusMap.Values)
+            if (status.StackResourceId is { } stackResourceId && !resourceMap.ContainsKey(stackResourceId))
+                throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 중첩자원ID가 존재하지 않는 자원 ID '{stackResourceId}'를 참조합니다.");
+        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시"], StringComparer.Ordinal);
         void ValidateEffect(BattleEffect effect, string sheet)
         {
             if (effect.Type is "자원설정" or "자원증가" or "자원소모")
