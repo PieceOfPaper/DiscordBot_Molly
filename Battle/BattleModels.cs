@@ -38,13 +38,26 @@ public sealed record BattleEffect(
     string? ConditionTarget, string? ConditionType, string? ConditionId,
     string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
     string? NumericReferenceMode, double CriticalChanceMultiplierPerHit = 1d,
-    string? Trigger = null, string? TriggerSkillId = null, string? TriggerResourceId = null);
+    string? Trigger = null, string? TriggerSkillId = null, string? TriggerResourceId = null, int ReactivationCooldown = 0);
 public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
 public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description, string? TargetSkillId = null, string? StackResourceId = null)
 {
+    /// <summary>복합 상태의 효과별 값. 시트의 <c>효과별값</c>에 <c>1|0.1</c>처럼 효과유형 순서대로 적으면 효과마다 다른 값을 쓴다. 비어 있으면 모든 효과가 <see cref="Value"/>를 쓴다.</summary>
+    public IReadOnlyList<double> Values { get; init; } = Array.Empty<double>();
+    /// <summary>[시너지] 옵션인 효과유형. 같은 효과유형의 시너지 옵션끼리는 가장 높은 값 하나만 적용된다.</summary>
+    public IReadOnlySet<string> SynergyTypes { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+    /// <summary>true이면 이미 보유 중일 때 다시 받으면 남은 턴에 지속턴을 더한다. false이면 남은 턴과 새 지속턴 중 큰 값으로 갱신한다.</summary>
+    public bool AccumulatesDuration { get; init; }
+    public IReadOnlyList<string> EffectTypes => EffectType.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
     /// <summary>복합 상태는 시트에서 <c>효과A|효과B</c>로 선언한다.</summary>
-    public bool HasEffectType(string effectType)
-        => EffectType.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Contains(effectType, StringComparer.Ordinal);
+    public bool HasEffectType(string effectType) => EffectTypes.Contains(effectType, StringComparer.Ordinal);
+    public double ValueOf(string effectType)
+    {
+        if (Values.Count == 0) return Value;
+        var index = EffectTypes.ToList().IndexOf(effectType);
+        return index >= 0 && index < Values.Count ? Values[index] : Value;
+    }
+    public bool IsSynergy(string effectType) => SynergyTypes.Contains(effectType);
 }
 public sealed record BattleDerivation(string Id, string ParentSkillId, string ChildSkillId, string ActivationMode,
     double Weight, double Chance, string? ConditionType, string? ConditionValue, bool AllowDuplicate, string Timing, int Priority);

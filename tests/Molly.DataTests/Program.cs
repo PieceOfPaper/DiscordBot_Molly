@@ -917,6 +917,104 @@ var unguardedPassiveHit = triggerBattle.Events.Where(x => x.Type == "DamageDealt
 var guardedPassiveHit = guardedBattle.Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Select(x => x.Amount).Last();
 Check(unguardedPassiveHit == guardedPassiveHit, "패시브가 주는 피해는 일반 공격이 아니므로 받는기본공격피해감소가 적용되지 않는다");
 
+// ── Issue #5: 상태 지속턴·시너지·지속회복·조건부 피해·약점 노출·활력 ──
+Dictionary<string, BattleRule> RulesWith(params (string Id, string Value)[] overrides)
+{
+    var rules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+    foreach (var (id, value) in overrides) rules[id] = rules[id] with { Value = value };
+    return rules;
+}
+BattleEffect Fx(string id, int order, string type, string target, int fixedValue = 0, int count = 1, int duration = 0, string? status = null, string? conditionTarget = null, string? conditionType = null, string? conditionId = null)
+    => new(id, order, type, target, fixedValue, count, 1, duration, status, 1, null, conditionTarget, conditionType, conditionId, null, null, null, null);
+BattleResult Duel(BattleDataSnapshot snapshot, string classA = "a", string classB = "idle")
+    => new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", classA, 100, 0, 0), new CharacterBattleSnapshot(2, "B", classB, 100, 0, 0), snapshot, new FixedBattleRandom(Enumerable.Repeat(0d, 400)));
+int?[] DamageBy(BattleResult result, string actor) => result.Events.Where(x => x.Type == "DamageDealt" && x.Actor == actor).Select(x => x.Amount).ToArray();
+var quietRules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "5"));
+var idleClass = new BattleClass("idle", "대기", Array.Empty<string>());
+
+// 지속턴 1인 자기 강화는 다음 내 행동까지 적용되고 그 행동이 끝난 뒤 사라진다(예전에는 다음 행동 직전에 사라져 한 번도 적용되지 않았다).
+var selfBuff = new BattleSkill("self_buff", "강화", "일반", null, true, 99, 0, 1, 1, [Fx("self_buff_1", 1, "상태효과", "자신", duration: 1, status: "power_up")]);
+var selfBuffSnapshot = new BattleDataSnapshot { Rules = quietRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "강화", ["self_buff"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["self_buff"] = selfBuff }, Statuses = new Dictionary<string, BattleStatus> { ["power_up"] = new("power_up", "강화", "주는피해증가", .5, "") }, LoadedAt = DateTimeOffset.UtcNow };
+Check(DamageBy(Duel(selfBuffSnapshot), "A").SequenceEqual(new int?[] { 78, 52 }), "지속턴 1 자기 강화는 다음 내 행동(일반 공격 52→78)까지 적용되고 그다음 행동에는 사라진다");
+
+// 상대에게 건 디버프는 상대의 턴으로 센다. 지속 2면 상대 턴 두 번이 지나기 전까지 내 다음 공격 한 번에 적용된다.
+var debuffMarkSkill = new BattleSkill("mark", "표식", "일반", null, true, 99, 0, 1, 1, [Fx("mark_1", 1, "상태효과", "상대", duration: 2, status: "exposed")]);
+var debuffMarkSnapshot = new BattleDataSnapshot { Rules = quietRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "표식", ["mark"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["mark"] = debuffMarkSkill }, Statuses = new Dictionary<string, BattleStatus> { ["exposed"] = new("exposed", "노출", "받는피해증가", 1, "") }, LoadedAt = DateTimeOffset.UtcNow };
+Check(DamageBy(Duel(debuffMarkSnapshot), "A").SequenceEqual(new int?[] { 104, 52 }), "상대에게 건 지속 2 디버프는 상대 턴 기준으로 차감되어 내 다음 공격 한 번에만 적용된다");
+
+// 지속방식=누적(고양)은 다시 받을 때 남은 턴에 더하고, 기본(갱신)은 큰 값으로만 갱신한다.
+var accumulateSkill = new BattleSkill("stack", "누적", "일반", null, true, 99, 0, 1, 1,
+    [Fx("stack_1", 1, "상태효과", "자신", duration: 3, status: "uplift_acc"), Fx("stack_2", 2, "상태효과", "자신", duration: 3, status: "uplift_acc"), Fx("stack_3", 3, "상태효과", "자신", duration: 3, status: "plain_buff"), Fx("stack_4", 4, "상태효과", "자신", duration: 3, status: "plain_buff")]);
+var accumulateSnapshot = new BattleDataSnapshot { Rules = quietRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "누적", ["stack"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["stack"] = accumulateSkill },
+    Statuses = new Dictionary<string, BattleStatus> { ["uplift_acc"] = new("uplift_acc", "고양", "없음", 0, "") { AccumulatesDuration = true }, ["plain_buff"] = new("plain_buff", "일반", "없음", 0, "") }, LoadedAt = DateTimeOffset.UtcNow };
+var accumulateEvents = Duel(accumulateSnapshot).Events;
+Check(accumulateEvents.Where(x => x.Type == "StatusApplied" && x.Detail == "고양").Select(x => x.Amount).SequenceEqual(new int?[] { 3, 6 })
+    && accumulateEvents.Where(x => x.Type == "StatusApplied" && x.Detail == "일반").Select(x => x.Amount).SequenceEqual(new int?[] { 3 }),
+    "지속방식=누적 상태는 다시 받으면 남은 턴에 3턴을 더하고, 기본 상태는 같은 지속턴으로 다시 받아도 늘지 않는다");
+
+// [시너지] 옵션은 같은 효과유형끼리 가장 높은 값 하나만 적용되고, 일반 옵션은 그대로 합산된다.
+var synergyTypes = new HashSet<string>(StringComparer.Ordinal) { "주는피해증가" };
+var synergySkill = new BattleSkill("synergy", "시너지", "일반", null, true, 99, 0, 1, 1,
+    [Fx("syn_1", 1, "상태효과", "자신", duration: 5, status: "syn_high"), Fx("syn_2", 2, "상태효과", "자신", duration: 5, status: "syn_low"), Fx("syn_3", 3, "상태효과", "자신", duration: 5, status: "plain_power")]);
+var synergySnapshot = new BattleDataSnapshot { Rules = quietRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "시너지", ["synergy"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["synergy"] = synergySkill },
+    Statuses = new Dictionary<string, BattleStatus> { ["syn_high"] = new("syn_high", "심포니", "주는피해증가|브레이크면역", .3, "") { SynergyTypes = synergyTypes }, ["syn_low"] = new("syn_low", "고양(희망)", "주는피해증가", .1, "") { SynergyTypes = synergyTypes }, ["plain_power"] = new("plain_power", "일반", "주는피해증가", .2, "") }, LoadedAt = DateTimeOffset.UtcNow };
+Check(DamageBy(Duel(synergySnapshot), "A").First() == 78, "시너지 주는 피해 30%와 10%는 30%만, 일반 옵션 20%는 합산되어 일반 공격 52가 78(+50%)이 된다");
+var mixedStatus = new BattleStatus("mixed", "고양(용맹)", "쿨다운감소|악상피해증가", 1, "") { Values = [1, .1] };
+Check(mixedStatus.ValueOf("쿨다운감소") == 1 && mixedStatus.ValueOf("악상피해증가") == .1 && new BattleStatus("single", "단일", "받는치명타확률증가|받는방어무시", .5, "").ValueOf("받는방어무시") == .5,
+    "복합 상태는 값을 효과유형 순서대로 따로 가질 수 있고, 값이 하나면 모든 효과유형이 공유한다");
+
+// 조건부피해증가는 스킬 실행 전 상태로 판정한다. 같은 스킬이 먼저 건 표식으로는 첫 사용이 강화되지 않는다.
+var twoUseRules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "3"), ("minimum_skill_cooldown", "1"));
+var shockSkill = new BattleSkill("shock", "충격", "일반", null, true, 1, 0, 1, 1,
+    [Fx("shock_mark", 1, "상태효과", "상대", duration: 5, status: "dazed"), Fx("shock_hit", 2, "피해", "상대", fixedValue: 100), Fx("shock_bonus", 3, "조건부피해증가", "상대", fixedValue: 50, conditionTarget: "상대", conditionType: "상태효과보유", conditionId: "dazed")]);
+var shockSnapshot = new BattleDataSnapshot { Rules = twoUseRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "충격", ["shock"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["shock"] = shockSkill }, Statuses = new Dictionary<string, BattleStatus> { ["dazed"] = new("dazed", "현기증", "없음", 0, "") }, LoadedAt = DateTimeOffset.UtcNow };
+Check(DamageBy(Duel(shockSnapshot), "A").SequenceEqual(new int?[] { 100, 150 }), "조건부피해증가(고정값 50)는 시전 전 현기증 보유 시에만 피해를 ×1.5 곱연산한다");
+
+// 두려움처럼 "이미 현기증인 대상"에게만 주는 효과는 현기증 부여 행보다 앞 순서에 조건을 걸어 시전 전 상태로 판정한다.
+var strokeSkill = new BattleSkill("stroke", "연타", "일반", null, true, 1, 0, 1, 1,
+    [Fx("stroke_fear", 1, "지속피해", "상대", fixedValue: 10, count: 2, duration: 2, status: "fear", conditionTarget: "상대", conditionType: "상태효과보유", conditionId: "dazed"), Fx("stroke_daze", 2, "상태효과", "상대", duration: 5, status: "dazed")]);
+var strokeSnapshot = new BattleDataSnapshot { Rules = twoUseRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "연타", ["stroke"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["stroke"] = strokeSkill }, Statuses = new Dictionary<string, BattleStatus> { ["dazed"] = new("dazed", "현기증", "없음", 0, ""), ["fear"] = new("fear", "두려움", "없음", 0, "") }, LoadedAt = DateTimeOffset.UtcNow };
+var fearApplied = Duel(strokeSnapshot).Events.Where(x => x.Type == "StatusApplied" && x.Detail == "두려움").ToArray();
+Check(fearApplied.Length == 1, "두려움은 첫 사용(현기증 없음)에는 붙지 않고 현기증이 남은 두 번째 사용에만 붙는다");
+
+// 고정값 지속피해는 보유자 턴마다 고정값 × fixed_damage_scale을 준다(방어력 0, 받는 피해 보정 없음).
+var fixedDotSkill = new BattleSkill("fixed_dot", "현기증", "일반", null, true, 99, 0, 1, 1, [Fx("fixed_dot_1", 1, "지속피해", "상대", fixedValue: 30, count: 2, duration: 2, status: "dazed")]);
+var fixedDotSnapshot = new BattleDataSnapshot { Rules = quietRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "현기증", ["fixed_dot"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["fixed_dot"] = fixedDotSkill }, Statuses = new Dictionary<string, BattleStatus> { ["dazed"] = new("dazed", "현기증", "없음", 0, "") }, LoadedAt = DateTimeOffset.UtcNow };
+Check(Duel(fixedDotSnapshot).Events.Where(x => x.Type == "StatusDamage" && x.Target == "B").Select(x => x.Amount).SequenceEqual(new int?[] { 30, 30 }), "고정값 지속피해 2턴은 상대 턴마다 고정값만큼 두 번 들어간다");
+
+// 약점 노출: 스킬 공격의 첫 타격에만 치명타 +50%·방어도 무시 50%를 적용하고 소모한다. 일반 공격은 소모하지 않는다.
+var weakRules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "3"), ("base_defense", "20"));
+var weakStatus = new BattleStatus("weak_point_exposure", "약점 노출", "받는치명타확률증가|받는방어무시|첫스킬타격소모", .5, "");
+var weakMulti = new BattleSkill("weak_multi", "연속 사격", "일반", null, true, 99, 0, 1, 1, [Fx("weak_multi_1", 1, "상태효과", "상대", duration: 3, status: "weak_point_exposure"), Fx("weak_multi_2", 2, "피해", "상대", fixedValue: 100, count: 3)]);
+var weakMultiSnapshot = new BattleDataSnapshot { Rules = weakRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "약점", ["weak_multi"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["weak_multi"] = weakMulti }, Statuses = new Dictionary<string, BattleStatus> { ["weak_point_exposure"] = weakStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var weakMultiBattle = Duel(weakMultiSnapshot);
+Check(DamageBy(weakMultiBattle, "A").Take(3).SequenceEqual(new int?[] { 135, 80, 80 }) && weakMultiBattle.Events.Count(x => x.Type == "StatusConsumed") == 1,
+    "약점 노출은 다단 스킬의 첫 타격만 방어도 절반 무시((100-10)×치명타 1.5=135)하고 소모되어 나머지 타격은 80이다");
+var weakSingle = new BattleSkill("weak_single", "스트링 샷", "일반", null, true, 99, 0, 1, 1, [Fx("weak_single_1", 1, "피해", "상대", fixedValue: 100), Fx("weak_single_2", 2, "상태효과", "상대", duration: 3, status: "weak_point_exposure")]);
+var weakSingleSnapshot = new BattleDataSnapshot { Rules = weakRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "약점", ["weak_single"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["weak_single"] = weakSingle }, Statuses = new Dictionary<string, BattleStatus> { ["weak_point_exposure"] = weakStatus }, LoadedAt = DateTimeOffset.UtcNow };
+var weakSingleBattle = Duel(weakSingleSnapshot);
+Check(!weakSingleBattle.Events.Any(x => x.Type == "StatusConsumed") && weakSingleBattle.Events.Count(x => x.Type == "CriticalHit" && x.Actor == "A") == 1,
+    "약점 노출을 남긴 스킬 자신은 혜택을 받지 않고, 이어지는 일반 공격은 치명타 보너스만 받고 약점 노출을 소모하지 않는다");
+
+// 활력: 회복 전 체력이 40% 미만이면 지속회복을 시작하고, 재발동 대기 동안에는 같은 행동의 다른 회복으로도 다시 발동하지 않는다.
+var vitalityRules = RulesWith(("base_max_hp", "100"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "3"), ("normal_attack_multiplier", "0.01"));
+var vitalitySkill = new BattleSkill("vital_heal", "회복", "일반", null, true, 99, 0, 1, 1,
+    [Fx("vital_hurt", 1, "피해", "자신", fixedValue: 70), Fx("vital_heal_1", 2, "회복", "자신", fixedValue: 5), Fx("vital_heal_2", 3, "회복", "자신", fixedValue: 5)]);
+var vitalityPassive = new BattlePassive("vitality_test", true, [new BattleEffect("vit_regen", 1, "지속회복", "자신", 10, 2, 1, 2, "vitality_regen", 0, null, "자신", "HP비율", null, "<", "0.4", null, null, 1d, "회복적용시", null, null, 8)]);
+var vitalitySnapshot = new BattleDataSnapshot { Rules = vitalityRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "활력", ["vital_heal"], PassiveIds: ["vitality_test"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["vital_heal"] = vitalitySkill },
+    Passives = new Dictionary<string, BattlePassive> { ["vitality_test"] = vitalityPassive }, Statuses = new Dictionary<string, BattleStatus> { ["vitality_regen"] = new("vitality_regen", "활력", "없음", 0, "") { AccumulatesDuration = true } }, LoadedAt = DateTimeOffset.UtcNow };
+var vitalityEvents = Duel(vitalitySnapshot).Events;
+Check(vitalityEvents.Count(x => x.Type == "StatusApplied" && x.Detail == "활력") == 1 && vitalityEvents.Any(x => x.Type == "StatusHeal" && x.Target == "A" && x.Amount == 10),
+    "활력은 회복 전 체력 30%에서 발동하고, 같은 행동의 두 번째 회복(회복 전 35%)에는 재발동 대기로 다시 발동하지 않으며, 다음 내 턴에 지속 회복한다");
+
+// 재사용으로 상태를 끝낸 경우, 행동 뒤 같은 상태의 "상태만료 시" 파생이 한 번 더 발동하지 않는다(라이징 윈드밀 중복 방지).
+var feignBoth = new BattleSkill("feign_both", "죽은 척 하기", "일반", null, true, 6, 0, 1, 1, [Fx("feign_both_1", 1, "받는피해감소", "자신", duration: 1, status: "feign_both_state")]);
+var risingBoth = new BattleSkill("rising_both", "라이징 윈드밀", "파생", "feign_both", true, 0, 0, 1, 1, [Fx("rising_both_1", 1, "피해", "상대")]);
+var feignBothSnapshot = new BattleDataSnapshot { Rules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "7")), Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "죽은 척", ["feign_both"]), ["idle"] = idleClass },
+    Skills = new Dictionary<string, BattleSkill> { ["feign_both"] = feignBoth, ["rising_both"] = risingBoth }, Statuses = new Dictionary<string, BattleStatus> { ["feign_both_state"] = new("feign_both_state", "죽은 척", "받는피해감소", .4, "") },
+    Derivations = [new BattleDerivation("both_expire", "feign_both", "rising_both", "조건", 0, 1, "상태효과보유", "feign_both_state", false, "상태만료 시", 100), new BattleDerivation("both_reuse", "feign_both", "rising_both", "조건", 0, 1, "상태효과보유", "feign_both_state", false, "재사용 시", 100)], LoadedAt = DateTimeOffset.UtcNow };
+Check(Duel(feignBothSnapshot).Events.Count(x => x.Type == "SkillUsed" && x.Detail == "라이징 윈드밀") == 1, "죽은 척을 재사용으로 끝내면 라이징 윈드밀은 한 번만 발동한다");
+
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)

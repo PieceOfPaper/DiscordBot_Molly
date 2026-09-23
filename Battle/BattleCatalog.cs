@@ -144,7 +144,9 @@ public sealed class BattleCatalog
             x.Required("ID", "배틀패시브효과", i + 2), BattleCsv.Int(x.Required("실행순서", "배틀패시브효과", i + 2), "배틀패시브효과", i + 2, "실행순서", 1), x["효과유형"], x["대상"], BattleCsv.Int(x["고정값"], "배틀패시브효과", i + 2, "고정값"), BattleCsv.Int(x["횟수"], "배틀패시브효과", i + 2, "횟수", 1), BattleCsv.Double(x["발동확률"], "배틀패시브효과", i + 2, "발동확률", 0, 1),
             BattleCsv.Int(x["지속턴"], "배틀패시브효과", i + 2, "지속턴"), EmptyAsNull(x["상태효과ID"]), BattleCsv.Int(x["최대중첩"], "배틀패시브효과", i + 2, "최대중첩"), EmptyAsNull(x["효과문구"]),
             EmptyAsNull(x["조건대상"]), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건ID"]), EmptyAsNull(x["조건연산자"]), EmptyAsNull(x["조건값"]), EmptyAsNull(x["수치참조ID"]), EmptyAsNull(x["수치참조방식"]),
-            1d, x.Required("발동시점", "배틀패시브효과", i + 2), EmptyAsNull(x["대상스킬ID"]), EmptyAsNull(x["대상자원ID"]))).OrderBy(x => x.Order).ToArray());
+            1d, x.Required("발동시점", "배틀패시브효과", i + 2), EmptyAsNull(x["대상스킬ID"]), EmptyAsNull(x["대상자원ID"]),
+            // 재발동대기턴은 선택 컬럼이다. 활력처럼 같은 효과가 한 번 발동한 뒤 보유자의 N턴 동안 다시 발동하지 않게 한다.
+            EmptyAsNull(x.GetValueOrDefault("재발동대기턴", "")) is { } reactivation ? BattleCsv.Int(reactivation, "배틀패시브효과", i + 2, "재발동대기턴") : 0)).OrderBy(x => x.Order).ToArray());
         var skillMap = new Dictionary<string, BattleSkill>(StringComparer.Ordinal);
         foreach (var (row, index) in battleSkills.Select((x, i) => (x, i + 2)))
         {
@@ -178,7 +180,7 @@ public sealed class BattleCatalog
             if (!passiveMap.TryAdd(id, passive)) throw new InvalidDataException($"배틀패시브 ID '{id}'가 중복되었습니다.");
         }
         var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]), StringComparer.Ordinal);
-        var statusMap = Unique(statuses, "배틀상태효과").ToDictionary(x => x["ID"], x => new BattleStatus(x["ID"], x["이름"], x["효과유형"], BattleCsv.Double(x["값"], "배틀상태효과", 0, "값"), x["설명"], EmptyAsNull(x["대상스킬ID"]), EmptyAsNull(x.GetValueOrDefault("중첩자원ID", ""))), StringComparer.Ordinal);
+        var statusMap = Unique(statuses, "배틀상태효과").Select((x, i) => ParseStatus(x, i + 2)).ToDictionary(x => x.Id, StringComparer.Ordinal);
         foreach (var status in statusMap.Values)
             if (status.TargetSkillId is { } targetSkillId && !skillMap.ContainsKey(targetSkillId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 대상스킬ID가 존재하지 않는 배틀 스킬 ID '{targetSkillId}'를 참조합니다.");
@@ -222,6 +224,27 @@ public sealed class BattleCatalog
             if (!seen.Add(id)) throw new InvalidDataException($"{sheet} 시트의 ID '{id}'가 중복되었습니다.");
             yield return row;
         }
+    }
+
+    private static BattleStatus ParseStatus(Dictionary<string, string> row, int index)
+    {
+        var effectTypes = row["효과유형"].Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var value = BattleCsv.Double(row["값"], "배틀상태효과", index, "값");
+        // 효과유형마다 값이 다르면 선택 컬럼 효과별값에 `1|0.1`처럼 효과유형 순서대로 적는다. 비어 있으면 모든 효과유형이 값을 공유한다.
+        // 값 컬럼에 섞어 쓰지 않는 이유: gviz CSV는 숫자 열의 문자열 셀을 빈 값으로 내보낸다.
+        var values = (EmptyAsNull(row.GetValueOrDefault("효과별값", "")) ?? "").Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Select(x => BattleCsv.Double(x, "배틀상태효과", index, "효과별값")).ToArray();
+        if (values.Length > 0 && values.Length != effectTypes.Length) throw new InvalidDataException($"배틀상태효과 시트 {index}행의 효과별값 개수가 효과유형 개수와 다릅니다.");
+        // 시너지·지속방식은 선택 컬럼이다. 시너지에는 [시너지] 옵션인 효과유형을 `|`로 적는다.
+        var synergy = (EmptyAsNull(row.GetValueOrDefault("시너지", "")) ?? "").Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+        if (synergy.Any(x => !effectTypes.Contains(x, StringComparer.Ordinal))) throw new InvalidDataException($"배틀상태효과 시트 {index}행의 시너지에 효과유형에 없는 항목이 있습니다.");
+        var durationMode = EmptyAsNull(row.GetValueOrDefault("지속방식", "")) ?? "갱신";
+        if (durationMode is not ("갱신" or "누적")) throw new InvalidDataException($"배틀상태효과 시트 {index}행의 지속방식은 갱신 또는 누적이어야 합니다.");
+        return new BattleStatus(row.Required("ID", "배틀상태효과", index), row["이름"], row["효과유형"], value, row["설명"], EmptyAsNull(row["대상스킬ID"]), EmptyAsNull(row.GetValueOrDefault("중첩자원ID", "")))
+        {
+            Values = values,
+            SynergyTypes = synergy,
+            AccumulatesDuration = durationMode == "누적"
+        };
     }
 
     private static string? EmptyAsNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
