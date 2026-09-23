@@ -756,6 +756,79 @@ var healFixedAmount = healFixedBattle.Events.First(x => x.Type == "HealApplied" 
 Check(healFixedAmount == 40 * battleRules["fixed_damage_scale"].Number,
     "고정값이 있는 회복 효과는 피해와 동일하게 시트 표시 수치 × fixed_damage_scale을 그대로 사용한다");
 
+// 패시브 스킬 회귀 테스트: 전투시작 상시 효과, 자원획득시·브레이크발생시·자원소진시(자연 만료 포함) 트리거를 각각 검증한다.
+var permBuffEffect = new BattleEffect("perm_dmg", 1, "주는피해증가", "자신", 0, 1, 1, 0, "perm_dmg_status", 0, null, null, null, null, null, null, null, null, Trigger: "전투시작");
+var permBuffPassive = new BattlePassive("perm_test", true, [permBuffEffect]);
+var passiveStrike = new BattleSkill("p_strike", "타격", "일반", null, true, 0, 0, 1, 1, [new BattleEffect("dmg", 1, "피해", "상대", 0, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var passiveBuffedClass = new BattleClass("buffed", "버프", ["p_strike"], true, ["perm_test"]);
+var passivePlainClass = new BattleClass("plain", "일반", ["p_strike"]);
+var permBuffStatuses = new Dictionary<string, BattleStatus> { ["perm_dmg_status"] = new("perm_dmg_status", "상시 피해 증가", "주는피해증가", .5, "상시 주는 피해 +50%") };
+var permBuffRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+permBuffRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+permBuffRules["base_attack"] = new("base_attack", "전투능력치", "number", "1000", "");
+permBuffRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "6", "");
+var permBaselineSnapshot = new BattleDataSnapshot { Rules = permBuffRules, Classes = new Dictionary<string, BattleClass> { ["plain"] = passivePlainClass, ["plain2"] = new("plain2", "일반2", ["p_strike"]) }, Skills = new Dictionary<string, BattleSkill> { ["p_strike"] = passiveStrike }, Statuses = permBuffStatuses, LoadedAt = DateTimeOffset.UtcNow };
+var permBuffedSnapshot = new BattleDataSnapshot { Rules = permBuffRules, Classes = new Dictionary<string, BattleClass> { ["buffed"] = passiveBuffedClass, ["plain"] = passivePlainClass }, Skills = new Dictionary<string, BattleSkill> { ["p_strike"] = passiveStrike }, Passives = new Dictionary<string, BattlePassive> { ["perm_test"] = permBuffPassive }, Statuses = permBuffStatuses, LoadedAt = DateTimeOffset.UtcNow };
+var permBaselineBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "plain", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "plain2", 100, 0, 0), permBaselineSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+var permBuffedBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "buffed", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "plain", 100, 0, 0), permBuffedSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+var permBaselineDamages = permBaselineBattle.Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Select(x => x.Amount ?? 0).ToArray();
+var permBuffedDamages = permBuffedBattle.Events.Where(x => x.Type == "DamageDealt" && x.Actor == "A").Select(x => x.Amount ?? 0).ToArray();
+Check(permBuffedBattle.Events.Count(x => x.Type == "PassiveApplied" && x.Actor == "A") == 1 && permBuffedDamages.Length >= 2 && permBaselineDamages.Length >= 2
+    && permBuffedDamages[0] > permBaselineDamages[0] && permBuffedDamages[^1] > permBaselineDamages[^1],
+    "패시브의 전투시작 트리거는 상시 상태를 한 번만 부여하고, 일반 상태와 달리 턴이 지나도 사라지지 않는다");
+
+var gainReactEffect = new BattleEffect("gain_bonus", 1, "자원증가", "자신", 1, 1, 1, 0, "bonus_counter", 0, null, null, null, null, null, null, null, null, Trigger: "자원획득시", TriggerResourceId: "focus_mark");
+var gainPassive = new BattlePassive("gain_test", true, [gainReactEffect]);
+var markSkill = new BattleSkill("mark_up", "표식 획득", "일반", null, true, 0, 0, 1, 1, [new BattleEffect("set_mark", 1, "자원설정", "자신", 1, 1, 1, 0, "focus_mark", 0, null, null, null, null, null, null, null, null)]);
+var gainClass = new BattleClass("gainer", "표식러", ["mark_up"], true, ["gain_test"]);
+var gainSnapshot = new BattleDataSnapshot
+{
+    Rules = battleRules,
+    Classes = new Dictionary<string, BattleClass> { ["gainer"] = gainClass, ["target"] = new("target", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["mark_up"] = markSkill },
+    Resources = new Dictionary<string, BattleResource> { ["focus_mark"] = new("focus_mark", "표식", "표식", 1, 0, 0, "교체"), ["bonus_counter"] = new("bonus_counter", "보너스 카운터", "카운터", 0, 0, 0, "가산") },
+    Passives = new Dictionary<string, BattlePassive> { ["gain_test"] = gainPassive },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var gainBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "gainer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), gainSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(gainBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "보너스 카운터 +1 (현재 1)"), "패시브는 자원획득시 트리거로 특정 자원(대상자원ID)의 변화에만 반응한다");
+
+var breakReactEffect = new BattleEffect("break_react", 1, "자원증가", "자신", 1, 1, 1, 0, "break_counter", 0, null, null, null, null, null, null, null, null, Trigger: "브레이크발생시");
+var breakReactPassive = new BattlePassive("break_test", true, [breakReactEffect]);
+var breakerSkill2 = new BattleSkill("breaker_hit", "브레이크 유발", "일반", null, true, 0, 0, 1, 1, [new BattleEffect("break_dmg", 1, "브레이크피해", "상대", 1, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var breakReactClass = new BattleClass("reactor", "반응자", ["breaker_hit"], true, ["break_test"]);
+var breakReactRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+breakReactRules["break_gauge_maximum"] = new("break_gauge_maximum", "브레이크", "integer", "1", "");
+var breakReactSnapshot = new BattleDataSnapshot
+{
+    Rules = breakReactRules,
+    Classes = new Dictionary<string, BattleClass> { ["reactor"] = breakReactClass, ["breaktarget"] = new("breaktarget", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["breaker_hit"] = breakerSkill2 },
+    Resources = new Dictionary<string, BattleResource> { ["break_counter"] = new("break_counter", "브레이크 카운터", "카운터", 0, 0, 0, "가산") },
+    Passives = new Dictionary<string, BattlePassive> { ["break_test"] = breakReactPassive },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var breakReactBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "reactor", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "breaktarget", 100, 0, 0), breakReactSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(breakReactBattle.Events.Any(x => x.Type == "BreakActivated") && breakReactBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "브레이크 카운터 +1 (현재 1)"), "패시브는 자신 또는 상대의 브레이크 발생 시(브레이크발생시) 반응한다");
+
+var exhaustReactEffect = new BattleEffect("exhaust_react", 1, "자원증가", "자신", 1, 1, 1, 0, "exhaust_counter", 0, null, null, null, null, null, null, null, null, Trigger: "자원소진시", TriggerResourceId: "timed_resource");
+var exhaustPassive = new BattlePassive("exhaust_test", true, [exhaustReactEffect]);
+var grantSkill = new BattleSkill("grant", "부여", "일반", null, true, 0, 0, 1, 1, [new BattleEffect("grant_eff", 1, "자원설정", "자신", 1, 1, 1, 0, "timed_resource", 0, null, null, null, null, null, null, null, null)]);
+var exhaustClass = new BattleClass("exhauster", "소진러", ["grant"], true, ["exhaust_test"]);
+var exhaustRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+exhaustRules["minimum_skill_cooldown"] = new("minimum_skill_cooldown", "행동", "integer", "0", "");
+var exhaustSnapshot = new BattleDataSnapshot
+{
+    Rules = exhaustRules,
+    Classes = new Dictionary<string, BattleClass> { ["exhauster"] = exhaustClass, ["exhausttarget"] = new("exhausttarget", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["grant"] = grantSkill },
+    Resources = new Dictionary<string, BattleResource> { ["timed_resource"] = new("timed_resource", "타이머 자원", "자원", 1, 0, 1, "가산"), ["exhaust_counter"] = new("exhaust_counter", "소진 카운터", "카운터", 0, 0, 0, "가산") },
+    Passives = new Dictionary<string, BattlePassive> { ["exhaust_test"] = exhaustPassive },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var exhaustBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "exhauster", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "exhausttarget", 100, 0, 0), exhaustSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100))));
+Check(exhaustBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "소진 카운터 +1 (현재 1)"), "패시브는 지속턴 만료로 자원이 자연 소진될 때도(TickResources 경로) 자원소진시 트리거로 반응한다");
+
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
 void RejectConsonants(ConsonantCsvData csv, string name)

@@ -12,6 +12,9 @@ public sealed class BattleEngine
         var left = Fighter.Create(a, PowerScale(a.CombatPower, basePower, rules), rules, data);
         var right = Fighter.Create(b, PowerScale(b.CombatPower, basePower, rules), rules, data);
         var events = new List<BattleEvent> { new("BattleStarted", left.Name, right.Name) };
+        // 패시브의 상시 효과(전투시작 트리거)는 두 파이터가 모두 구성된 뒤, 실제 전투 루프가 시작되기 전에 적용한다.
+        FirePassiveTrigger(left, right, "전투시작", null, null, random, rules, events);
+        FirePassiveTrigger(right, left, "전투시작", null, null, random, rules, events);
         var actor = random.NextDouble() < .5 ? left : right;
         var major = 0;
         var surpriseCooldown = 0;
@@ -20,7 +23,7 @@ public sealed class BattleEngine
             var target = ReferenceEquals(actor, left) ? right : left;
             events.Add(new("TurnStarted", actor.Name, target.Name));
             actor.TickCooldowns();
-            actor.TickResources(events);
+            actor.TickResources(target, random, rules, events);
             var damagedByStatus = actor.TickPeriodicEffects(rules, events);
             if (damagedByStatus && actor.Hp > 0) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
             if (actor.Hp <= 0) break;
@@ -51,7 +54,7 @@ public sealed class BattleEngine
             {
                 var selectedId = skill.Id;
                 skill = ResolveReuse(actor, skill, data) ?? skill;
-                SpendSkillResource(actor, skill, data, events);
+                SpendSkillResource(actor, target, skill, data, random, rules, events);
                 actor.Cooldowns[selectedId] = Math.Max(skill.Cooldown, rules.MinimumSkillCooldown);
                 actor.LastSkillId = skill.Id;
                 // 효과로 자원을 얻은 뒤에 조건 파생을 판정해야 한다. 다만 효과가 없는 무작위 부모는
@@ -68,17 +71,21 @@ public sealed class BattleEngine
                 if (!hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: skill.Name));
                 if (hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: derivedSkills[0].Name));
                 events.AddRange(effectEvents);
+                var performedSkillId = skill.Id;
                 foreach (var derived in derivedSkills)
                 {
                     if (!hideParent) events.Add(new("DerivedSkillUsed", actor.Name, target.Name, Detail: derived.Name));
                     var child = ExecuteEffects(actor, target, derived, surpriseMultiplier, random, rules, events);
                     resolved.TargetDamaged |= child.TargetDamaged;
                     resolved.ActorHealed |= child.ActorHealed;
+                    if (actor.Hp > 0) FirePassiveTrigger(actor, target, "스킬사용완료시", derived.Id, null, random, rules, events);
+                    performedSkillId = derived.Id;
                 }
-                GainSkillResource(actor, skill, data, events);
-                SpendDeferredSkillResource(actor, skill, data, events);
+                GainSkillResource(actor, target, skill, data, random, rules, events);
+                SpendDeferredSkillResource(actor, target, skill, data, random, rules, events);
                 targetDamaged = resolved.TargetDamaged;
                 actorHealed = resolved.ActorHealed;
+                if (actor.Hp > 0 && derivedSkills.Length == 0) FirePassiveTrigger(actor, target, "스킬사용완료시", performedSkillId, null, random, rules, events);
             }
             if (targetDamaged && target.Hp > 0) events.Add(new("HpStatus", target.Name, Detail: HpStatus(target)));
             if (actorHealed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
@@ -97,15 +104,17 @@ public sealed class BattleEngine
     }
 
     private static double PowerScale(int power, double basePower, Rules rules) => Math.Clamp(Math.Pow(Math.Max(1d, power) / basePower, rules.PowerExponent), rules.PowerMin, rules.PowerMax);
-    private static double SkillMultiplier(BattleSkill skill, Rules rules)
+    private static double SkillMultiplier(BattleSkill? skill, Rules rules)
     {
+        if (skill is null) return rules.SkillDamageMinMultiplier;
         if (skill.Kind == "궁극기" || skill.Id.Contains("finale", StringComparison.OrdinalIgnoreCase) || skill.Id.Contains("symphony", StringComparison.OrdinalIgnoreCase)) return rules.UltimateDamageMultiplier;
         var variation = (uint)StringComparer.Ordinal.GetHashCode(skill.Id) % 100 / 100d;
         return rules.SkillDamageMinMultiplier + variation * (rules.SkillDamageMaxMultiplier - rules.SkillDamageMinMultiplier);
     }
     // 회복도 피해와 동일하게 공격력 기반 배율(또는 고정값)로 계산한다. 최대 HP 비율 기반 회복은 스킬 위력과 무관해지므로 쓰지 않는다.
-    private static double HealMultiplier(BattleSkill skill, Rules rules)
+    private static double HealMultiplier(BattleSkill? skill, Rules rules)
     {
+        if (skill is null) return rules.SkillHealMinMultiplier;
         if (skill.Kind == "궁극기" || skill.Id.Contains("finale", StringComparison.OrdinalIgnoreCase) || skill.Id.Contains("symphony", StringComparison.OrdinalIgnoreCase)) return rules.UltimateHealMultiplier;
         var variation = (uint)StringComparer.Ordinal.GetHashCode(skill.Id) % 100 / 100d;
         return rules.SkillHealMinMultiplier + variation * (rules.SkillHealMaxMultiplier - rules.SkillHealMinMultiplier);
@@ -210,76 +219,132 @@ public sealed class BattleEngine
             if (actor.Hp <= 0 || target.Hp <= 0) break;
             var receiver = effect.Target == "자신" ? actor : target;
             if (!CanApplyEffect(actor, target, effect)) continue;
-            switch (effect.Type)
-            {
-                case "피해":
-                    // 다단 효과의 총 기본 위력은 유지하고 타격마다 나눕니다.
-                    // 각 타격은 별도로 치명타·추가타를 판정하므로 연출과 변동성은 남습니다.
-                    var totalBaseDamage = effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier;
-                    var hitBaseDamage = totalBaseDamage / effect.Count;
-                    for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
-                    {
-                        if (random.NextDouble() >= effect.Chance) continue;
-                        // 연속치명타배율 <1이면 타격마다(0번째 제외) 누적 제곱으로 치명타 확률이 감소한다(거스팅 볼트: 매 발사 0.75배).
-                        var criticalChanceMultiplier = Math.Pow(effect.CriticalChanceMultiplierPerHit, hit);
-                        resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events, skill, criticalChanceMultiplier);
-                    }
-                    break;
-                case "지속피해" when effect.StatusId is { } periodicStatusId && effect.Duration > 0:
-                    receiver.ApplyStatus(periodicStatusId, effect.Duration, skill.Id, events);
-                    // 횟수는 지속 시간 전체에 걸쳐 들어갈 총 타격 수다. 턴마다 한 번씩 나누어 적용한다.
-                    receiver.ApplyPeriodicEffect(periodicStatusId, actor.Name,
-                        actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier / Math.Max(1, effect.Count),
-                        effect.Message ?? periodicStatusId);
-                    break;
-                case "추가피해":
-                    if (random.NextDouble() < effect.Chance)
-                    {
-                        var damage = ResolveFixedAmount(actor, effect);
-                        ApplyAdditionalDamage(actor, receiver, damage, events);
-                        resolution.TargetDamaged = true;
-                    }
-                    break;
-                case "회복":
-                    // 피해와 동일한 구조: 다단 효과의 총 회복량은 유지하고 타격마다 나눈다.
-                    var totalBaseHeal = effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * HealMultiplier(skill, rules);
-                    var healPerTick = totalBaseHeal / effect.Count;
-                    for (var healIndex = 0; healIndex < effect.Count; healIndex++)
-                    {
-                        if (random.NextDouble() >= effect.Chance) continue;
-                        var amount = Math.Max(1, (int)Math.Round(healPerTick));
-                        var healed = Math.Min(amount, receiver.MaxHp - receiver.Hp);
-                        receiver.Hp += healed;
-                        if (healed > 0)
-                        {
-                            events.Add(new("HealApplied", actor.Name, receiver.Name, healed));
-                            resolution.ActorHealed |= ReferenceEquals(receiver, actor);
-                        }
-                    }
-                    break;
-                case "자원설정" when effect.StatusId is { } resourceId:
-                    SetResource(receiver, resourceId, ResolveFixedAmount(receiver, effect), events);
-                    break;
-                case "자원소모" when effect.StatusId is { } resourceId:
-                    SetResource(receiver, resourceId, effect.NumericReferenceMode == "전부" ? 0 : receiver.Resources.GetValueOrDefault(resourceId) - ResolveFixedAmount(receiver, effect), events);
-                    break;
-                case "자원증가" when effect.StatusId is { } resourceId:
-                    AddResource(receiver, resourceId, ResolveFixedAmount(receiver, effect), events);
-                    break;
-                case "브레이크피해":
-                    if (random.NextDouble() < effect.Chance)
-                        ApplyBreakDamage(actor, receiver, Math.Max(1, ResolveFixedAmount(actor, effect)), rules, events);
-                    break;
-                case "쿨다운감소":
-                    receiver.ReduceCooldowns(Math.Max(1, ResolveFixedAmount(receiver, effect)), events);
-                    break;
-                default:
-                    if (effect.StatusId is { } statusId && effect.Duration > 0)
-                        receiver.ApplyStatus(statusId, effect.Duration, skill.Id, events);
-                    break;
-            }
+            ApplyEffect(actor, target, receiver, effect, skill, surpriseMultiplier, random, rules, events, resolution);
         }
         return resolution;
+    }
+
+    /// <summary>패시브가 <see cref="BattleEffect.Trigger"/> 시점에 발동시키는 효과 하나를 실행한다. 스킬 효과와 동일한 <see cref="ApplyEffect"/> 처리기를 재사용한다.</summary>
+    private static void FirePassiveTrigger(Fighter owner, Fighter opponent, string trigger, string? skillId, string? resourceId, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        foreach (var passive in owner.Passives)
+        {
+            if (owner.Hp <= 0) return;
+            foreach (var effect in passive.Effects)
+            {
+                if (effect.Trigger != trigger) continue;
+                if (effect.TriggerSkillId is { } scopedSkillId && scopedSkillId != skillId) continue;
+                if (effect.TriggerResourceId is { } scopedResourceId && !MatchesResource(owner, scopedResourceId, resourceId)) continue;
+                if (owner.Hp <= 0 || opponent.Hp <= 0) return;
+                var receiver = effect.Target == "자신" ? owner : opponent;
+                if (!CanApplyEffect(owner, opponent, effect)) continue;
+                ApplyEffect(owner, opponent, receiver, effect, null, 1d, random, rules, events, new EffectResolution());
+            }
+        }
+    }
+
+    private static bool MatchesResource(Fighter owner, string scope, string? resourceId)
+        => resourceId is not null && (resourceId == scope || (owner.ResourceDefinitions.TryGetValue(resourceId, out var definition) && definition.Kind == scope));
+
+    /// <summary>효과 한 행을 실행한다. <paramref name="skill"/>이 null이면 패시브 트리거에서 직접 발동한 효과다(고정값 기반 효과만 안전하게 지원).</summary>
+    private static void ApplyEffect(Fighter actor, Fighter target, Fighter receiver, BattleEffect effect, BattleSkill? skill, double surpriseMultiplier, IBattleRandom random, Rules rules, List<BattleEvent> events, EffectResolution resolution)
+    {
+        switch (effect.Type)
+        {
+            case "피해":
+                // 다단 효과의 총 기본 위력은 유지하고 타격마다 나눕니다.
+                // 각 타격은 별도로 치명타·추가타를 판정하므로 연출과 변동성은 남습니다.
+                var totalBaseDamage = effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier;
+                var hitBaseDamage = totalBaseDamage / effect.Count;
+                var multiHitBonus = effect.Count > 1 ? actor.StatusValue("멀티히트피해증가") : 0d;
+                for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
+                {
+                    if (random.NextDouble() >= effect.Chance) continue;
+                    // 연속치명타배율 <1이면 타격마다(0번째 제외) 누적 제곱으로 치명타 확률이 감소한다(거스팅 볼트: 매 발사 0.75배).
+                    var criticalChanceMultiplier = Math.Pow(effect.CriticalChanceMultiplierPerHit, hit);
+                    resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events, skill, criticalChanceMultiplier, multiHitBonus);
+                }
+                break;
+            case "지속피해" when effect.StatusId is { } periodicStatusId && effect.Duration > 0:
+                receiver.ApplyStatus(periodicStatusId, effect.Duration, skill?.Id ?? "passive", events);
+                // 횟수는 지속 시간 전체에 걸쳐 들어갈 총 타격 수다. 턴마다 한 번씩 나누어 적용한다.
+                receiver.ApplyPeriodicEffect(periodicStatusId, actor.Name,
+                    actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier / Math.Max(1, effect.Count),
+                    effect.Message ?? periodicStatusId);
+                break;
+            case "추가피해":
+                if (random.NextDouble() < effect.Chance)
+                {
+                    var damage = ResolveFixedAmount(actor, effect);
+                    ApplyAdditionalDamage(actor, receiver, damage, events);
+                    resolution.TargetDamaged = true;
+                }
+                break;
+            case "회복":
+            {
+                // 피해와 동일한 구조: 다단 효과의 총 회복량은 유지하고 타격마다 나눈다.
+                var totalBaseHeal = (effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * HealMultiplier(skill, rules)) * (1d + actor.StatusValue("회복량증가"));
+                var healPerTick = totalBaseHeal / effect.Count;
+                var totalHealed = 0;
+                for (var healIndex = 0; healIndex < effect.Count; healIndex++)
+                {
+                    if (random.NextDouble() >= effect.Chance) continue;
+                    var amount = Math.Max(1, (int)Math.Round(healPerTick));
+                    var healed = Math.Min(amount, receiver.MaxHp - receiver.Hp);
+                    receiver.Hp += healed;
+                    totalHealed += healed;
+                    if (healed > 0)
+                    {
+                        events.Add(new("HealApplied", actor.Name, receiver.Name, healed));
+                        resolution.ActorHealed |= ReferenceEquals(receiver, actor);
+                    }
+                }
+                if (totalHealed > 0)
+                {
+                    var otherFighter = ReferenceEquals(receiver, actor) ? target : actor;
+                    FirePassiveTrigger(receiver, otherFighter, "회복적용시", null, null, random, rules, events);
+                }
+                break;
+            }
+            case "자원설정" when effect.StatusId is { } resourceId:
+            {
+                var other = ReferenceEquals(receiver, actor) ? target : actor;
+                SetResource(receiver, other, resourceId, ResolveFixedAmount(receiver, effect), random, rules, events);
+                break;
+            }
+            case "자원소모" when effect.StatusId is { } resourceId:
+            {
+                var other = ReferenceEquals(receiver, actor) ? target : actor;
+                SetResource(receiver, other, resourceId, effect.NumericReferenceMode == "전부" ? 0 : receiver.Resources.GetValueOrDefault(resourceId) - ResolveFixedAmount(receiver, effect), random, rules, events);
+                break;
+            }
+            case "자원증가" when effect.StatusId is { } resourceId:
+            {
+                var other = ReferenceEquals(receiver, actor) ? target : actor;
+                AddResource(receiver, other, resourceId, ResolveFixedAmount(receiver, effect), random, rules, events);
+                break;
+            }
+            case "브레이크피해":
+                if (random.NextDouble() < effect.Chance)
+                    ApplyBreakDamage(actor, receiver, Math.Max(1, ResolveFixedAmount(actor, effect)), random, rules, events);
+                break;
+            case "쿨다운감소":
+                receiver.ReduceCooldowns(Math.Max(1, ResolveFixedAmount(receiver, effect)), events);
+                break;
+            case "다음행동지정" when effect.StatusId is { } scheduledSkillId:
+                // 패시브가 다음 주요 행동을 특정 스킬로 강제 지정한다(즉흥 연주처럼 "즉시 1회 연주"를 단순화한 표현).
+                // 원칙상 파생·돌발 이벤트는 행동을 소비하지 않아야 하지만, 엔진에 별도의 무행동 삽입 경로가 없어
+                // 다음 행동 하나를 대체하는 것으로 단순화했다(비고에 근거를 남긴다).
+                receiver.PendingSkillId = scheduledSkillId;
+                break;
+            default:
+                if (effect.StatusId is { } statusId && (effect.Duration > 0 || effect.Trigger == "전투시작"))
+                {
+                    if (effect.Trigger == "전투시작") receiver.ApplyPermanentStatus(statusId, events);
+                    else receiver.ApplyStatus(statusId, effect.Duration, skill?.Id ?? "passive", events);
+                }
+                break;
+        }
     }
 
     private static bool CanApplyEffect(Fighter actor, Fighter target, BattleEffect effect)
@@ -296,8 +361,16 @@ public sealed class BattleEngine
             // 배틀스킬파생의 상태효과보유 판정과 동일한 의미다. 조건대상=상대로 상대의 상태를 검사할 수 있다.
             "상태효과보유" when effect.ConditionId is { } statusId => conditionOwner.Statuses.ContainsKey(statusId),
             "상태효과미보유" when effect.ConditionId is { } statusId => !conditionOwner.Statuses.ContainsKey(statusId),
+            // 패시브의 "회복적용시"처럼 HP 비율을 조건으로 거는 효과(예: 활력의 40% 미만)에 사용한다.
+            "HP비율" => CompareRatio((double)conditionOwner.Hp / conditionOwner.MaxHp, effect.ConditionOperator, effect.ConditionValue),
             _ => false
         };
+    }
+
+    private static bool CompareRatio(double actual, string? op, string? value)
+    {
+        if (value is null || !double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var expected)) return false;
+        return op switch { "=" or "==" => actual == expected, ">" => actual > expected, ">=" => actual >= expected, "<" => actual < expected, "<=" => actual <= expected, _ => false };
     }
 
     private static int ResolveFixedAmount(Fighter fighter, BattleEffect effect)
@@ -320,7 +393,7 @@ public sealed class BattleEngine
         if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
     }
 
-    private static void ApplyBreakDamage(Fighter actor, Fighter target, int amount, Rules rules, List<BattleEvent> events)
+    private static void ApplyBreakDamage(Fighter actor, Fighter target, int amount, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         if (target.HasStatusEffect("브레이크면역"))
         {
@@ -333,52 +406,60 @@ public sealed class BattleEngine
         target.BreakGauge = 0;
         target.ApplyStatus("break_broken", rules.BreakDuration, "break", events);
         events.Add(new("BreakActivated", actor.Name, target.Name));
+        // 자신 또는 상대가 브레이크되었을 때 반응하는 패시브를 양쪽 관점에서 모두 검사한다.
+        FirePassiveTrigger(target, actor, "브레이크발생시", null, null, random, rules, events);
+        if (actor.Hp > 0) FirePassiveTrigger(actor, target, "브레이크발생시", null, null, random, rules, events);
     }
 
-    private static void SetResource(Fighter fighter, string id, int value, List<BattleEvent> events)
+    private static void SetResource(Fighter fighter, Fighter opponent, string id, int value, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         if (!fighter.ResourceDefinitions.TryGetValue(id, out var definition)) return;
         var capped = definition.Maximum == 0 ? Math.Max(0, value) : Math.Clamp(value, 0, definition.Maximum);
         if (capped > 0 && definition.Stacking == "상호배타")
             foreach (var peer in fighter.ResourceDefinitions.Values.Where(x => x.Id != id && x.Kind == definition.Kind && x.Stacking == "상호배타"))
-                if (fighter.Resources.GetValueOrDefault(peer.Id) > 0) ChangeResource(fighter, peer, 0, events);
-        ChangeResource(fighter, definition, capped, events);
+                if (fighter.Resources.GetValueOrDefault(peer.Id) > 0) ChangeResource(fighter, opponent, peer, 0, random, rules, events);
+        ChangeResource(fighter, opponent, definition, capped, random, rules, events);
     }
 
-    private static void AddResource(Fighter fighter, string id, int amount, List<BattleEvent> events)
+    private static void AddResource(Fighter fighter, Fighter opponent, string id, int amount, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         if (!fighter.ResourceDefinitions.TryGetValue(id, out var definition)) return;
-        SetResource(fighter, id, fighter.Resources.GetValueOrDefault(id) + amount, events);
+        SetResource(fighter, opponent, id, fighter.Resources.GetValueOrDefault(id) + amount, random, rules, events);
     }
 
-    private static void ChangeResource(Fighter fighter, BattleResource definition, int value, List<BattleEvent> events)
+    private static void ChangeResource(Fighter fighter, Fighter opponent, BattleResource definition, int value, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         var previous = fighter.Resources.GetValueOrDefault(definition.Id);
         if (previous == value) return;
         fighter.Resources[definition.Id] = value;
         if (definition.Duration > 0) fighter.ResourceTurns[definition.Id] = definition.Duration;
         events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + (value > previous ? "+" : "") + (value - previous) + " (현재 " + value + ")"));
+        // 자원 변화 자체를 구독하는 패시브(악상 획득 시, 리듬이 임계값에 도달했을 때, 템포가 소진됐을 때 등)를 발동한다.
+        // 상호배타·1개 상한 자원(악상 등)은 이미 보유 중이면 재설정이 무시되므로(위 previous==value 조기 반환) 매 증가마다 발동해도 실질적으로는 최초 획득 때만 발동한다.
+        if (value > previous && value > 0) FirePassiveTrigger(fighter, opponent, "자원획득시", null, definition.Id, random, rules, events);
+        if (definition.Maximum > 0 && value >= definition.Maximum && previous < definition.Maximum) FirePassiveTrigger(fighter, opponent, "자원최대치도달시", null, definition.Id, random, rules, events);
+        if (previous > 0 && value <= 0) FirePassiveTrigger(fighter, opponent, "자원소진시", null, definition.Id, random, rules, events);
     }
 
     private static bool CanPaySkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
         => ResolveSkillResource(skill, data) is not { } resource || !int.TryParse(skill.ResourceCost, out var cost) || actor.Resources.GetValueOrDefault(resource.Id) >= cost;
 
-    private static void SpendSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
+    private static void SpendSkillResource(Fighter actor, Fighter opponent, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         if (ResolveSkillResource(skill, data) is not { } resource || skill.ResourceCost == "전부" || !int.TryParse(skill.ResourceCost, out var cost) || cost == 0) return;
-        SetResource(actor, resource.Id, actor.Resources.GetValueOrDefault(resource.Id) - cost, events);
+        SetResource(actor, opponent, resource.Id, actor.Resources.GetValueOrDefault(resource.Id) - cost, random, rules, events);
     }
 
-    private static void SpendDeferredSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
+    private static void SpendDeferredSkillResource(Fighter actor, Fighter opponent, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         if (skill.ResourceCost != "전부" || ResolveSkillResource(skill, data) is not { } resource) return;
-        SetResource(actor, resource.Id, 0, events);
+        SetResource(actor, opponent, resource.Id, 0, random, rules, events);
     }
 
-    private static void GainSkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data, List<BattleEvent> events)
+    private static void GainSkillResource(Fighter actor, Fighter opponent, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         if (ResolveSkillResource(skill, data) is not { } resource || !int.TryParse(skill.ResourceGain, out var gain) || gain == 0) return;
-        AddResource(actor, resource.Id, gain, events);
+        AddResource(actor, opponent, resource.Id, gain, random, rules, events);
     }
 
     private static BattleResource? ResolveSkillResource(BattleSkill skill, BattleDataSnapshot data)
@@ -388,7 +469,7 @@ public sealed class BattleEngine
         var matches = data.Resources.Values.Where(x => x.Kind == id).ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
-    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null, double criticalChanceMultiplier = 1d)
+    private static bool Attack(Fighter actor, Fighter target, double baseDamage, int count, IBattleRandom random, Rules rules, List<BattleEvent> events, BattleSkill? sourceSkill = null, double criticalChanceMultiplier = 1d, double extraDamageMultiplier = 0d)
     {
         // 대상 해제는 다단의 매 타격이 아니라 다음 공격 효과 전체를 한 번 회피하는 판정이다.
         if (target.HasStatusEffect("대상해제") && random.NextDouble() < rules.TargetReleaseEvasionChance)
@@ -399,17 +480,22 @@ public sealed class BattleEngine
         var damaged = false;
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
-            var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill);
-            var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소"));
+            var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill) + extraDamageMultiplier;
+            var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (sourceSkill is null ? target.StatusValue("받는기본공격피해감소") : 0d));
             var amount = Math.Max(1, baseDamage - target.Defense * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
             var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가")) * criticalChanceMultiplier, 0d, 1d);
             var critical = random.NextDouble() < criticalChance;
-            if (critical) { amount *= rules.CriticalMultiplier; events.Add(new("CriticalHit", actor.Name, target.Name)); }
+            if (critical)
+            {
+                amount *= rules.CriticalMultiplier + actor.StatusValue("치명타피해증가");
+                events.Add(new("CriticalHit", actor.Name, target.Name));
+                if (sourceSkill is not null) FirePassiveTrigger(actor, target, "치명타적중시", sourceSkill.Id, null, random, rules, events);
+            }
             var damage = Math.Max(1, (int)Math.Round(amount)); target.Hp = Math.Max(0, target.Hp - damage);
             damaged = true;
             events.Add(new("DamageDealt", actor.Name, target.Name, damage));
             if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
-            if (target.Hp > 0 && random.NextDouble() < rules.AdditionalHitChance)
+            if (target.Hp > 0 && random.NextDouble() < rules.AdditionalHitChance + actor.StatusValue("추가타확률증가"))
             {
                 // 추가타는 이미 확정된 피해의 일부만 더하고, 치명타 판정을 따로 하지 않습니다.
                 var additionalDamage = Math.Max(1, (int)Math.Round(damage * rules.AdditionalHitDamageRatio));
@@ -438,11 +524,14 @@ public sealed class BattleEngine
         public int SurpriseCount; public string? LastSkillId;
         public int BreakGauge;
         public string? PendingSkillId;
+        public IReadOnlyList<BattlePassive> Passives = Array.Empty<BattlePassive>();
         public Dictionary<string, int> Cooldowns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, int> Resources { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, int> ResourceTurns { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, int> Statuses { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> StatusSources { get; } = new(StringComparer.Ordinal);
+        // 패시브의 전투시작 트리거로 부여되는 상시 효과. 매 행동 턴 감소 대상인 Statuses와 달리 전투가 끝날 때까지 유지된다.
+        public HashSet<string> PermanentStatuses { get; } = new(StringComparer.Ordinal);
         private Dictionary<string, PeriodicEffect> PeriodicEffects { get; } = new(StringComparer.Ordinal);
         public static Fighter Create(CharacterBattleSnapshot source, double scale, Rules rules, BattleDataSnapshot data)
         {
@@ -450,6 +539,8 @@ public sealed class BattleEngine
             var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds, ResourceDefinitions = data.Resources, StatusDefinitions = data.Statuses };
             foreach (var id in c.SkillIds) if (data.Skills.TryGetValue(id, out var skill)) fighter.Cooldowns[id] = skill.InitialCooldown;
             foreach (var resource in data.Resources.Values) fighter.Resources[resource.Id] = resource.InitialValue;
+            // 아직 배틀패시브가 구현되지 않은 ID는 스킬의 활성화=FALSE와 동일하게 조용히 무시한다.
+            fighter.Passives = c.PassiveIds.Select(id => data.Passives.GetValueOrDefault(id)).Where(x => x is { Enabled: true }).Cast<BattlePassive>().ToArray();
             return fighter;
         }
         public void TickCooldowns()
@@ -475,8 +566,8 @@ public sealed class BattleEngine
             }
         }
 
-        public double StatusValue(string effectType) => Statuses.Keys.Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType) ? status.Value : 0d);
-        public bool HasStatusEffect(string effectType) => Statuses.Keys.Any(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType));
+        public double StatusValue(string effectType) => Statuses.Keys.Concat(PermanentStatuses).Distinct(StringComparer.Ordinal).Sum(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType) ? status.Value : 0d);
+        public bool HasStatusEffect(string effectType) => Statuses.Keys.Concat(PermanentStatuses).Any(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType));
         public double MelodySkillDamageBonus(BattleSkill? skill)
         {
             if (skill is null || !HasStatusEffect("악상피해증가")) return 0d;
@@ -495,7 +586,7 @@ public sealed class BattleEngine
             }
             if (reduced > 0) events.Add(new("CooldownReduced", Name, Amount: reduced, Detail: amount.ToString()));
         }
-        public void TickResources(List<BattleEvent> events)
+        public void TickResources(Fighter opponent, IBattleRandom random, Rules rules, List<BattleEvent> events)
         {
             foreach (var id in ResourceTurns.Keys.ToArray())
             {
@@ -506,6 +597,8 @@ public sealed class BattleEngine
                 {
                     Resources[id] = 0;
                     events.Add(new("ResourceChanged", Name, Detail: resource.Name + "이(가) 사라졌습니다."));
+                    // 지속턴 만료로 자연 소진되는 경우도 ChangeResource와 동일하게 자원소진시 패시브를 발동한다(예: 템포가 시간 초과로 사라질 때).
+                    FirePassiveTrigger(this, opponent, "자원소진시", null, id, random, rules, events);
                 }
             }
         }
@@ -518,6 +611,12 @@ public sealed class BattleEngine
             StatusSources[id] = sourceSkillId;
             var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
             events.Add(new("StatusApplied", Name, Amount: applied, Detail: name));
+        }
+        public void ApplyPermanentStatus(string id, List<BattleEvent> events)
+        {
+            if (!PermanentStatuses.Add(id)) return;
+            var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
+            events.Add(new("PassiveApplied", Name, Detail: name));
         }
         public void ApplyPeriodicEffect(string statusId, string sourceName, double baseDamage, string message)
             => PeriodicEffects.TryAdd(statusId, new PeriodicEffect(sourceName, baseDamage, message));

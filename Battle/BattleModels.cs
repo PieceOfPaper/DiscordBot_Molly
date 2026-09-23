@@ -9,6 +9,7 @@ public sealed class BattleDataSnapshot
     public IReadOnlyDictionary<string, BattleRule> Rules { get; init; } = new ReadOnlyDictionary<string, BattleRule>(new Dictionary<string, BattleRule>());
     public IReadOnlyDictionary<string, BattleClass> Classes { get; init; } = new ReadOnlyDictionary<string, BattleClass>(new Dictionary<string, BattleClass>());
     public IReadOnlyDictionary<string, BattleSkill> Skills { get; init; } = new ReadOnlyDictionary<string, BattleSkill>(new Dictionary<string, BattleSkill>());
+    public IReadOnlyDictionary<string, BattlePassive> Passives { get; init; } = new ReadOnlyDictionary<string, BattlePassive>(new Dictionary<string, BattlePassive>());
     public IReadOnlyDictionary<string, BattleResource> Resources { get; init; } = new ReadOnlyDictionary<string, BattleResource>(new Dictionary<string, BattleResource>());
     public IReadOnlyDictionary<string, BattleStatus> Statuses { get; init; } = new ReadOnlyDictionary<string, BattleStatus>(new Dictionary<string, BattleStatus>());
     public IReadOnlyList<BattleDerivation> Derivations { get; init; } = Array.Empty<BattleDerivation>();
@@ -22,16 +23,22 @@ public sealed record BattleRule(string Id, string Category, string ValueType, st
     public int Integer => int.Parse(Value, System.Globalization.CultureInfo.InvariantCulture);
 }
 
-public sealed record BattleClass(string Id, string Name, IReadOnlyList<string> SkillIds, bool IsBattleReady = true);
+public sealed record BattleClass(string Id, string Name, IReadOnlyList<string> SkillIds, bool IsBattleReady = true, IReadOnlyList<string>? PassiveIds = null)
+{
+    public IReadOnlyList<string> PassiveIds { get; init; } = PassiveIds ?? Array.Empty<string>();
+}
 public sealed record BattleSkill(string Id, string Name, string Kind, string? ParentSkillId, bool Enabled,
     int Cooldown, int InitialCooldown, int Priority, double Weight, IReadOnlyList<BattleEffect> Effects,
     string? ResourceId = null, string? ResourceCost = null, string? ResourceGain = null);
+/// <summary>클래스가 상시로 갖고 있는 패시브입니다. 행동 후보로 선택되지 않고 <see cref="BattleEffect.Trigger"/> 시점마다 자동 발동합니다.</summary>
+public sealed record BattlePassive(string Id, bool Enabled, IReadOnlyList<BattleEffect> Effects);
 public sealed record BattleEffect(
     string Id, int Order, string Type, string Target, int FixedValue, int Count, double Chance,
     int Duration, string? StatusId, int MaxStacks, string? Message,
     string? ConditionTarget, string? ConditionType, string? ConditionId,
     string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
-    string? NumericReferenceMode, double CriticalChanceMultiplierPerHit = 1d);
+    string? NumericReferenceMode, double CriticalChanceMultiplierPerHit = 1d,
+    string? Trigger = null, string? TriggerSkillId = null, string? TriggerResourceId = null);
 public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
 public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description, string? TargetSkillId = null)
 {

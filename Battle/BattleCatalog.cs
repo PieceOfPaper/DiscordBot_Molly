@@ -14,7 +14,7 @@ public interface IBattleDataSource
 /// <summary>전투용 10개 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
 public sealed class GoogleSheetsBattleSource(HttpClient client, string spreadsheetId) : IBattleDataSource
 {
-    public static readonly string[] SheetNames = ["클래스", "스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과"];
+    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과"];
     public string CacheKey => spreadsheetId;
 
     public async Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct)
@@ -102,25 +102,32 @@ public sealed class BattleCatalog
             if (!tables.ContainsKey(name)) throw new InvalidDataException($"전투 데이터에 {name} 시트가 없습니다.");
         var classes = BattleCsv.Read(tables["클래스"], "클래스");
         var skills = BattleCsv.Read(tables["스킬"], "스킬");
+        var passiveSkills = BattleCsv.Read(tables["패시브스킬"], "패시브스킬");
         var battleSkills = BattleCsv.Read(tables["배틀스킬"], "배틀스킬");
         var effects = BattleCsv.Read(tables["배틀스킬효과"], "배틀스킬효과");
         var derivations = BattleCsv.Read(tables["배틀스킬파생"], "배틀스킬파생");
+        var battlePassives = BattleCsv.Read(tables["배틀패시브"], "배틀패시브");
+        var passiveEffects = BattleCsv.Read(tables["배틀패시브효과"], "배틀패시브효과");
         var resources = BattleCsv.Read(tables["배틀자원"], "배틀자원");
         var statuses = BattleCsv.Read(tables["배틀상태효과"], "배틀상태효과");
         var rules = BattleCsv.Read(tables["배틀규칙"], "배틀규칙");
         // 나머지 표도 누락/깨진 CSV를 허용하지 않습니다. 상세 효과는 이후 엔진 단계에서 공통 모델로 확장합니다.
-        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀자원", "배틀상태효과", "배틀규칙"])) BattleCsv.Read(tables[name], name);
-        BattleCsv.Headers(classes, "클래스", "ID", "이름", "스킬1", "스킬2", "스킬3", "스킬4", "스킬5", "궁극기");
+        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙"])) BattleCsv.Read(tables[name], name);
+        BattleCsv.Headers(classes, "클래스", "ID", "이름", "스킬1", "스킬2", "스킬3", "스킬4", "스킬5", "궁극기", "패시브1", "패시브2", "패시브3", "패시브4", "패시브5", "패시브6");
         BattleCsv.Headers(skills, "스킬", "ID", "이름", "스킬구분", "부모스킬ID");
+        BattleCsv.Headers(passiveSkills, "패시브스킬", "ID", "이름");
         BattleCsv.Headers(battleSkills, "배틀스킬", "ID", "활성화", "기본쿨다운", "최초쿨다운", "사용우선순위", "자원유형", "자원소모", "자원획득");
         BattleCsv.Headers(effects, "배틀스킬효과", "ID", "스킬ID", "실행순서", "효과유형", "대상", "고정값", "횟수", "발동확률", "지속턴", "상태효과ID", "최대중첩", "효과문구", "조건대상", "조건유형", "조건ID", "조건연산자", "조건값", "수치참조ID", "수치참조방식");
         BattleCsv.Headers(derivations, "배틀스킬파생", "ID", "부모스킬ID", "파생스킬ID", "발동방식", "가중치", "발동확률", "조건유형", "조건값", "중복허용", "실행시점", "우선순위");
+        BattleCsv.Headers(battlePassives, "배틀패시브", "ID", "활성화");
+        BattleCsv.Headers(passiveEffects, "배틀패시브효과", "ID", "패시브ID", "실행순서", "효과유형", "대상", "고정값", "횟수", "발동확률", "지속턴", "상태효과ID", "최대중첩", "효과문구", "조건대상", "조건유형", "조건ID", "조건연산자", "조건값", "수치참조ID", "수치참조방식", "발동시점", "대상스킬ID", "대상자원ID");
         BattleCsv.Headers(resources, "배틀자원", "ID", "이름", "분류", "최대값", "초기값", "지속턴", "중첩방식", "전투종료시제거");
         BattleCsv.Headers(statuses, "배틀상태효과", "ID", "이름", "효과유형", "값", "설명", "대상스킬ID");
         BattleCsv.Headers(rules, "배틀규칙", "ID", "분류", "값유형", "값", "설명");
 
         var ruleMap = Unique(rules, "배틀규칙").ToDictionary(x => x.Required("ID", "배틀규칙", 0), x => new BattleRule(x["ID"], x["분류"], x["값유형"], x["값"], x["설명"]), StringComparer.Ordinal);
         var rawSkills = Unique(skills, "스킬").ToDictionary(x => x["ID"], StringComparer.Ordinal);
+        var rawPassives = Unique(passiveSkills, "패시브스킬").ToDictionary(x => x["ID"], StringComparer.Ordinal);
         foreach (var (row, index) in skills.Select((x, i) => (x, i + 2)))
         {
             var id = row.Required("ID", "스킬", index); var kind = row.Required("스킬구분", "스킬", index);
@@ -133,6 +140,11 @@ public sealed class BattleCatalog
             BattleCsv.Int(x["지속턴"], "배틀스킬효과", i + 2, "지속턴"), EmptyAsNull(x["상태효과ID"]), BattleCsv.Int(x["최대중첩"], "배틀스킬효과", i + 2, "최대중첩"), EmptyAsNull(x["효과문구"]),
             EmptyAsNull(x["조건대상"]), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건ID"]), EmptyAsNull(x["조건연산자"]), EmptyAsNull(x["조건값"]), EmptyAsNull(x["수치참조ID"]), EmptyAsNull(x["수치참조방식"]),
             EmptyAsNull(x.GetValueOrDefault("연속치명타배율", "")) is { } criticalMultiplier ? BattleCsv.Double(criticalMultiplier, "배틀스킬효과", i + 2, "연속치명타배율", 0, 1) : 1d)).OrderBy(x => x.Order).ToArray());
+        var passiveEffectMap = passiveEffects.GroupBy(x => x.Required("패시브ID", "배틀패시브효과", 0), StringComparer.Ordinal).ToDictionary(g => g.Key, g => (IReadOnlyList<BattleEffect>)g.Select((x, i) => new BattleEffect(
+            x.Required("ID", "배틀패시브효과", i + 2), BattleCsv.Int(x.Required("실행순서", "배틀패시브효과", i + 2), "배틀패시브효과", i + 2, "실행순서", 1), x["효과유형"], x["대상"], BattleCsv.Int(x["고정값"], "배틀패시브효과", i + 2, "고정값"), BattleCsv.Int(x["횟수"], "배틀패시브효과", i + 2, "횟수", 1), BattleCsv.Double(x["발동확률"], "배틀패시브효과", i + 2, "발동확률", 0, 1),
+            BattleCsv.Int(x["지속턴"], "배틀패시브효과", i + 2, "지속턴"), EmptyAsNull(x["상태효과ID"]), BattleCsv.Int(x["최대중첩"], "배틀패시브효과", i + 2, "최대중첩"), EmptyAsNull(x["효과문구"]),
+            EmptyAsNull(x["조건대상"]), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건ID"]), EmptyAsNull(x["조건연산자"]), EmptyAsNull(x["조건값"]), EmptyAsNull(x["수치참조ID"]), EmptyAsNull(x["수치참조방식"]),
+            1d, x.Required("발동시점", "배틀패시브효과", i + 2), EmptyAsNull(x["대상스킬ID"]), EmptyAsNull(x["대상자원ID"]))).OrderBy(x => x.Order).ToArray());
         var skillMap = new Dictionary<string, BattleSkill>(StringComparer.Ordinal);
         foreach (var (row, index) in battleSkills.Select((x, i) => (x, i + 2)))
         {
@@ -149,30 +161,53 @@ public sealed class BattleCatalog
             var isBattleReady = ids.All(id => !string.IsNullOrWhiteSpace(id));
             if (!isBattleReady && ids.Any(id => !string.IsNullOrWhiteSpace(id))) throw new InvalidDataException($"클래스 시트 {index}행의 배틀 스킬 구성이 일부만 입력되었습니다.");
             if (isBattleReady && ids.Any(id => !rawSkills.ContainsKey(id))) throw new InvalidDataException($"클래스 시트 {index}행이 존재하지 않는 스킬 ID를 참조합니다.");
+            // 패시브는 스킬과 달리 클래스마다 개수가 다를 수 있어 부분 채움을 허용합니다. 아직 배틀패시브가 없는 ID도
+            // 원본에는 존재해야 하며(오타 방지), 구현 전까지는 전투 시작 시 조용히 무시됩니다(스킬의 활성화=FALSE와 동일한 패턴).
+            var passiveIds = new[] { row["패시브1"], row["패시브2"], row["패시브3"], row["패시브4"], row["패시브5"], row["패시브6"] }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+            if (passiveIds.Any(id => !rawPassives.ContainsKey(id))) throw new InvalidDataException($"클래스 시트 {index}행이 존재하지 않는 패시브 ID를 참조합니다.");
             var id = row.Required("ID", "클래스", index);
-            if (!classMap.TryAdd(id, new BattleClass(id, row.Required("이름", "클래스", index), isBattleReady ? ids : Array.Empty<string>(), isBattleReady))) throw new InvalidDataException($"클래스 ID '{id}'가 중복되었습니다.");
+            if (!classMap.TryAdd(id, new BattleClass(id, row.Required("이름", "클래스", index), isBattleReady ? ids : Array.Empty<string>(), isBattleReady, passiveIds))) throw new InvalidDataException($"클래스 ID '{id}'가 중복되었습니다.");
+        }
+        var passiveMap = new Dictionary<string, BattlePassive>(StringComparer.Ordinal);
+        foreach (var (row, index) in battlePassives.Select((x, i) => (x, i + 2)))
+        {
+            var id = row.Required("ID", "배틀패시브", index);
+            if (!rawPassives.ContainsKey(id)) throw new InvalidDataException($"배틀패시브 시트 {index}행이 존재하지 않는 패시브 ID '{id}'를 참조합니다.");
+            var passive = new BattlePassive(id, BattleCsv.Bool(row["활성화"], "배틀패시브", index, "활성화"), passiveEffectMap.GetValueOrDefault(id, []));
+            if (passive.Enabled && passive.Effects.Count == 0) throw new InvalidDataException($"배틀패시브 '{id}'가 활성화되어 있지만 효과가 하나도 없습니다.");
+            if (!passiveMap.TryAdd(id, passive)) throw new InvalidDataException($"배틀패시브 ID '{id}'가 중복되었습니다.");
         }
         var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]), StringComparer.Ordinal);
         var statusMap = Unique(statuses, "배틀상태효과").ToDictionary(x => x["ID"], x => new BattleStatus(x["ID"], x["이름"], x["효과유형"], BattleCsv.Double(x["값"], "배틀상태효과", 0, "값"), x["설명"], EmptyAsNull(x["대상스킬ID"])), StringComparer.Ordinal);
         foreach (var status in statusMap.Values)
             if (status.TargetSkillId is { } targetSkillId && !skillMap.ContainsKey(targetSkillId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 대상스킬ID가 존재하지 않는 배틀 스킬 ID '{targetSkillId}'를 참조합니다.");
-        foreach (var effect in effectMap.Values.SelectMany(x => x))
+        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "치명타적중시", "회복적용시"], StringComparer.Ordinal);
+        void ValidateEffect(BattleEffect effect, string sheet)
         {
             if (effect.Type is "자원설정" or "자원증가" or "자원소모")
             {
-                if (effect.StatusId is null || !resourceMap.ContainsKey(effect.StatusId)) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'가 존재하지 않는 자원을 참조합니다.");
+                if (effect.StatusId is null || !resourceMap.ContainsKey(effect.StatusId)) throw new InvalidDataException($"{sheet} '{effect.Id}'가 존재하지 않는 자원을 참조합니다.");
             }
             else if (effect.Duration > 0 && effect.StatusId is { } statusId && !statusMap.ContainsKey(statusId))
-                throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'가 존재하지 않는 상태 효과 ID '{statusId}'를 참조합니다.");
-            if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
-            if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
-            if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
-            if (effect.NumericReferenceId is { } referenceId && !resourceMap.ContainsKey(referenceId)) throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 수치 참조 자원이 올바르지 않습니다.");
+                throw new InvalidDataException($"{sheet} '{effect.Id}'가 존재하지 않는 상태 효과 ID '{statusId}'를 참조합니다.");
+            if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
+            if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
+            if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
+            if (effect.NumericReferenceId is { } referenceId && !resourceMap.ContainsKey(referenceId)) throw new InvalidDataException($"{sheet} '{effect.Id}'의 수치 참조 자원이 올바르지 않습니다.");
         }
+        foreach (var effect in effectMap.Values.SelectMany(x => x)) ValidateEffect(effect, "배틀스킬효과");
+        foreach (var effect in passiveEffectMap.Values.SelectMany(x => x))
+        {
+            ValidateEffect(effect, "배틀패시브효과");
+            if (effect.Trigger is not { } trigger || !passiveTriggers.Contains(trigger)) throw new InvalidDataException($"배틀패시브효과 '{effect.Id}'의 발동시점이 올바르지 않습니다.");
+            if (effect.TriggerSkillId is { } triggerSkillId && !skillMap.ContainsKey(triggerSkillId)) throw new InvalidDataException($"배틀패시브효과 '{effect.Id}'의 대상스킬ID가 존재하지 않는 배틀 스킬 ID '{triggerSkillId}'를 참조합니다.");
+            if (effect.TriggerResourceId is { } triggerResourceId && !resourceMap.ContainsKey(triggerResourceId) && !resourceMap.Values.Any(x => x.Kind == triggerResourceId)) throw new InvalidDataException($"배틀패시브효과 '{effect.Id}'의 대상자원ID가 존재하지 않는 자원 ID 또는 분류 '{triggerResourceId}'를 참조합니다.");
+        }
+        if (passiveEffectMap.Keys.Any(id => !passiveMap.ContainsKey(id))) throw new InvalidDataException("배틀패시브효과 시트가 존재하지 않는 배틀패시브 ID를 참조합니다.");
         var derivationList = Unique(derivations, "배틀스킬파생").Select((x, i) => new BattleDerivation(x["ID"], x["부모스킬ID"], x["파생스킬ID"], x["발동방식"], BattleCsv.Double(x["가중치"], "배틀스킬파생", i + 2, "가중치"), BattleCsv.Double(x["발동확률"], "배틀스킬파생", i + 2, "발동확률", 0, 1), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건값"]), string.IsNullOrWhiteSpace(x["중복허용"]) ? false : BattleCsv.Bool(x["중복허용"], "배틀스킬파생", i + 2, "중복허용"), x["실행시점"], string.IsNullOrWhiteSpace(x["우선순위"]) ? 0 : BattleCsv.Int(x["우선순위"], "배틀스킬파생", i + 2, "우선순위"))).ToArray();
         if (derivationList.Any(x => !skillMap.ContainsKey(x.ParentSkillId) || !skillMap.ContainsKey(x.ChildSkillId))) throw new InvalidDataException("배틀스킬파생 시트가 존재하지 않는 배틀 스킬 ID를 참조합니다.");
-        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LoadedAt = loadedAt };
+        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LoadedAt = loadedAt };
     }
 
     private static IEnumerable<Dictionary<string, string>> Unique(IReadOnlyList<Dictionary<string, string>> rows, string sheet)
