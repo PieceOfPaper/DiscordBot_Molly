@@ -34,7 +34,7 @@ if (args.SequenceEqual(new[] { "--battle-live" }))
 }
 if (args.Length >= 1 && args[0] == "--battle-balance")
 {
-    // 기획 밸런스 점검 전용: 모든 배틀 준비 클래스를 동일 전투력으로 맞붙여 승률·스킬 사용 빈도를 뽑는다.
+    // 기획 밸런스 점검 전용: 모든 배틀 준비 클래스를 동일 전투력으로 맞붙여 승률·스킬 사용 빈도·스킬 사용 전투 승률을 뽑는다.
     // 실제 봇 실행과 무관하며 CI(verify.sh)에서는 호출하지 않는다.
     // 세 번째 인자로 CSV 폴더({시트이름}.csv)를 주면 실시간 시트 대신 그 파일로 시뮬레이션한다(시트 입력 전 수치 조정용).
     var iterations = args.Length >= 2 && int.TryParse(args[1], out var parsedIterations) ? parsedIterations : 300;
@@ -52,6 +52,7 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
     var draws = classes.ToDictionary(x => x.Id, _ => 0);
     var matches = classes.ToDictionary(x => x.Id, _ => 0);
     var skillUses = classes.ToDictionary(x => x.Id, _ => new Dictionary<string, int>(StringComparer.Ordinal));
+    var skillBattles = classes.ToDictionary(x => x.Id, _ => new Dictionary<string, (int Used, int Won)>(StringComparer.Ordinal));
     long totalActions = 0;
     var totalBattles = 0;
     for (var i = 0; i < classes.Length; i++)
@@ -67,12 +68,26 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
                 if (result.Outcome == BattleOutcome.FighterAWin) wins[ca.Id]++;
                 else if (result.Outcome == BattleOutcome.FighterBWin) wins[cb.Id]++;
                 else { draws[ca.Id]++; draws[cb.Id]++; }
+                var usedInBattle = new Dictionary<string, HashSet<string>> { [ca.Id] = new(StringComparer.Ordinal), [cb.Id] = new(StringComparer.Ordinal) };
                 foreach (var e in result.Events)
                 {
                     var skillName = e.Type switch { "SkillUsed" or "DerivedSkillUsed" => e.Detail, "NormalAttackUsed" => "(일반 공격)", _ => null };
                     if (skillName is null) continue;
-                    var uses = skillUses[e.Actor == ca.Name ? ca.Id : cb.Id];
+                    var actorId = e.Actor == ca.Name ? ca.Id : cb.Id;
+                    var uses = skillUses[actorId];
                     uses[skillName] = uses.GetValueOrDefault(skillName) + 1;
+                    usedInBattle[actorId].Add(skillName);
+                }
+                // 스킬별 승률: 한 전투에서 여러 번 써도 1전으로 센다. 무승부는 패배와 같이 승리에 포함하지 않는다.
+                foreach (var (classId, used) in usedInBattle)
+                {
+                    var won = result.Outcome == (classId == ca.Id ? BattleOutcome.FighterAWin : BattleOutcome.FighterBWin);
+                    var battles = skillBattles[classId];
+                    foreach (var skillName in used)
+                    {
+                        var (usedCount, wonCount) = battles.GetValueOrDefault(skillName);
+                        battles[skillName] = (usedCount + 1, wonCount + (won ? 1 : 0));
+                    }
                 }
             }
         }
@@ -83,15 +98,18 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
         Console.WriteLine($"{c.Name,-10} 승 {w,5}/{m,-5} ({(double)w / m:P1})  무 {d,4} ({(double)d / m:P1})");
     }
     Console.WriteLine();
-    Console.WriteLine("=== 클래스별 스킬 사용 빈도 (상위 8개) ===");
+    Console.WriteLine("=== 클래스별 스킬 사용 빈도와 사용 전투 승률 (상위 8개) ===");
     foreach (var c in classes)
     {
         var uses = skillUses[c.Id];
         var total = uses.Values.Sum();
         if (total == 0) { Console.WriteLine($"[{c.Name}] 사용 스킬 없음"); continue; }
-        Console.WriteLine($"[{c.Name}] 총 {total}회");
+        Console.WriteLine($"[{c.Name}] 총 {total}회, 클래스 승률 {(double)wins[c.Id] / matches[c.Id]:P1}");
         foreach (var (skill, count) in uses.OrderByDescending(x => x.Value).Take(8))
-            Console.WriteLine($"  {skill,-16} {count,6}회 ({(double)count / total:P1})");
+        {
+            var (usedBattles, wonBattles) = skillBattles[c.Id][skill];
+            Console.WriteLine($"  {skill,-16} {count,6}회 ({(double)count / total:P1})  사용 전투 {usedBattles,5}/{matches[c.Id],-5} 승률 {(double)wonBattles / usedBattles:P1}");
+        }
     }
     Console.WriteLine();
     Console.WriteLine($"평균 전투 턴수: {(double)totalActions / totalBattles:F1} (총 {totalBattles}전)");

@@ -44,7 +44,7 @@ Codex와 Claude Code는 대화가 끝나면 이번 세션의 판단 과정을 �
 
 - `tests/Molly.DataTests`는 CI에 포함되지 않는 두 인자를 지원한다.
   - `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj -- --battle-live` : 실시간 시트를 읽어 `BattleCatalog.Parse` 검증만 수행.
-  - `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj -- --battle-balance [반복횟수]` : 배틀 준비된 모든 클래스를 동일 전투력으로 맞대결시켜 승률·스킬 사용 빈도를 뽑는다.
+  - `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj -- --battle-balance [반복횟수]` : 배틀 준비된 모든 클래스를 동일 전투력으로 맞대결시켜 승률·스킬 사용 빈도·스킬을 사용한 전투의 승률을 뽑는다.
   - `... -- --battle-balance [반복횟수] [CSV폴더]` : 폴더를 주면 실시간 시트 대신 `{시트이름}.csv` 13개로 시뮬레이션한다. 시트에 입력하기 전에 공개 CSV를 내려받아 새 행을 붙인 로컬 사본으로 수치를 먼저 조정할 때 쓴다.
 - 새 클래스가 위 검증을 통과하는지, 그리고 도입한 모든 기본 스킬·파생이 시뮬레이션에서 최소 1회 이상 실제로 발동하는지 확인한다.
 - 한쪽으로 크게(대략 70% 이상) 치우친 승률이 나오면 원본 배율이 다른 클래스보다 과도하게 큰 스킬(대개 궁극기나 강화 파생)의 `고정값`을 조정한다. 완벽한 50:50을 요구하지 않는다 — 정밀한 밸런스는 이후 대규모(10,000회 단위) 시뮬레이션으로 조정한다는 것이 문서의 방침이다(`docs/battle/README.md` 10.3, 17장 P1 참고).
