@@ -11,6 +11,7 @@ using Molly.LiarGame;
 using Molly.Lottery;
 using DiscordBot_Molly.Commands;
 using Molly.Battle;
+using Molly.MobiLife;
 
 class Program
 {
@@ -27,6 +28,8 @@ class Program
     public RegisteredCharacterStore RegisteredCharacters { get; private set; } = null!;
     public BattleCatalog Battles { get; private set; } = null!;
     public BattleSessions BattleSessions { get; } = new();
+    // 모비라이프 OpenAPI. 키가 없거나 API가 중단돼도 봇은 정상 시작하며, 연동 기능만 안내 메시지를 표시합니다.
+    public MobiLifeApiClient MobiLife { get; private set; } = null!;
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -131,6 +134,15 @@ class Program
         AppDomain.CurrentDomain.ProcessExit += (_, __) => appCts.Cancel();
 
         MollyDataPaths.Configure(m_Config);
+        MobiLifeOptions mobiLifeOptions;
+        try { mobiLifeOptions = MobiLifeOptions.FromConfiguration(m_Config); }
+        catch (ArgumentException ex)
+        {
+            Console.WriteLine($"[모비라이프] 설정 오류로 연동을 끕니다: {ex.Message}");
+            mobiLifeOptions = new MobiLifeOptions { Enabled = false };
+        }
+        MobiLife = new MobiLifeApiClient(mobiLifeOptions);
+        Console.WriteLine($"[모비라이프] {MobiLife.DescribeState()}");
         await MobiEventExpireAlert.InitializeStorageAsync(appCts.Token);
         RegisteredCharacters = new RegisteredCharacterStore();
         await RegisteredCharacters.InitializeAsync(appCts.Token);

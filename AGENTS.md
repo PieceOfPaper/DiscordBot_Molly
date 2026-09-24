@@ -5,6 +5,7 @@
 - 기존 이벤트·랭킹·상점 조회 기능을 유지한다.
 - 향후 방향은 함께 노는 이벤트 기능이며, 룬 설명을 보고 이름 맞추기는 구상 중인 예시다.
 - Google Sheets 룬 데이터는 Runes/에서 읽고 검증한다. 퀴즈 규칙은 아직 구현하거나 확정하지 않았다. 요청된 범위만 작업한다.
+- 모비라이프 OpenAPI(https://open.mabimobi.life/docs)를 쓰는 작업은 `docs/mobilife-openapi.md`의 이용약관·출처 표기·요청 한도·중단 대비 규칙을 따른다. 기능은 `MobiLife/`의 공용 클라이언트를 도메인 인터페이스 뒤에서만 사용한다.
 - 배틀(자동전투) 기능의 설계는 `docs/battle/README.md`를 따른다. 클래스·스킬 시트에 새 클래스 원본 데이터가 추가되어 배틀 관련 시트에 반영할 때는 `docs/battle/new-class-workflow.md`의 절차를 따른다.
 
 ## 환경과 검증
@@ -42,6 +43,7 @@
 - Discord 토큰은 user-secrets 또는 Discord__Token 환경변수로 설정한다.
 - .env는 자동 로딩되지 않는다. 실제 비밀 값을 파일·로그·커밋에 넣지 않는다.
 - Google 인증 파일도 저장소 밖에서 관리한다.
+- 모비라이프 API 키는 `MobiLife:ApiKey`(user-secrets, 개발용 키) 또는 `MobiLife__ApiKey` 환경변수(서버, 서비스용 키)로 설정한다.
 - 실서버 검증은 테스트 서버 ID Discord__GuildId를 지정하고 사용자의 요청 범위 안에서 수행한다.
 
 ## GitHub Issue 작업 규칙

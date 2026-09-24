@@ -117,6 +117,8 @@ MOLLY_DATA_DIR=/var/lib/molly
 PLAYWRIGHT_BROWSERS_PATH=/opt/molly/playwright
 GoogleSheets__SpreadsheetId=19kRuVIlZ1LEhU5lixEjRqYvZKbdGnXk0tjY6qznSRf0
 GoogleSheets__RuneSheetId=0
+# 선택: 모비라이프 OpenAPI 서비스용 키 (docs/mobilife-openapi.md)
+MobiLife__ApiKey=MOBILIFE_SERVICE_API_KEY
 ```
 
 ```bash

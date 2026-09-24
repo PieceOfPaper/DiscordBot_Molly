@@ -109,6 +109,8 @@ dotnet run
   선택 설정입니다. 지정하면 SQLite DB의 경로를 직접 바꿉니다. 미지정 시 `MOLLY_DATA_DIR/database/molly.sqlite`를 사용합니다.
 - `GoogleSheets:SpreadsheetId`<br>
   전투를 포함한 Google Sheets 문서 ID입니다. `/배틀`은 `클래스`, `스킬`, `배틀스킬`, `배틀스킬효과`, `배틀스킬파생`, `배틀자원`, `배틀규칙`, `배틀돌발이벤트`, `배틀돌발이벤트효과` 탭을 시작 시 한 묶음으로 읽습니다. 하나라도 검증에 실패하면 마지막 정상 스냅샷만 사용하며, 정상본이 없을 때는 배틀만 사용할 수 없습니다.
+- `MobiLife:ApiKey`<br>
+  선택 설정입니다. [모비라이프 OpenAPI](https://open.mabimobi.life/docs) 키로, Discord 토큰처럼 로컬 개발은 user-secrets(`dotnet user-secrets set "MobiLife:ApiKey" "개발용_키"`), 서버는 환경변수 `MobiLife__ApiKey`(서비스용 키)로 설정합니다. 없으면 모비라이프 연동 기능만 안내 메시지를 표시하고 나머지 기능은 정상 동작합니다. `MobiLife:Enabled=false`로 호출을 끌 수 있습니다. 자세한 내용은 아래 `모비라이프 OpenAPI 사용`을 참고하세요.
 - `assets/shop_table.csv`  
   일반 상점 데이터. 실행 시 자동 로드됩니다.
 - `assets/shop_exchange_table.csv`  
@@ -125,6 +127,15 @@ dotnet run
 ## SQLite 저장
 
 이벤트 마감 알림의 서버별 설정은 SQLite의 `event_expire_alert_settings` 테이블에 저장됩니다. 기존 `MOLLY_DATA_DIR/eventexpirealertsetting/<길드 ID>.json` 파일이 있으면 첫 시작에 SQLite로 안전하게 이전합니다. DB 트랜잭션이 성공한 JSON만 삭제하므로, JSON이 남아 있으면 다음 시작에 이전을 다시 시도합니다.
+
+## 모비라이프 OpenAPI 사용
+
+이 봇은 [모비라이프](https://mabimobi.life/)의 [OpenAPI](https://open.mabimobi.life/docs)를 사용합니다. 모비라이프 OpenAPI 데이터는 모비라이프가 제공하며, 넥슨(Nexon) 또는 데브캣(devCAT)의 공식 API가 아닙니다.
+
+- 현재 모비라이프 데이터를 사용하는 명령은 없고, 연동 기반(`MobiLife/`)만 준비되어 있습니다. 명령을 추가하면 이 목록에 적습니다.
+- 모비라이프 데이터를 보여주는 모든 응답에는 출처 `모비라이프 제공`을 표기합니다.
+- 키가 없거나 API가 중단·폐기되어도 봇의 다른 기능은 영향을 받지 않습니다.
+- 이용약관, 키 설정, 요청 한도, 기능 추가 규칙과 중단 대비는 [모비라이프 OpenAPI 연동 가이드](docs/mobilife-openapi.md)를 따릅니다.
 
 ## 룬 테이블 연동
 
@@ -175,6 +186,8 @@ Discord에서 `/룬`을 선택하고 `이름` 옵션에 `분노`를 입력하면
 dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release
 # 실제 시트 다운로드와 파싱만 확인 (네트워크 필요, CI에서는 실행하지 않음)
 dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --live
+# 설정한 모비라이프 API 키로 거래소 분류 목록을 1회 조회 (네트워크 필요, CI에서는 실행하지 않음)
+dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --mobilife-live
 # 배틀 준비된 클래스끼리 전투력을 동일하게 맞춰 모의 전투를 반복하고 승률·스킬 사용 빈도·스킬을 사용한 전투의 승률을 출력
 # (기획 밸런스 점검용 개발 전용 명령, 네트워크 필요, CI에서는 실행하지 않음)
 # 두 번째 인자는 상대 클래스마다 반복할 전투 횟수(생략 시 300)

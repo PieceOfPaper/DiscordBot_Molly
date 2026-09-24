@@ -7,6 +7,8 @@ using Molly.Messages;
 using Molly.LiarGame;
 using Molly.Lottery;
 using Molly.Battle;
+using Molly.MobiLife;
+using Microsoft.Extensions.Configuration;
 
 const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
 const string valid = header + "2,전설,무기,전사,테스트,효과";
@@ -37,6 +39,17 @@ if (args.Length == 1 && args[0] is "--event-live" or "--event-live-browser")
     Console.WriteLine($"실제 이벤트 {snapshot.SourceName} 수집: {snapshot.Events.Count}건, {started.ElapsedMilliseconds}ms");
     foreach (var e in snapshot.Events.OrderBy(x => x.end))
         Console.WriteLine($"{(e.isPerma ? "마감미정" : e.end.ToString("yyyy-MM-dd HH:mm"))} | {e.eventName}");
+    return;
+}
+if (args.SequenceEqual(new[] { "--mobilife-live" }))
+{
+    // 설정된 모비라이프 API 키로 분류 목록 한 번만 조회합니다(요청 1회, Discord 미사용, CI 미사용).
+    var config = new ConfigurationBuilder().AddUserSecrets(typeof(MobiLifeApiClient).Assembly).AddEnvironmentVariables().Build();
+    using var mobiLife = new MobiLifeApiClient(MobiLifeOptions.FromConfiguration(config));
+    Console.WriteLine($"모비라이프 상태: {mobiLife.DescribeState()}");
+    var result = await mobiLife.GetAsync<MobiLifeCategoriesResponse>("market/categories");
+    if (!result.IsSuccess) { Console.WriteLine($"모비라이프 조회 실패: {result.Status} {result.Detail}"); Environment.Exit(1); }
+    Console.WriteLine($"모비라이프 거래소 분류 {result.Value!.Data.Count}개: {string.Join(", ", result.Value.Data.Select(x => $"{x.ParentCategory}({x.ItemCount})"))}");
     return;
 }
 if (args.SequenceEqual(new[] { "--live" }))
@@ -392,6 +405,7 @@ try { await httpSource.FetchCsvAsync(default); throw new Exception("HTML 허용"
 catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거부"); }
 await QuizFlowTests.RunAsync();
 await MobiEventTests.RunAsync();
+await MobiLifeTests.RunAsync();
 var battleRules = new Dictionary<string, BattleRule>
 {
     ["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100", ""), ["base_attack"] = new("base_attack", "전투능력치", "number", "40", ""), ["base_defense"] = new("base_defense", "전투능력치", "number", "0", ""),
