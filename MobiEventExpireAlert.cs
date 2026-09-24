@@ -155,7 +155,7 @@ public static class MobiEventExpireAlert
         if (setting.Enabled == false)
             return;
 
-        var eventList = await MobiEventBrowser.GetCurrentEventsAsync();
+        var eventList = (await MobiEventService.Shared.GetCurrentEventsAsync())?.Events;
         if (eventList == null || eventList.Count == 0)
             return;
         

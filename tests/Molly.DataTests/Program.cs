@@ -17,6 +17,28 @@ if (args.Length == 2 && args[0] == "--csv")
     foreach (var warning in table.Warnings) Console.WriteLine(warning);
     return;
 }
+if (args.Length == 2 && args[0] == "--event-html")
+{
+    // 브라우저에서 저장한 이벤트 목록 HTML을 실제 파서로 해석해 확인합니다(CI 미사용).
+    var page = MobiEventParser.ParseListPage(await File.ReadAllTextAsync(args[1]));
+    Console.WriteLine($"이벤트 HTML: totalCount={page.TotalCount}, 카드 {page.Cards.Count}개");
+    foreach (var card in page.Cards)
+        Console.WriteLine($"{card.ThreadId} | {card.Title} | {card.Range} | 기간해석={MobiEventParser.TryParseRange(card.Range, out _, out _, out _)}");
+    return;
+}
+if (args.Length == 1 && args[0] is "--event-live" or "--event-live-browser")
+{
+    // 실제 사이트를 HTTP로만 수집합니다(브라우저·Discord 미사용, CI 미사용).
+    var started = System.Diagnostics.Stopwatch.StartNew();
+    // --event-live-browser는 HTTP 차단 시 쓰는 Playwright 대체 경로만 따로 확인합니다(Chromium 설치 필요).
+    await using var browserSource = new MobiEventBrowserSource();
+    IMobiEventPageSource liveSource = args[0] == "--event-live-browser" ? browserSource : new MobiEventHttpSource();
+    var snapshot = await new MobiEventService(liveSource, null).CollectAsync(liveSource, default);
+    Console.WriteLine($"실제 이벤트 {snapshot.SourceName} 수집: {snapshot.Events.Count}건, {started.ElapsedMilliseconds}ms");
+    foreach (var e in snapshot.Events.OrderBy(x => x.end))
+        Console.WriteLine($"{(e.isPerma ? "마감미정" : e.end.ToString("yyyy-MM-dd HH:mm"))} | {e.eventName}");
+    return;
+}
 if (args.SequenceEqual(new[] { "--live" }))
 {
     using var client = new HttpClient();
@@ -369,6 +391,7 @@ var httpSource = new GoogleSheetsRuneSource(http);
 try { await httpSource.FetchCsvAsync(default); throw new Exception("HTML 허용"); }
 catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거부"); }
 await QuizFlowTests.RunAsync();
+await MobiEventTests.RunAsync();
 var battleRules = new Dictionary<string, BattleRule>
 {
     ["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100", ""), ["base_attack"] = new("base_attack", "전투능력치", "number", "40", ""), ["base_defense"] = new("base_defense", "전투능력치", "number", "0", ""),

@@ -158,8 +158,8 @@ class Program
         {
             try
             {
-                var fingerPrint = await MobiEventFingerprint.ComputeAsync();
-                await MobiEventBrowser.CacheAsync(fingerPrint);
+                if (!await MobiEventService.Shared.RefreshAsync(appCts.Token))
+                    Console.WriteLine("[이벤트] 초기 수집 실패, 조회 시 다시 시도합니다.");
             }
             catch (Exception ex)
             {

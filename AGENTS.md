@@ -21,7 +21,8 @@
 ## 코드 구조
 - Program.cs: 설정, Discord 연결, Interaction 등록, 초기 데이터 로딩.
 - Commands/: 슬래시 명령 처리.
-- MobiEvent*, MobiRankBrowser: Playwright 기반 수집과 이벤트 알림.
+- MobiEventParser·MobiEventService: 이벤트 목록 HTML 파싱과 HTTP 수집·캐시. MobiEventBrowserSource는 HTTP 차단 시에만 쓰는 Playwright 대체 경로.
+- MobiRankBrowser: Playwright 기반 랭킹 수집. MobiEventExpireAlert: 이벤트 마감 알림.
 - MobiShop.cs, Commons/CsvTable.cs: 상점 테이블과 CSV 매핑.
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.

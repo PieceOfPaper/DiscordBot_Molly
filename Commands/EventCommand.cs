@@ -10,14 +10,7 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
     public async Task Command_CurrentEvents(
         [Summary("마감미정", "마감일 미정(별도 안내 시 까지) 이벤트를 포함할지 여부 (기본 포함)")] bool includePerma = false)
     {
-        if (MobiEventBrowser.IsCachingRunning())
-        {
-            await DeferAsync(ephemeral: true);
-            await ModifyOriginalResponseAsync(m => m.Content = "잠시 후에 다시 시도해주세요.");
-            return;
-        }
-
-        // 1) 3초 내 ACK
+        // 1) 3초 내 ACK (동시 요청은 서비스가 한 번의 수집으로 합쳐 처리)
         await DeferAsync(ephemeral: true);
 
         // (선택) 간헐적 시계오차 이슈 대응
@@ -30,8 +23,9 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(EVENT_TIMEOUT_MS));
         try
         {
-            var results = await MobiEventBrowser.GetCurrentEventsAsync(cts.Token);
-            if (results == null || results.Any() == false)
+            var query = await MobiEventService.Shared.GetCurrentEventsAsync(cts.Token);
+            var results = query?.Events.ToList();
+            if (query == null || results == null || results.Count == 0)
             {
                 await ModifyOriginalResponseAsync(m => m.Content =
                     $"진행중인 이벤트를 찾는데 실패했어요.");
@@ -43,7 +37,10 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
 
             var dateTimeNow = MobiTime.now;
             var strBuilder = new System.Text.StringBuilder();
-            strBuilder.Append($"> {dateTimeNow:yyyy-MM-dd HH:mm:ss} 기준 진행중인 이벤트 입니다.");
+            if (query.IsStale)
+                strBuilder.Append($"> ⚠️ 최신 목록을 가져오지 못해 {query.FetchedAtKst:yyyy-MM-dd HH:mm:ss}에 수집한 목록을 보여드려요.");
+            else
+                strBuilder.Append($"> {dateTimeNow:yyyy-MM-dd HH:mm:ss} 기준 진행중인 이벤트 입니다.");
             var appendedCount = 0;
             results.Sort((a, b) => a.end.CompareTo(b.end));
             foreach (var result in results)
@@ -74,7 +71,7 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
             foreach (var text in texts)
                 await FollowupAsync(text, ephemeral: false, flags: MessageFlags.SuppressEmbeds);
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             await ModifyOriginalResponseAsync(m => m.Content = $"⏱️ 작업이 제한 시간({timeoutSeconds}초)을 초과했어요.");
         }
