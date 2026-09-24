@@ -4,18 +4,13 @@ using Microsoft.Data.Sqlite;
 
 public sealed class EventExpireAlertSettingStore
 {
-    private static int s_SqliteProviderInitialized;
     private readonly string m_DatabasePath;
     private readonly string m_LegacyDirectory;
     private readonly SemaphoreSlim m_Gate = new(1, 1);
 
     public EventExpireAlertSettingStore(string? dataDirectory = null, string? databasePath = null)
     {
-        if (Interlocked.Exchange(ref s_SqliteProviderInitialized, 1) == 0)
-        {
-            SQLitePCL.raw.SetProvider(new SQLitePCL.SQLite3Provider_sqlite3());
-            SQLitePCL.raw.FreezeProvider();
-        }
+        MollySqlite.EnsureProvider();
         var root = dataDirectory ?? MollyDataPaths.RootDirectory;
         m_DatabasePath = databasePath ?? (dataDirectory is null ? MollyDataPaths.DatabasePath : Path.Combine(root, "database", "molly.sqlite"));
         m_LegacyDirectory = Path.Combine(root, "eventexpirealertsetting");

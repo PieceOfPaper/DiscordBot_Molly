@@ -12,6 +12,8 @@ using Molly.Lottery;
 using DiscordBot_Molly.Commands;
 using Molly.Battle;
 using Molly.MobiLife;
+using Molly.Crafting;
+using Molly.HaeyeonMarket;
 
 class Program
 {
@@ -30,6 +32,9 @@ class Program
     public BattleSessions BattleSessions { get; } = new();
     // 모비라이프 OpenAPI. 키가 없거나 API가 중단돼도 봇은 정상 시작하며, 연동 기능만 안내 메시지를 표시합니다.
     public MobiLifeApiClient MobiLife { get; private set; } = null!;
+    // 제작 시트는 여러 기능이 함께 쓰는 공용 레시피 데이터입니다.
+    public CraftingCatalog Crafting { get; private set; } = null!;
+    public HaeyeonMarketMonitor HaeyeonMarket { get; private set; } = null!;
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -166,6 +171,20 @@ class Program
         Battles = new BattleCatalog(new GoogleSheetsBattleSource(runeHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId), dataDirectory);
         await Battles.InitializeAsync(appCts.Token);
+        Crafting = new CraftingCatalog(new GoogleSheetsCraftingSource(runeHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
+            m_Config["GoogleSheets:CraftingSheetName"] ?? GoogleSheetsCraftingSource.DefaultSheetName),
+            dataDirectory);
+        await Crafting.InitializeAsync(appCts.Token);
+        var haeyeonStore = new HaeyeonMarketStore();
+        await haeyeonStore.InitializeAsync(appCts.Token);
+        HaeyeonMarket = new HaeyeonMarketMonitor(
+            async ct =>
+            {
+                await Crafting.EnsureFreshAsync(TimeSpan.FromMinutes(10), ct);
+                return HaeyeonMarketRules.SelectRecipes(Crafting.Current);
+            },
+            new MobiLifeMarketPriceSource(MobiLife), haeyeonStore, new DiscordHaeyeonAlertSender(m_Client));
         try
         {
             try
@@ -201,6 +220,8 @@ class Program
             try { await MobiEventExpireAlert.RegistEventExpireAlertAll(); }
             catch (Exception ex) { Console.WriteLine($"[이벤트] 초기 알림 등록 실패: {ex.Message}"); }
             MobiEventExpireAlert.RunUpdateTask(appCts.Token);
+            // 시세가 없으면 즉시, 이후 매 정각 수집합니다. 수집 실패는 로그만 남기고 다른 기능에 영향을 주지 않습니다.
+            _ = HaeyeonMarket.RunAsync(appCts.Token);
             try
             {
                 await Task.Delay(Timeout.Infinite, appCts.Token);

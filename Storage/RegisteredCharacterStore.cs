@@ -22,6 +22,7 @@ public sealed class RegisteredCharacterStore
 
     public RegisteredCharacterStore(string? databasePath = null)
     {
+        MollySqlite.EnsureProvider();
         m_DatabasePath = databasePath ?? MollyDataPaths.DatabasePath;
     }
 

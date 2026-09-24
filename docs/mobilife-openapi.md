@@ -1,7 +1,11 @@
 # 모비라이프 OpenAPI 연동 가이드
 
 모비라이프(https://mabimobi.life/)가 제공하는 OpenAPI를 몰리 기능에 사용할 때의 기준이다.
-현재는 기반 시스템(설정·클라이언트·출처 표기·장애 대비)만 있고, 이를 사용하는 기능은 아직 없다.
+기반 시스템(설정·클라이언트·출처 표기·장애 대비) 위에 다음 기능이 있다.
+
+| 기능 | 사용 API | 요청량 |
+| --- | --- | --- |
+| `/해연시세모니터링` (`HaeyeonMarket/`) | `market/prices` (`Market/IMarketPriceSource` → `MobiLife/MobiLifeMarketPriceSource`) | 매 정각 검색어 5개 = 하루 약 120회 |
 
 - API 문서: https://open.mabimobi.life/docs
 - 기본 주소: `https://open.mabimobi.life/v1/`
@@ -15,7 +19,7 @@
 
 | 약관 | 개발 규칙 |
 | --- | --- |
-| 출처 표기 의무 | 모비라이프 데이터를 보여주는 **모든** Discord 응답에 `모비라이프 제공`을 표기한다. Embed는 `WithMobiLifeAttribution()`, 일반 메시지는 `MobiLifeAttribution.AppendTo()`를 사용한다. 문구를 바꾸지 않는다. |
+| 출처 표기 의무 | 모비라이프 데이터를 보여주는 **모든** Discord 응답에 `모비라이프 제공`을 표기한다. Embed는 `WithMobiLifeAttribution()`, 일반 메시지는 `MobiLifeAttribution.AppendTo()`를 사용한다. 도메인 인터페이스 뒤의 기능은 `IMarketPriceSource.Attribution`처럼 공급 구현체가 준 문구를 표기한다. 문구를 바꾸지 않는다. |
 | 공식 API 아님 | 넥슨 공식 데이터처럼 안내하지 않는다. 필요하면 "모비라이프 제공 데이터"라고 명시한다. |
 | 재배포·재판매 금지 | API를 그대로 중계하는 명령(원본 JSON 덤프, 무제한 페이지 넘김, 대량 내보내기 파일 등)을 만들지 않는다. 가공·요약한 결과만 보여준다. 응답 원본을 저장소에 커밋하지 않는다. |
 | 남용 시 키 무통보 폐기 | 요청 한도를 여유 있게 지키고(아래 3절), 같은 조회는 캐시를 공유한다. 사용자 입력 한 번이 여러 요청으로 불어나지 않게 설계한다. |
@@ -53,7 +57,7 @@ dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuratio
 
 | 파일 | 역할 |
 | --- | --- |
-| `MobiLifeOptions.cs` | 설정 읽기와 기본값(주소, 로컬 한도, 10초 시간 제한) |
+| `MobiLifeOptions.cs` | 설정 읽기와 기본값(주소, 로컬 한도, 30초 시간 제한) |
 | `MobiLifeApiClient.cs` | Bearer 인증, GET + snake_case JSON 변환, 로컬 한도, 장애 감지·일시 차단. 봇 전체에서 하나만 사용(`Program.instance.MobiLife`) |
 | `MobiLifeAttribution.cs` | 출처 표기 문구와 Embed/텍스트 도우미 |
 | `MobiLifeModels.cs` | 응답 DTO. 기능에 필요한 것만 추가 |
@@ -76,7 +80,7 @@ dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuratio
 1. **도메인 인터페이스로 분리한다.** 기능은 `MobiLifeApiClient`를 직접 호출하지 않는다. 예: 시세 기능이면 `IMarketPriceSource`(도메인 모델 반환)를 정의하고 `MobiLifeMarketPriceSource`가 이를 구현한다. API가 사라지면 구현체만 교체하거나 제거한다. 룬 데이터의 `IRuneSource`, 이벤트의 `IMobiEventPageSource`와 같은 방식이다.
 2. **캐시와 마지막 정상 데이터를 둔다.** 같은 조회는 캐시(시세는 원본이 약 5분 간격 갱신이므로 최소 1~5분)를 공유하고, 동시 요청은 한 번의 호출로 합친다. 실패하면 마지막 정상 데이터를 "수집 시각"과 함께 보여준다(`MobiEventService` 참고). 새 데이터는 검증 후 교체한다.
 3. **시작을 막지 않는다.** 시작 시 네트워크 호출을 하지 않거나, 하더라도 실패를 삼키고 다른 기능을 계속 시작한다. 키가 없는 개발 환경에서도 봇이 떠야 한다.
-4. **Interaction은 먼저 `DeferAsync`한다.** 네트워크 호출(최대 10초)이 있으므로 3초 응답 제한을 넘길 수 있다.
+4. **Interaction은 먼저 `DeferAsync`한다.** 네트워크 호출(최대 30초)이 있으므로 3초 응답 제한을 넘길 수 있다.
 5. **출처를 표기한다.** 1절 참고. 사용자에게 보이는 결과에서 빠지지 않도록 기능 테스트에 표기 여부 확인을 넣는다.
 6. **한도를 설계 단계에서 계산한다.** 명령 1회당 요청 수 × 예상 사용량이 키당 하루 5,000회(로컬 4,500회)를 넘지 않게 한다. 페이지 넘김·자동완성·주기 작업(알림 등)은 특히 주의한다. 자동완성에는 `market/items`를 캐시해 쓰고 매 입력마다 호출하지 않는다.
 7. **DTO는 필요한 필드만 정의한다.** 응답에 필드가 추가되어도 깨지지 않고, 필수 필드가 빠지면 `InvalidResponse`나 도메인 검증 실패로 처리한다.

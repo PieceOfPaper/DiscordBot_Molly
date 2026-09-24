@@ -20,7 +20,8 @@ public sealed record MobiLifeOptions
     public Uri BaseUrl { get; init; } = new(DefaultBaseUrl);
     public int PerMinuteLimit { get; init; } = DefaultPerMinuteLimit;
     public int PerDayLimit { get; init; } = DefaultPerDayLimit;
-    public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(10);
+    // 캐시가 비었을 때 응답이 8초 가까이 걸린 적이 있어 여유를 둡니다.
+    public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(30);
 
     public bool HasApiKey => !string.IsNullOrWhiteSpace(ApiKey);
 

@@ -27,6 +27,8 @@
 - MobiShop.cs, Commons/CsvTable.cs: 상점 테이블과 CSV 매핑.
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
+- MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
+- Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세모니터링 판정·저장·정각 수집.
 
 ## 구현 원칙
 - 사용자에게 보여주는 명령과 안내는 한국어로 작성한다.

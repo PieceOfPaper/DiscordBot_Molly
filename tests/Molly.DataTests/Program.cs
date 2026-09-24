@@ -8,6 +8,9 @@ using Molly.LiarGame;
 using Molly.Lottery;
 using Molly.Battle;
 using Molly.MobiLife;
+using Molly.Crafting;
+using Molly.HaeyeonMarket;
+using Molly.Market;
 using Microsoft.Extensions.Configuration;
 
 const string header = "시즌,등급,분류,클래스,이름,효과\r\n";
@@ -50,6 +53,34 @@ if (args.SequenceEqual(new[] { "--mobilife-live" }))
     var result = await mobiLife.GetAsync<MobiLifeCategoriesResponse>("market/categories");
     if (!result.IsSuccess) { Console.WriteLine($"모비라이프 조회 실패: {result.Status} {result.Detail}"); Environment.Exit(1); }
     Console.WriteLine($"모비라이프 거래소 분류 {result.Value!.Data.Count}개: {string.Join(", ", result.Value.Data.Select(x => $"{x.ParentCategory}({x.ItemCount})"))}");
+    return;
+}
+if (args.SequenceEqual(new[] { "--haeyeon-live" }))
+{
+    // 실제 제작 시트와 모비라이프 시세(검색어 5개, 요청 5회)로 해연 판정만 출력합니다. DB 저장·Discord 전송 없음, CI 미사용.
+    var config = new ConfigurationBuilder().AddUserSecrets(typeof(MobiLifeApiClient).Assembly).AddEnvironmentVariables().Build();
+    using var sheetHttp = new HttpClient();
+    using var mobiLife = new MobiLifeApiClient(MobiLifeOptions.FromConfiguration(config));
+    var recipes = HaeyeonMarketRules.SelectRecipes(CraftingCsvReader.Parse(
+        await new GoogleSheetsCraftingSource(sheetHttp, GoogleSheetsRuneSource.DefaultSpreadsheetId).FetchCsvAsync(default), DateTimeOffset.UtcNow));
+    var tracked = HaeyeonMarketEvaluator.TrackedNames(recipes);
+    var source = new MobiLifeMarketPriceSource(mobiLife);
+    var prices = new Dictionary<string, MarketPrice>(StringComparer.Ordinal);
+    foreach (var keyword in HaeyeonMarketRules.SearchKeywords)
+    {
+        var search = await source.SearchAsync(keyword, default);
+        if (!search.IsSuccess) { Console.WriteLine($"'{keyword}' 조회 실패: {search.FailureMessage}"); Environment.Exit(1); }
+        foreach (var price in search.Prices!) if (tracked.ContainsKey(price.Name)) prices.TryAdd(price.Name, price);
+    }
+    var evaluation = HaeyeonMarketEvaluator.Evaluate(recipes, prices, new Dictionary<string, ItemPriceState>(), new Dictionary<string, CraftState>(), DateTimeOffset.UtcNow);
+    Console.WriteLine($"해연 레시피 {recipes.Count}개, 추적 {tracked.Count}개, 시세 매칭 {prices.Count}개");
+    Console.WriteLine($"누락: {string.Join(", ", evaluation.MissingNames)} / 판정 제외(매물 부족·매진): {string.Join(", ", evaluation.UnreliableNames)}");
+    foreach (var view in Enum.GetValues<HaeyeonPriceView>())
+    {
+        var lines = HaeyeonMarketReport.BuildLines(view, recipes, prices);
+        Console.WriteLine($"== {HaeyeonMarketReport.Title(view)} ({lines.Count}개, Embed {HaeyeonMarketMessages.BuildEmbeds("t", lines, source.Attribution, DateTimeOffset.UtcNow).Count}개)");
+        foreach (var line in lines) Console.WriteLine(line);
+    }
     return;
 }
 if (args.SequenceEqual(new[] { "--live" }))
@@ -406,6 +437,7 @@ catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거�
 await QuizFlowTests.RunAsync();
 await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
+await HaeyeonMarketTests.RunAsync();
 var battleRules = new Dictionary<string, BattleRule>
 {
     ["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100", ""), ["base_attack"] = new("base_attack", "전투능력치", "number", "40", ""), ["base_defense"] = new("base_defense", "전투능력치", "number", "0", ""),

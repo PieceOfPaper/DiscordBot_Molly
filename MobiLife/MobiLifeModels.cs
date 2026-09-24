@@ -6,3 +6,10 @@ namespace Molly.MobiLife;
 public sealed record MobiLifeCategory(string ParentCategory, int ItemCount);
 
 public sealed record MobiLifeCategoriesResponse(IReadOnlyList<MobiLifeCategory> Data);
+
+public sealed record MobiLifePagination(int Limit, int Offset, int Count);
+
+public sealed record MobiLifeMarketPrice(
+    long KindId, string Name, string ParentCategory, long MinPrice, long TotalCount, bool IsSoldOut, string LastVersion);
+
+public sealed record MobiLifeMarketPricesResponse(IReadOnlyList<MobiLifeMarketPrice> Data, MobiLifePagination Pagination);
