@@ -10,6 +10,7 @@ using Molly.Battle;
 using Molly.MobiLife;
 using Molly.Crafting;
 using Molly.HaeyeonMarket;
+using Molly.KeywordMarket;
 using Molly.Market;
 using Microsoft.Extensions.Configuration;
 
@@ -68,7 +69,7 @@ if (args.SequenceEqual(new[] { "--haeyeon-live" }))
     var prices = new Dictionary<string, MarketPrice>(StringComparer.Ordinal);
     foreach (var keyword in HaeyeonMarketRules.SearchKeywords)
     {
-        var search = await source.SearchAsync(keyword, default);
+        var search = await source.SearchAsync(keyword, null, default);
         if (!search.IsSuccess) { Console.WriteLine($"'{keyword}' 조회 실패: {search.FailureMessage}"); Environment.Exit(1); }
         foreach (var price in search.Prices!) if (tracked.ContainsKey(price.Name)) prices.TryAdd(price.Name, price);
     }
@@ -80,6 +81,24 @@ if (args.SequenceEqual(new[] { "--haeyeon-live" }))
         var lines = HaeyeonMarketReport.BuildLines(view, recipes, prices);
         Console.WriteLine($"== {HaeyeonMarketReport.Title(view)} ({lines.Count}개, Embed {HaeyeonMarketMessages.BuildEmbeds("t", lines, source.Attribution, DateTimeOffset.UtcNow).Count}개)");
         foreach (var line in lines) Console.WriteLine(line);
+    }
+    return;
+}
+if (args.SequenceEqual(new[] { "--keyword-market-live" }))
+{
+    // 모비라이프 시세로 상자·패키지 검색 결과만 출력합니다(모니터링당 1~5회 요청). DB 저장·Discord 전송 없음, CI 미사용.
+    var config = new ConfigurationBuilder().AddUserSecrets(typeof(MobiLifeApiClient).Assembly).AddEnvironmentVariables().Build();
+    using var mobiLife = new MobiLifeApiClient(MobiLifeOptions.FromConfiguration(config));
+    var source = new MobiLifeMarketPriceSource(mobiLife);
+    foreach (var definition in new[] { KeywordMarketRules.Box, KeywordMarketRules.Package })
+    {
+        var search = await source.SearchAsync(definition.Keyword, definition.Category, default);
+        if (!search.IsSuccess) { Console.WriteLine($"{definition.SearchDescription} 조회 실패: {search.FailureMessage}"); Environment.Exit(1); }
+        var prices = search.Prices!;
+        Console.WriteLine($"== {definition.DisplayName}: {definition.SearchDescription} {prices.Count}개{(search.IsTruncated ? " (페이지 제한으로 잘렸을 수 있음)" : "")}, " +
+            $"변동 판정 대상 {prices.Count(KeywordMarketEvaluator.IsReliable)}개, 분류 {string.Join(", ", prices.GroupBy(x => x.Category).Select(x => $"{x.Key}({x.Count()})"))}");
+        foreach (var price in prices.OrderBy(x => x.Name, StringComparer.Ordinal))
+            Console.WriteLine($"{price.KindId} | {price.Name} · {KeywordMarketMessages.PriceText(price)}");
     }
     return;
 }
@@ -438,6 +457,7 @@ await QuizFlowTests.RunAsync();
 await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
+await KeywordMarketTests.RunAsync();
 CrossbowBattleTests.Run();
 LifeSkillBattleTests.Run();
 var battleRules = new Dictionary<string, BattleRule>

@@ -7,6 +7,8 @@ public sealed record MarketPrice(long KindId, string Name, string Category, long
 public sealed record MarketPriceSearchResult(IReadOnlyList<MarketPrice>? Prices, string? FailureMessage = null)
 {
     public bool IsSuccess => Prices is not null;
+    // 페이지 수 제한에 걸려 결과가 잘렸을 수 있음. 목록에서 빠진 아이템을 '사라짐'으로 판단하면 안 됩니다.
+    public bool IsTruncated { get; init; }
     public static MarketPriceSearchResult Fail(string message) => new(null, message);
 }
 
@@ -15,6 +17,6 @@ public interface IMarketPriceSource
     // 공급 경로의 출처 표기 문구(예: "모비라이프 제공"). 시세를 보여주는 응답에 반드시 붙입니다.
     string Attribution { get; }
 
-    // 이름에 검색어가 포함된 아이템의 최신 시세 전체를 돌려줍니다.
-    Task<MarketPriceSearchResult> SearchAsync(string keyword, CancellationToken ct);
+    // 이름에 검색어가 포함된 아이템의 최신 시세 전체를 돌려줍니다. category가 있으면 그 대분류(예: "아이템")만 조회합니다.
+    Task<MarketPriceSearchResult> SearchAsync(string keyword, string? category, CancellationToken ct);
 }

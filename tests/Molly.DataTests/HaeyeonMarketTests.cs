@@ -298,7 +298,7 @@ internal static class HaeyeonMarketTests
         });
         using var client = new MobiLifeApiClient(new MobiLifeOptions { ApiKey = "k" }, handler, log: _ => { });
         var source = new MobiLifeMarketPriceSource(client);
-        var result = await source.SearchAsync("특급", default);
+        var result = await source.SearchAsync("특급", null, default);
         Assert(result.IsSuccess && result.Prices!.Count == 107 && requests.Count == 2 &&
                requests[0].Query.Contains("search=%ED%8A%B9%EA%B8%89") && requests[1].Query.Contains("offset=100") &&
                result.Prices[0] == new MarketPrice(0, "특급 0", "아이템", 100, 5, false, new DateTimeOffset(2026, 9, 24, 10, 38, 0, TimeSpan.Zero)) &&
@@ -306,7 +306,7 @@ internal static class HaeyeonMarketTests
             "모비라이프 시세를 페이지 단위로 모두 받아 도메인 모델로 변환");
 
         using var noKey = new MobiLifeApiClient(new MobiLifeOptions(), handler, log: _ => { });
-        var disabled = await new MobiLifeMarketPriceSource(noKey).SearchAsync("특급", default);
+        var disabled = await new MobiLifeMarketPriceSource(noKey).SearchAsync("특급", null, default);
         Assert(!disabled.IsSuccess && disabled.FailureMessage!.Contains("꺼져") && requests.Count == 2, "키가 없으면 요청 없이 실패 안내");
     }
 
@@ -329,7 +329,7 @@ internal static class HaeyeonMarketTests
 
         public void Set(params (string Name, long Price)[] prices) => m_Prices = prices.ToDictionary(x => x.Name, x => x.Price, StringComparer.Ordinal);
 
-        public Task<MarketPriceSearchResult> SearchAsync(string keyword, CancellationToken ct)
+        public Task<MarketPriceSearchResult> SearchAsync(string keyword, string? category, CancellationToken ct)
         {
             Keywords.Add(keyword);
             if (keyword == FailKeyword) return Task.FromResult(MarketPriceSearchResult.Fail("실패"));

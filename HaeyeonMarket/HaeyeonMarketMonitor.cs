@@ -46,18 +46,9 @@ public sealed class HaeyeonMarketMonitor
     public HaeyeonMarketStore Store { get; }
     public string Attribution => m_Source.Attribution;
 
-    public static DateTimeOffset NextHourUtc(DateTimeOffset nowUtc)
-    {
-        var utc = nowUtc.ToUniversalTime();
-        return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero).AddHours(1);
-    }
+    public static DateTimeOffset NextHourUtc(DateTimeOffset nowUtc) => MarketSchedule.NextHourUtc(nowUtc);
 
-    /// <summary>
-    /// 시작 시 즉시 수집이 필요한지 판단합니다. 저장된 시세가 없거나, 마지막 수집이 가장 최근 정각보다 이전이면
-    /// (예: 13:03 시작, 마지막 수집 12:57 → 13:00 수집을 놓침) 즉시 수집합니다.
-    /// </summary>
-    public static bool NeedsCatchUp(DateTimeOffset? lastCollectedUtc, DateTimeOffset nowUtc) =>
-        lastCollectedUtc is null || lastCollectedUtc.Value < NextHourUtc(nowUtc).AddHours(-1);
+    public static bool NeedsCatchUp(DateTimeOffset? lastCollectedUtc, DateTimeOffset nowUtc) => MarketSchedule.NeedsCatchUp(lastCollectedUtc, nowUtc);
 
     /// <summary>시작 시 DB에 시세가 없거나 직전 정각 수집을 놓쳤으면 즉시 수집하고, 이후 매 정각(KST·UTC 모두 정시)에 수집합니다.</summary>
     public async Task RunAsync(CancellationToken ct)
@@ -114,7 +105,7 @@ public sealed class HaeyeonMarketMonitor
         var prices = new Dictionary<string, MarketPrice>(StringComparer.Ordinal);
         foreach (var keyword in HaeyeonMarketRules.SearchKeywords)
         {
-            var search = await m_Source.SearchAsync(keyword, ct).ConfigureAwait(false);
+            var search = await m_Source.SearchAsync(keyword, null, ct).ConfigureAwait(false);
             if (!search.IsSuccess) return new HaeyeonRunResult(false, $"'{keyword}' 시세 조회 실패로 이번 회차를 건너뜁니다: {search.FailureMessage}");
             foreach (var price in search.Prices!)
                 if (tracked.ContainsKey(price.Name)) prices.TryAdd(price.Name, price);

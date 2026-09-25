@@ -12,7 +12,7 @@ public sealed class MobiLifeMarketPriceSource(MobiLifeApiClient client) : IMarke
 
     public string Attribution => MobiLifeAttribution.Text;
 
-    public async Task<MarketPriceSearchResult> SearchAsync(string keyword, CancellationToken ct)
+    public async Task<MarketPriceSearchResult> SearchAsync(string keyword, string? category, CancellationToken ct)
     {
         var prices = new List<MarketPrice>();
         for (var page = 0; page < MaxPages; page++)
@@ -20,6 +20,7 @@ public sealed class MobiLifeMarketPriceSource(MobiLifeApiClient client) : IMarke
             var result = await client.GetAsync<MobiLifeMarketPricesResponse>("market/prices",
             [
                 new("search", keyword),
+                new("parent_category", category),
                 new("sort", "pct_change_24h_desc"),
                 new("limit", PageSize.ToString(CultureInfo.InvariantCulture)),
                 new("offset", (page * PageSize).ToString(CultureInfo.InvariantCulture)),
@@ -36,7 +37,7 @@ public sealed class MobiLifeMarketPriceSource(MobiLifeApiClient client) : IMarke
             }
             if (result.Value.Data.Count < PageSize) return new MarketPriceSearchResult(prices);
         }
-        // 마지막 페이지까지 가득 찼다면 결과가 잘렸을 수 있지만, 필요한 이름이 빠졌는지는 호출자가 확인합니다.
-        return new MarketPriceSearchResult(prices);
+        // 마지막 페이지까지 가득 찼다면 결과가 잘렸을 수 있습니다. 필요한 이름이 빠졌는지는 호출자가 확인합니다.
+        return new MarketPriceSearchResult(prices) { IsTruncated = true };
     }
 }

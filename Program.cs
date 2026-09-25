@@ -14,6 +14,7 @@ using Molly.Battle;
 using Molly.MobiLife;
 using Molly.Crafting;
 using Molly.HaeyeonMarket;
+using Molly.KeywordMarket;
 
 class Program
 {
@@ -35,6 +36,8 @@ class Program
     // 제작 시트는 여러 기능이 함께 쓰는 공용 레시피 데이터입니다.
     public CraftingCatalog Crafting { get; private set; } = null!;
     public HaeyeonMarketMonitor HaeyeonMarket { get; private set; } = null!;
+    public KeywordMarketMonitor BoxMarket { get; private set; } = null!;
+    public KeywordMarketMonitor PackageMarket { get; private set; } = null!;
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -185,6 +188,8 @@ class Program
                 return HaeyeonMarketRules.SelectRecipes(Crafting.Current);
             },
             new MobiLifeMarketPriceSource(MobiLife), haeyeonStore, new DiscordHaeyeonAlertSender(m_Client));
+        BoxMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Box, appCts.Token);
+        PackageMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Package, appCts.Token);
         try
         {
             try
@@ -222,6 +227,8 @@ class Program
             MobiEventExpireAlert.RunUpdateTask(appCts.Token);
             // 시세가 없으면 즉시, 이후 매 정각 수집합니다. 수집 실패는 로그만 남기고 다른 기능에 영향을 주지 않습니다.
             _ = HaeyeonMarket.RunAsync(appCts.Token);
+            _ = BoxMarket.RunAsync(appCts.Token);
+            _ = PackageMarket.RunAsync(appCts.Token);
             try
             {
                 await Task.Delay(Timeout.Infinite, appCts.Token);
@@ -237,5 +244,12 @@ class Program
             await Quizzes.StopAsync();
             await TrueFalseQuizzes.StopAsync();
         }
+    }
+
+    private async Task<KeywordMarketMonitor> CreateKeywordMarketAsync(KeywordMarketDefinition definition, CancellationToken ct)
+    {
+        var store = new KeywordMarketStore(definition.Id);
+        await store.InitializeAsync(ct);
+        return new KeywordMarketMonitor(definition, new MobiLifeMarketPriceSource(MobiLife), store, new DiscordKeywordAlertSender(m_Client));
     }
 }
