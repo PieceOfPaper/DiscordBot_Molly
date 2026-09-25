@@ -222,7 +222,7 @@ public sealed class BattleCatalog
         if (derivationList.Any(x => !skillMap.ContainsKey(x.ParentSkillId) || !skillMap.ContainsKey(x.ChildSkillId))) throw new InvalidDataException("배틀스킬파생 시트가 존재하지 않는 배틀 스킬 ID를 참조합니다.");
         // 엔진이 모르는 조건유형은 항상 거짓으로 판정되어 파생이 조용히 사라지므로 로딩 단계에서 거부한다.
         if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
-        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LoadedAt = loadedAt };
+        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LoadedAt = loadedAt };
     }
 
     private static IEnumerable<Dictionary<string, string>> Unique(IReadOnlyList<Dictionary<string, string>> rows, string sheet)

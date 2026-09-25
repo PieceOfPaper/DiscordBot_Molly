@@ -95,7 +95,7 @@ if (args.SequenceEqual(new[] { "--battle-live" }))
     using var client = new HttpClient();
     var source = new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId);
     var snapshot = BattleCatalog.Parse(await source.FetchAsync(default), DateTimeOffset.UtcNow);
-    Console.WriteLine($"실제 배틀 시트: 클래스 {snapshot.Classes.Count}개, 스킬 {snapshot.Skills.Count}개");
+    Console.WriteLine($"실제 배틀 시트: 클래스 {snapshot.Classes.Count}개, 스킬 {snapshot.Skills.Count}개, 배틀 가능 클래스 {string.Join(", ", snapshot.BattleReadyClassIds.Select(id => snapshot.Classes[id].Name).Order(StringComparer.Ordinal))}");
     return;
 }
 if (args.Length >= 1 && args[0] == "--battle-balance")
@@ -109,7 +109,7 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
         ? GoogleSheetsBattleSource.SheetNames.ToDictionary(x => x, x => File.ReadAllText(Path.Combine(args[2], x + ".csv")))
         : await new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId).FetchAsync(default);
     var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow);
-    var classes = data.Classes.Values.Where(x => x.IsBattleReady).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray();
+    var classes = data.Classes.Values.Where(x => data.IsClassBattleReady(x.Id)).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray();
     if (classes.Length < 2) { Console.WriteLine("배틀 준비된 클래스가 2개 미만이라 밸런스 시뮬레이션을 할 수 없습니다."); return; }
     const int power = 1000;
     var engine = new BattleEngine();
@@ -1043,6 +1043,20 @@ Check(AdLibChosen(adLibNoInspiration) == "애드리브: 우아" && AdLibChosen(a
     "애드리브 화합 20%는 새로운 영감 표식이 있을 때만 판정하고, 화합 준비 표식은 확정 화합으로 먼저 판정한다");
 Check(DancerResourceLog(adLibInspirationHit).Contains("새로운 영감 -1 (현재 0)") && DancerResourceLog(adLibInspirationMiss).Contains("새로운 영감 -1 (현재 0)") && DancerResourceLog(adLibGuaranteed).SequenceEqual(["화합 준비 -1 (현재 0)", "새로운 영감 -1 (현재 0)"]),
     "새로운 영감 표식은 화합 여부와 관계없이 다음 애드리브 한 번에 소모된다");
+
+// /배틀은 스레드를 만들기 전에 스냅샷의 배틀 가능 클래스로 판정한다. 스킬 칸이 비었거나 배틀스킬이 없는 클래스는 제외된다.
+var readinessSnapshot = new BattleDataSnapshot
+{
+    Rules = battleRules,
+    Classes = new Dictionary<string, BattleClass> { ["ready"] = new("ready", "준비", ["tempo_up"]), ["unlisted"] = new("unlisted", "스킬 미입력", Array.Empty<string>(), false), ["missing"] = new("missing", "배틀스킬 없음", ["tempo_up", "no_battle_row"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["tempo_up"] = tempoUpSkill },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var readinessRejected = false;
+try { new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ready", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "missing", 100, 0, 0), readinessSnapshot, new FixedBattleRandom([0d])); }
+catch (InvalidDataException) { readinessRejected = true; }
+Check(readinessSnapshot.BattleReadyClassIds.SetEquals(["ready"]) && readinessSnapshot.IsClassBattleReady("ready") && !readinessSnapshot.IsClassBattleReady("unlisted") && !readinessSnapshot.IsClassBattleReady("missing") && !readinessSnapshot.IsClassBattleReady("unknown") && readinessRejected,
+    "배틀 가능 클래스는 스킬 칸과 배틀스킬이 모두 갖춰진 클래스뿐이며, 엔진도 같은 기준으로 거부한다");
 
 // 중첩자원ID가 있는 상태는 그 자원의 보유량만큼 값이 곱해진다(날카로운 눈·드라이빙 포스·퀵 어택).
 var stackStatus = new Dictionary<string, BattleStatus> { ["stack_power"] = new("stack_power", "중첩 위력", "주는피해증가", .5, "중첩당 +50%", StackResourceId: "power_stack") };

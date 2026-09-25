@@ -77,7 +77,10 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         cancellationToken.ThrowIfCancellationRequested();
         var saved = await Program.instance.RegisteredCharacters.LoadAsync(userId) ?? throw new InvalidDataException("두 참가자 모두 먼저 /캐릭터등록을 해야 해요.");
         if (saved.LastSyncedAtUtc is { } at && DateTimeOffset.UtcNow - at < TimeSpan.FromHours(1) && saved is { ClassId: not null, CombatPower: not null, LifePower: not null, CharmPower: not null })
+        {
+            EnsureBattleReady(saved.CharacterName, saved.ClassId);
             return new CharacterBattleSnapshot(userId, saved.CharacterName, saved.ClassId, saved.CombatPower.Value, saved.LifePower.Value, saved.CharmPower.Value);
+        }
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(TimeSpan.FromSeconds(60));
         var rank = await MobiRankBrowser.GetRankBySearchAsync(4, saved.CharacterName, saved.Server, null, cts.Token, guildId: guildId) ?? throw new InvalidDataException(saved.CharacterName + " 캐릭터를 현재 종합 랭킹에서 찾지 못했어요. /캐릭터등록으로 확인해주세요.");
@@ -85,7 +88,18 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         if (rank.Combat is null || rank.Life is null || rank.Charm is null) throw new InvalidDataException("랭킹에서 배틀에 필요한 능력치를 읽지 못했어요. 잠시 후 다시 시도해주세요.");
         var updated = saved with { ClassId = classId, CombatPower = rank.Combat, LifePower = rank.Life, CharmPower = rank.Charm, LastSyncedAtUtc = DateTimeOffset.UtcNow };
         await Program.instance.RegisteredCharacters.SaveAsync(updated, cts.Token);
+        EnsureBattleReady(updated.CharacterName, classId);
         return new CharacterBattleSnapshot(userId, updated.CharacterName, classId, rank.Combat.Value, rank.Life.Value, rank.Charm.Value);
+    }
+
+    /// <summary>스레드를 만들기 전에 시트 로딩 때 계산해 둔 배틀 가능 클래스로 판정해, 미지원 클래스는 신청자에게만 바로 안내한다.</summary>
+    private static void EnsureBattleReady(string characterName, string classId)
+    {
+        var data = Program.instance.Battles.Current;
+        if (data.IsClassBattleReady(classId)) return;
+        var className = data.Classes.TryGetValue(classId, out var battleClass) ? battleClass.Name : classId;
+        var readyNames = data.BattleReadyClassIds.Select(id => data.Classes[id].Name).Order(StringComparer.Ordinal).ToArray();
+        throw new InvalidDataException(characterName + " 캐릭터의 " + className + " 클래스는 아직 배틀을 지원하지 않아요." + (readyNames.Length > 0 ? " 현재 배틀 가능 클래스: " + string.Join(", ", readyNames) : ""));
     }
 
     private static string CombatantName(IUser user, CharacterBattleSnapshot character)

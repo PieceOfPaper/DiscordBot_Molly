@@ -6,7 +6,7 @@ public sealed class BattleEngine
     public BattleResult Simulate(CharacterBattleSnapshot a, CharacterBattleSnapshot b, BattleDataSnapshot data, IBattleRandom random)
     {
         ArgumentNullException.ThrowIfNull(data); ArgumentNullException.ThrowIfNull(random);
-        if (!data.Classes.TryGetValue(a.ClassId, out var aClass) || !aClass.IsBattleReady || !data.Classes.TryGetValue(b.ClassId, out var bClass) || !bClass.IsBattleReady) throw new InvalidDataException("등록 캐릭터의 클래스에 해당하는 배틀 스킬 데이터가 아직 준비되지 않았습니다.");
+        if (!data.IsClassBattleReady(a.ClassId) || !data.IsClassBattleReady(b.ClassId)) throw new InvalidDataException("등록 캐릭터의 클래스에 해당하는 배틀 스킬 데이터가 아직 준비되지 않았습니다.");
         var rules = new Rules(data.Rules);
         var basePower = Math.Sqrt(Math.Max(1d, a.CombatPower) * Math.Max(1d, b.CombatPower));
         var left = Fighter.Create(a, PowerScale(a.CombatPower, basePower, rules), rules, data);

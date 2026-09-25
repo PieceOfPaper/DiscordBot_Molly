@@ -15,6 +15,13 @@ public sealed class BattleDataSnapshot
     public IReadOnlyList<BattleDerivation> Derivations { get; init; } = Array.Empty<BattleDerivation>();
     public DateTimeOffset LoadedAt { get; init; }
     public bool IsUsable => Rules.Count > 0 && Classes.Count > 0 && Skills.Count > 0;
+    private IReadOnlySet<string>? battleReadyClassIds;
+    /// <summary>전투를 시작할 수 있는 클래스 ID. 시트 로딩 때 미리 계산해 두고, /배틀 신청 단계에서 스레드를 만들기 전에 판정한다.</summary>
+    public IReadOnlySet<string> BattleReadyClassIds { get => battleReadyClassIds ??= ComputeBattleReadyClassIds(Classes, Skills); init => battleReadyClassIds = value; }
+    public bool IsClassBattleReady(string classId) => BattleReadyClassIds.Contains(classId);
+    /// <summary>클래스 시트의 스킬 칸이 모두 채워져 있고, 그 스킬이 모두 배틀스킬 시트에 있어야 전투할 수 있다.</summary>
+    public static IReadOnlySet<string> ComputeBattleReadyClassIds(IReadOnlyDictionary<string, BattleClass> classes, IReadOnlyDictionary<string, BattleSkill> skills)
+        => classes.Values.Where(x => x.IsBattleReady && x.SkillIds.All(skills.ContainsKey)).Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
 }
 
 public sealed record BattleRule(string Id, string Category, string ValueType, string Value, string Description)
