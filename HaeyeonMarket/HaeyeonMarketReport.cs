@@ -7,7 +7,7 @@ public enum HaeyeonPriceView
 {
     // 해연 제작 아이템 시세
     Products,
-    // 해연 재료 시세(중복 없이)
+    // 해연 재료 시세(중복 없이, 마력석·영혼석·기타 분류)
     Materials,
     // 해연 아이템별 완제품 시세와 재료 합계 비교
     ProductTotals,
@@ -26,12 +26,41 @@ public static class HaeyeonMarketReport
     public static IReadOnlyList<string> BuildLines(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes, IReadOnlyDictionary<string, MarketPrice> prices) => view switch
     {
         HaeyeonPriceView.Products => recipes.Select(x => $"{x.Name} · {PriceText(prices, x.Name)}").ToArray(),
-        HaeyeonPriceView.Materials => recipes.SelectMany(x => x.Ingredients).Select(x => x.Name).Distinct(StringComparer.Ordinal)
-            .Select(name => HaeyeonMarketRules.WorthlessMaterials.Contains(name)
-                ? $"{name} · 0 (무가치 재료, 조회하지 않음)"
-                : $"{name} · {PriceText(prices, name)}").ToArray(),
+        HaeyeonPriceView.Materials => MaterialLines(recipes, prices),
         _ => recipes.Select(x => TotalLine(x, prices)).ToArray(),
     };
+
+    // 분류 머리글을 뺀 실제 아이템·재료 개수
+    public static int ItemCount(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes) =>
+        view == HaeyeonPriceView.Materials ? MaterialNames(recipes).Count : recipes.Count;
+
+    // 재료 분류: 이름에 "마력석"이 들어가면 마력석, "영혼석"이 들어가면 영혼석, 나머지는 기타
+    public static string MaterialCategory(string name) =>
+        name.Contains("마력석", StringComparison.Ordinal) ? "마력석" :
+        name.Contains("영혼석", StringComparison.Ordinal) ? "영혼석" : "기타";
+
+    private static readonly string[] s_MaterialCategories = ["마력석", "영혼석", "기타"];
+
+    private static IReadOnlyList<string> MaterialNames(IReadOnlyList<CraftingRecipe> recipes) =>
+        recipes.SelectMany(x => x.Ingredients).Select(x => x.Name).Distinct(StringComparer.Ordinal).ToArray();
+
+    // 분류별 머리글 아래에 시트 순서대로 재료를 나열하고, 재료가 없는 분류는 생략합니다.
+    private static IReadOnlyList<string> MaterialLines(IReadOnlyList<CraftingRecipe> recipes, IReadOnlyDictionary<string, MarketPrice> prices)
+    {
+        var lines = new List<string>();
+        var names = MaterialNames(recipes);
+        foreach (var category in s_MaterialCategories)
+        {
+            var group = names.Where(x => MaterialCategory(x) == category).ToArray();
+            if (group.Length == 0) continue;
+            if (lines.Count > 0) lines.Add("");
+            lines.Add($"**[{category}]**");
+            lines.AddRange(group.Select(name => HaeyeonMarketRules.WorthlessMaterials.Contains(name)
+                ? $"{name} · 0 (무가치 재료, 조회하지 않음)"
+                : $"{name} · {PriceText(prices, name)}"));
+        }
+        return lines;
+    }
 
     // 재료 합계 = Σ(재료 최저가 × 수량). 무가치 재료는 0, 시세가 없거나 매진인 재료가 있으면 계산하지 않습니다.
     public static long? MaterialCost(CraftingRecipe recipe, IReadOnlyDictionary<string, MarketPrice> prices, out IReadOnlyList<string> unavailable)

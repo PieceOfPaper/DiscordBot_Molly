@@ -136,9 +136,16 @@ internal static class HaeyeonMarketTests
             "/해연시세 해연: 해연 아이템 시세를 시트 순서로 표시");
 
         var materials = HaeyeonMarketReport.BuildLines(HaeyeonPriceView.Materials, recipes, prices);
-        Assert(materials.Count == 5 && materials.Count(x => x.StartsWith("백금강괴 · ")) == 1 &&
-               materials.Contains("세공된 페리도트ZZ · 0 (무가치 재료, 조회하지 않음)") && materials[0] == "백금강괴 · **100** (매물 100개)",
+        Assert(HaeyeonMarketReport.ItemCount(HaeyeonPriceView.Materials, recipes) == 5 && materials.Count(x => x.StartsWith("백금강괴 · ")) == 1 &&
+               materials.Contains("세공된 페리도트ZZ · 0 (무가치 재료, 조회하지 않음)"),
             "/해연시세 해연재료: 여러 아이템에 쓰이는 재료도 한 번만 표시하고 무가치 재료는 0으로 표시");
+        Assert(materials.SequenceEqual([
+                "**[마력석]**", "포식의 마력석 · **100** (매물 100개)", "",
+                "**[영혼석]**", "망령의 영혼석 · **10** (매물 100개)", "",
+                "**[기타]**", "백금강괴 · **100** (매물 100개)", "특급 목재 · **100** (매물 100개)", "세공된 페리도트ZZ · 0 (무가치 재료, 조회하지 않음)"]),
+            "/해연시세 해연재료: 마력석·영혼석·기타 순으로 분류하고 분류 안은 시트 순서 유지");
+        Assert(HaeyeonMarketReport.MaterialCategory("마력석 조각") == "마력석" && HaeyeonMarketReport.MaterialCategory("영혼석") == "영혼석" &&
+               HaeyeonMarketReport.MaterialCategory("백금강괴") == "기타", "재료 분류는 이름 포함 여부로 판정");
 
         var totals = HaeyeonMarketReport.BuildLines(HaeyeonPriceView.ProductTotals, recipes, prices);
         Assert(totals[0] == "⚒️ **해연의 숏소드ZZ** 완제품 3,960 / 재료 합계 3,300 · 완제품이 20.0% 높음 → 재료 구매 후 제작이 저렴" &&

@@ -98,7 +98,7 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
 
     [SlashCommand("해연시세", "마지막으로 저장한 해연 제작 아이템·재료 시세를 보여줍니다.")]
     public async Task Command_Prices(
-        [Summary("종류", "해연: 해연 아이템, 해연재료: 재료(중복 없이), 총해연재료: 아이템별 재료 합계 비교")]
+        [Summary("종류", "해연: 해연 아이템, 해연재료: 재료(마력석·영혼석·기타 분류), 총해연재료: 아이템별 재료 합계 비교")]
         [Choice("해연", "해연")]
         [Choice("해연재료", "해연재료")]
         [Choice("총해연재료", "총해연재료")] string kind)
@@ -127,7 +127,7 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
         }
 
         var lines = HaeyeonMarketReport.BuildLines(view.Value, recipes, latest.Prices);
-        var title = $"{HaeyeonMarketReport.Title(view.Value)} · {HaeyeonMarketMessages.Kst(latest.CollectedAtUtc)} 기준 {lines.Count}개";
+        var title = $"{HaeyeonMarketReport.Title(view.Value)} · {HaeyeonMarketMessages.Kst(latest.CollectedAtUtc)} 기준 {HaeyeonMarketReport.ItemCount(view.Value, recipes)}개";
         var embeds = HaeyeonMarketMessages.BuildEmbeds(title, lines, monitor.Attribution, latest.CollectedAtUtc);
         foreach (var embed in embeds)
             await FollowupAsync(embed: embed);
