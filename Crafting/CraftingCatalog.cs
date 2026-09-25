@@ -8,7 +8,8 @@ namespace Molly.Crafting;
 // 제작 시트는 여러 기능이 함께 쓰는 공용 레시피 데이터입니다. 기능별 조건(예: 해연 아이템만)은 사용하는 쪽에서 거릅니다.
 public sealed record CraftingIngredient(string Name, int Quantity);
 
-public sealed record CraftingRecipe(string Name, IReadOnlyList<CraftingIngredient> Ingredients);
+// Category는 시트의 분류(예: 무기·방어구·장신구)이며, 분류 열이 없거나 비어 있으면 빈 문자열입니다.
+public sealed record CraftingRecipe(string Name, IReadOnlyList<CraftingIngredient> Ingredients, string Category = "");
 
 public interface ICraftingSource
 {
@@ -62,9 +63,10 @@ public sealed class CraftingTable
 public static class CraftingCsvReader
 {
     public const string NameHeader = "이름";
+    public const string CategoryHeader = "분류";
     public const string IngredientHeaderPrefix = "재료";
 
-    // 헤더: 이름, 재료1..재료N. 재료 셀은 "재료명/수량"이며 빈 셀은 건너뜁니다.
+    // 헤더: 이름, (선택) 분류, 재료1..재료N. 재료 셀은 "재료명/수량"이며 빈 셀은 건너뜁니다.
     public static CraftingTable Parse(string csv, DateTimeOffset loadedAt)
     {
         using var parser = new TextFieldParser(new StringReader(csv.TrimStart('﻿')))
@@ -77,6 +79,8 @@ public static class CraftingCsvReader
         var headers = (parser.ReadFields() ?? throw new InvalidDataException("제작 테이블 헤더가 없습니다."))
             .Select(x => x.Trim()).ToArray();
         var nameIndex = Array.IndexOf(headers, NameHeader);
+        // 분류 열이 추가되기 전의 로컬 캐시도 읽을 수 있도록 분류는 선택 헤더입니다.
+        var categoryIndex = Array.IndexOf(headers, CategoryHeader);
         var ingredientIndexes = headers.Select((header, index) => (header, index))
             .Where(x => x.header.StartsWith(IngredientHeaderPrefix, StringComparison.Ordinal)).Select(x => x.index).ToArray();
         if (nameIndex < 0 || ingredientIndexes.Length == 0 || headers.Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).Count() != headers.Count(x => x.Length > 0))
@@ -109,7 +113,7 @@ public static class CraftingCsvReader
             }
             if (ingredients.Count == 0)
                 throw new InvalidDataException($"제작 CSV {line}행 '{name}'에 재료가 없습니다.");
-            recipes.Add(new CraftingRecipe(name, ingredients.AsReadOnly()));
+            recipes.Add(new CraftingRecipe(name, ingredients.AsReadOnly(), categoryIndex < 0 ? "" : Field(categoryIndex)));
         }
         if (recipes.Count == 0) throw new InvalidDataException("사용 가능한 제작 레시피가 없어 기존 데이터를 유지합니다.");
         return new CraftingTable(recipes, loadedAt);

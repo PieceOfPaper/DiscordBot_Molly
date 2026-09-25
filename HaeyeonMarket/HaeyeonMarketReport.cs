@@ -5,8 +5,10 @@ namespace Molly.HaeyeonMarket;
 
 public enum HaeyeonPriceView
 {
-    // 해연 제작 아이템 시세
-    Products,
+    // 해연 제작 아이템 시세(제작 시트 분류별)
+    Weapons,
+    Armors,
+    Accessories,
     // 해연 재료 시세(중복 없이, 마력석·영혼석·기타 분류)
     Materials,
     // 해연 아이템별 완제품 시세와 재료 합계 비교
@@ -18,21 +20,39 @@ public static class HaeyeonMarketReport
 {
     public static string Title(HaeyeonPriceView view) => view switch
     {
-        HaeyeonPriceView.Products => "💹 해연 아이템 시세",
+        HaeyeonPriceView.Weapons => "💹 해연 무기 시세",
+        HaeyeonPriceView.Armors => "💹 해연 방어구 시세",
+        HaeyeonPriceView.Accessories => "💹 해연 장신구 시세",
         HaeyeonPriceView.Materials => "💹 해연 재료 시세",
         _ => "💹 해연 아이템 · 재료 합계 비교",
     };
 
+    // 아이템 시세 종류가 보여줄 제작 시트 분류. 아이템 시세 종류가 아니면 null입니다.
+    public static string? ProductCategory(HaeyeonPriceView view) => view switch
+    {
+        HaeyeonPriceView.Weapons => "무기",
+        HaeyeonPriceView.Armors => "방어구",
+        HaeyeonPriceView.Accessories => "장신구",
+        _ => null,
+    };
+
     public static IReadOnlyList<string> BuildLines(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes, IReadOnlyDictionary<string, MarketPrice> prices) => view switch
     {
-        HaeyeonPriceView.Products => recipes.Select(x => $"{x.Name} · {PriceText(prices, x.Name)}").ToArray(),
         HaeyeonPriceView.Materials => MaterialLines(recipes, prices),
-        _ => recipes.Select(x => TotalLine(x, prices)).ToArray(),
+        HaeyeonPriceView.ProductTotals => recipes.Select(x => TotalLine(x, prices)).ToArray(),
+        _ => ProductsOf(view, recipes).Select(x => $"{x.Name} · {PriceText(prices, x.Name)}").ToArray(),
     };
 
     // 분류 머리글을 뺀 실제 아이템·재료 개수
-    public static int ItemCount(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes) =>
-        view == HaeyeonPriceView.Materials ? MaterialNames(recipes).Count : recipes.Count;
+    public static int ItemCount(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes) => view switch
+    {
+        HaeyeonPriceView.Materials => MaterialNames(recipes).Count,
+        HaeyeonPriceView.ProductTotals => recipes.Count,
+        _ => ProductsOf(view, recipes).Count(),
+    };
+
+    private static IEnumerable<CraftingRecipe> ProductsOf(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes) =>
+        recipes.Where(x => x.Category == ProductCategory(view));
 
     // 재료 분류: 이름에 "마력석"이 들어가면 마력석, "영혼석"이 들어가면 영혼석, 나머지는 기타
     public static string MaterialCategory(string name) =>

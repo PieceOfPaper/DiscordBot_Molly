@@ -98,21 +98,25 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
 
     [SlashCommand("해연시세", "마지막으로 저장한 해연 제작 아이템·재료 시세를 보여줍니다.")]
     public async Task Command_Prices(
-        [Summary("종류", "해연: 해연 아이템, 해연재료: 재료(마력석·영혼석·기타 분류), 총해연재료: 아이템별 재료 합계 비교")]
-        [Choice("해연", "해연")]
+        [Summary("종류", "해연무기·해연방어구·해연장신구: 분류별 아이템, 해연재료: 재료, 총해연재료: 아이템별 재료 합계 비교")]
+        [Choice("해연무기", "해연무기")]
+        [Choice("해연방어구", "해연방어구")]
+        [Choice("해연장신구", "해연장신구")]
         [Choice("해연재료", "해연재료")]
         [Choice("총해연재료", "총해연재료")] string kind)
     {
         var view = kind switch
         {
-            "해연" => HaeyeonPriceView.Products,
+            "해연무기" => HaeyeonPriceView.Weapons,
+            "해연방어구" => HaeyeonPriceView.Armors,
+            "해연장신구" => HaeyeonPriceView.Accessories,
             "해연재료" => HaeyeonPriceView.Materials,
             "총해연재료" => HaeyeonPriceView.ProductTotals,
             _ => (HaeyeonPriceView?)null,
         };
         if (view is null)
         {
-            await RespondAsync("종류는 해연, 해연재료, 총해연재료 중에서 골라 주세요.", ephemeral: true);
+            await RespondAsync("종류는 해연무기, 해연방어구, 해연장신구, 해연재료, 총해연재료 중에서 골라 주세요.", ephemeral: true);
             return;
         }
 
@@ -126,8 +130,15 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
             return;
         }
 
+        var count = HaeyeonMarketReport.ItemCount(view.Value, recipes);
+        if (count == 0)
+        {
+            await FollowupAsync($"제작 시트에서 분류가 '{HaeyeonMarketReport.ProductCategory(view.Value)}'인 해연 아이템을 찾지 못했어요.");
+            return;
+        }
+
         var lines = HaeyeonMarketReport.BuildLines(view.Value, recipes, latest.Prices);
-        var title = $"{HaeyeonMarketReport.Title(view.Value)} · {HaeyeonMarketMessages.Kst(latest.CollectedAtUtc)} 기준 {HaeyeonMarketReport.ItemCount(view.Value, recipes)}개";
+        var title = $"{HaeyeonMarketReport.Title(view.Value)} · {HaeyeonMarketMessages.Kst(latest.CollectedAtUtc)} 기준 {count}개";
         var embeds = HaeyeonMarketMessages.BuildEmbeds(title, lines, monitor.Attribution, latest.CollectedAtUtc);
         foreach (var embed in embeds)
             await FollowupAsync(embed: embed);
