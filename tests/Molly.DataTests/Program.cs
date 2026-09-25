@@ -205,6 +205,15 @@ void Check(bool value, string name)
     if (!value) throw new Exception(name);
     Console.WriteLine("PASS " + name);
 }
+var registeredCommands = typeof(DiscordBot_Molly.Commands.HelpCatalog).Assembly.GetTypes()
+    .SelectMany(t => t.GetMethods())
+    .SelectMany(m => m.GetCustomAttributes(typeof(Discord.Interactions.SlashCommandAttribute), false).Cast<Discord.Interactions.SlashCommandAttribute>())
+    .Select(a => a.Name).Order().ToList();
+var helpCommands = DiscordBot_Molly.Commands.HelpCatalog.Categories.SelectMany(c => c.Commands.Select(x => x.Name)).Order().ToList();
+Check(registeredCommands.Count > 0 && registeredCommands.SequenceEqual(helpCommands), "도움말은 등록된 모든 슬래시 명령을 한 번씩만 분류해 보여준다");
+var helpFields = DiscordBot_Molly.Commands.HelpCatalog.Categories.Select(c => (c.Title, Value: DiscordBot_Molly.Commands.HelpCatalog.FormatCommands(c))).ToList();
+Check(helpFields.Count <= 25 && helpFields.All(f => f.Title.Length <= 256 && f.Value.Length <= 1024) && helpFields.Sum(f => f.Title.Length + f.Value.Length) < 5500,
+    "도움말 임베드는 Discord 필드 수·길이 제한 안에 들어간다");
 Check((int)MobiServer.몰리 == 8, "몰리 서버 ID는 공식 랭킹 선택값 8");
 // MobiRankBrowser.cs의 ExtractOverallRankFieldsAsync 안 JS 정규식과 동일한 패턴입니다.
 // 브라우저 DOM을 거치는 실제 파싱은 오프라인 테스트로 실행할 수 없어, 정규식만 별도로 고정합니다.

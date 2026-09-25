@@ -84,6 +84,9 @@ class Program
         };
         m_Client.Ready += async () =>
         {
+            // 멤버 목록의 봇 이름 아래에 도움말 명령을 표시합니다.
+            await m_Client.SetCustomStatusAsync("/도움말");
+
             // 개발 초기에는 길드 명령(즉시 반영). 운영은 글로벌 명령(전파 수분~1시간)
             // 환경변수/설정: Discord:GuildId (환경변수는 Discord__GuildId)
             var guildIdRaw = m_Config["Discord:GuildId"];
