@@ -236,7 +236,7 @@ internal static class HaeyeonMarketTests
             var restarted = new HaeyeonMarketStore(Path.Combine(directory, "database", "molly.sqlite"));
             await restarted.InitializeAsync();
             Assert(await restarted.GetLatestCollectedAtAsync() is not null && (await restarted.LoadCraftStatesAsync()).Count == 2,
-                "재시작 후에도 DB의 시세·상태가 남아 있어 즉시 수집하지 않음");
+                "재시작 후에도 DB의 시세·상태가 남아 있음");
 
             // 보관 기간이 지난 이력은 다음 저장 때 정리
             source.FailKeyword = null;
@@ -244,6 +244,16 @@ internal static class HaeyeonMarketTests
             source.Set(("해연의 숏소드ZZ", 3000), ("해연의 페리도트 링ZZ", 1000), ("백금강괴", 100), ("특급 목재", 100), ("포식의 마력석", 100), ("망령의 영혼석", 10));
             await monitor.CollectAsync(default);
             Assert(await store.CountHistoryAsync() == 6, "보관 기간(90일)이 지난 시간별 이력 삭제");
+
+            // 재시작: 같은 정각 구간 안이면 수집하지 않고, 마지막 수집 이후 정각이 지났으면 즉시 수집
+            var last = (await store.GetLatestCollectedAtAsync())!.Value;
+            source.Keywords.Clear();
+            await RunUntilScheduledAsync(recipes, source, store, sender, last);
+            Assert(source.Keywords.Count == 0 && await store.GetLatestCollectedAtAsync() == last, "재시작 시 직전 정각 이후 수집 기록이 있으면 즉시 수집하지 않음");
+            var missedAt = HaeyeonMarketMonitor.NextHourUtc(last).AddMinutes(3);
+            await RunUntilScheduledAsync(recipes, source, store, sender, missedAt);
+            Assert(source.Keywords.Count == HaeyeonMarketRules.SearchKeywords.Count && await store.GetLatestCollectedAtAsync() == missedAt,
+                "재시작 시 마지막 수집 이후 정각을 놓쳤으면 즉시 수집");
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
 
@@ -251,6 +261,13 @@ internal static class HaeyeonMarketTests
                HaeyeonMarketMonitor.NextHourUtc(new DateTimeOffset(2026, 9, 24, 11, 0, 0, TimeSpan.Zero)) == new DateTimeOffset(2026, 9, 24, 12, 0, 0, TimeSpan.Zero) &&
                HaeyeonMarketMonitor.NextHourUtc(new DateTimeOffset(2026, 9, 24, 23, 30, 0, TimeSpan.FromHours(9))) == new DateTimeOffset(2026, 9, 25, 0, 0, 0, TimeSpan.FromHours(9)),
             "다음 수집 시각은 항상 다음 정각(KST 기준으로도 정각)");
+        var noon = new DateTimeOffset(2026, 9, 25, 13, 0, 0, TimeSpan.FromHours(9));
+        Assert(HaeyeonMarketMonitor.NeedsCatchUp(null, noon) &&
+               HaeyeonMarketMonitor.NeedsCatchUp(noon.AddMinutes(-3), noon.AddMinutes(3)) &&
+               HaeyeonMarketMonitor.NeedsCatchUp(noon.AddMinutes(-3), noon) &&
+               !HaeyeonMarketMonitor.NeedsCatchUp(noon, noon.AddMinutes(3)) &&
+               !HaeyeonMarketMonitor.NeedsCatchUp(noon.AddMinutes(-3), noon.AddMinutes(-1)),
+            "시세가 없거나 마지막 수집이 가장 최근 정각보다 이전이면 시작 시 즉시 수집(12:57 수집 후 13:03 시작 → 수집)");
 
         var many = new HaeyeonEvaluation(
             Enumerable.Range(0, 80).Select(i => new PriceChangeAlert($"해연의 아주 긴 이름을 가진 테스트 장비 {i}ZZ", true, 10000, 12000)).ToArray(),
@@ -284,6 +301,16 @@ internal static class HaeyeonMarketTests
         using var noKey = new MobiLifeApiClient(new MobiLifeOptions(), handler, log: _ => { });
         var disabled = await new MobiLifeMarketPriceSource(noKey).SearchAsync("특급", default);
         Assert(!disabled.IsSuccess && disabled.FailureMessage!.Contains("꺼져") && requests.Count == 2, "키가 없으면 요청 없이 실패 안내");
+    }
+
+    // RunAsync의 시작 시 수집 판단까지만 실행하고, 다음 정각 대기에 들어가면 중단합니다.
+    private static async Task RunUntilScheduledAsync(IReadOnlyList<CraftingRecipe> recipes, IMarketPriceSource source,
+        HaeyeonMarketStore store, IHaeyeonAlertSender sender, DateTimeOffset now)
+    {
+        using var cts = new CancellationTokenSource();
+        var monitor = new HaeyeonMarketMonitor(_ => Task.FromResult(recipes), source, store, sender, () => now,
+            msg => { if (msg.StartsWith("다음 수집", StringComparison.Ordinal)) cts.Cancel(); });
+        await monitor.RunAsync(cts.Token);
     }
 
     private sealed class FakeSource : IMarketPriceSource

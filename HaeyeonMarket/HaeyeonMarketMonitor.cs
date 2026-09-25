@@ -52,14 +52,24 @@ public sealed class HaeyeonMarketMonitor
         return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero).AddHours(1);
     }
 
-    /// <summary>시작 시 DB에 시세가 없으면 즉시 수집하고, 이후 매 정각(KST·UTC 모두 정시)에 수집합니다.</summary>
+    /// <summary>
+    /// 시작 시 즉시 수집이 필요한지 판단합니다. 저장된 시세가 없거나, 마지막 수집이 가장 최근 정각보다 이전이면
+    /// (예: 13:03 시작, 마지막 수집 12:57 → 13:00 수집을 놓침) 즉시 수집합니다.
+    /// </summary>
+    public static bool NeedsCatchUp(DateTimeOffset? lastCollectedUtc, DateTimeOffset nowUtc) =>
+        lastCollectedUtc is null || lastCollectedUtc.Value < NextHourUtc(nowUtc).AddHours(-1);
+
+    /// <summary>시작 시 DB에 시세가 없거나 직전 정각 수집을 놓쳤으면 즉시 수집하고, 이후 매 정각(KST·UTC 모두 정시)에 수집합니다.</summary>
     public async Task RunAsync(CancellationToken ct)
     {
         try
         {
-            if (await Store.GetLatestCollectedAtAsync(ct).ConfigureAwait(false) is null)
+            var last = await Store.GetLatestCollectedAtAsync(ct).ConfigureAwait(false);
+            if (NeedsCatchUp(last, m_UtcNow()))
             {
-                m_Log("저장된 시세가 없어 즉시 수집합니다.");
+                m_Log(last is null
+                    ? "저장된 시세가 없어 즉시 수집합니다."
+                    : $"마지막 수집({TimeZoneInfo.ConvertTime(last.Value, MobiTime.timezone):yyyy-MM-dd HH:mm} KST) 이후 정각 수집을 놓쳐 즉시 수집합니다.");
                 await CollectAsync(ct).ConfigureAwait(false);
             }
             while (!ct.IsCancellationRequested)
