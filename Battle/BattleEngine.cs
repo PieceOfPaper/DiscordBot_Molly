@@ -213,7 +213,8 @@ public sealed class BattleEngine
             // 현재 악상 데이터는 바즈 테일이 세 곡 중 하나를 고르는 선택 표식이다.
             // 실제 보유 자원을 조건으로 쓰는 파생은 자원보유 형식으로 명시한다.
             "악상" when rule.ActivationMode == "무작위" => true,
-            "새로운영감" when rule.ActivationMode == "확률" => true,
+            // 애드리브의 "새로운 영감 획득 시 20%"는 영감 패시브가 설정하는 표식을 자원보유 조건으로 판정한다.
+            // 예전의 조건유형=새로운영감은 표식 없이 항상 참이라 모든 애드리브에 20%가 적용되었다(GitHub Issue #6).
             _ => false
         };
 
@@ -248,6 +249,9 @@ public sealed class BattleEngine
     /// <summary>패시브가 <see cref="BattleEffect.Trigger"/> 시점에 발동시키는 효과 하나를 실행한다. 스킬 효과와 동일한 <see cref="ApplyEffect"/> 처리기를 재사용한다.</summary>
     private static void FirePassiveTrigger(Fighter owner, Fighter opponent, string trigger, string? skillId, string? resourceId, IBattleRandom random, Rules rules, List<BattleEvent> events, double? ownerHpRatioBeforeHeal = null)
     {
+        // 조건유형=효과미발동은 이번 트리거 발동에서 조건ID의 효과가 실행되지 않았을 때만 참이다.
+        // 영감의 "우아 50% 실패 시 정열"처럼 현재 보유 자원과 무관하게 두 갈래 중 하나를 고르는 데 쓴다.
+        var applied = new HashSet<string>(StringComparer.Ordinal);
         foreach (var passive in owner.Passives)
         {
             if (owner.Hp <= 0) return;
@@ -259,9 +263,10 @@ public sealed class BattleEngine
                 if (owner.Hp <= 0 || opponent.Hp <= 0) return;
                 var receiver = effect.Target == "자신" ? owner : opponent;
                 if (effect.ReactivationCooldown > 0 && owner.PassiveCooldowns.GetValueOrDefault(effect.Id) > 0) continue;
-                if (!CanApplyEffect(owner, opponent, effect, ownerHpRatioBeforeHeal)) continue;
-                if (ApplyEffect(owner, opponent, receiver, effect, null, 1d, random, rules, events, new EffectResolution()) && effect.ReactivationCooldown > 0)
-                    owner.PassiveCooldowns[effect.Id] = effect.ReactivationCooldown;
+                if (effect.ConditionType == "효과미발동" ? effect.ConditionId is null || applied.Contains(effect.ConditionId) : !CanApplyEffect(owner, opponent, effect, ownerHpRatioBeforeHeal)) continue;
+                if (!ApplyEffect(owner, opponent, receiver, effect, null, 1d, random, rules, events, new EffectResolution())) continue;
+                applied.Add(effect.Id);
+                if (effect.ReactivationCooldown > 0) owner.PassiveCooldowns[effect.Id] = effect.ReactivationCooldown;
             }
         }
     }

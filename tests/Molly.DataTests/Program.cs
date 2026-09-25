@@ -937,6 +937,113 @@ var chanceHitBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1,
 Check(!chanceMissBattle.Events.Any(x => x.Type == "ResourceChanged") && chanceHitBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "확률 표식 +1 (현재 1)"),
     "자원설정 같은 비피해 효과도 발동확률을 판정한다");
 
+// 댄서 영감·앵콜·숙련된 댄스·피날레·애드리브 (GitHub Issue #6). 효과 행은 실제 배틀 시트의 행을 그대로 옮겼다.
+BattleEffect DancerEffect(string id, int order, string type, int fixedValue, double chance, int duration, string? statusId, string? trigger, string? triggerResourceId = null, string? conditionType = null, string? conditionId = null, string? numericReferenceId = null, string? numericReferenceMode = null)
+    => new(id, order, type, "자신", fixedValue, 1, chance, duration, statusId, 0, null, conditionType is null ? null : "자신", conditionType, conditionId, null, null, numericReferenceId, numericReferenceMode, Trigger: trigger, TriggerResourceId: triggerResourceId);
+var dancerPassives = new Dictionary<string, BattlePassive>
+{
+    ["inspiration"] = new("inspiration", true, [
+        DancerEffect("insp_01", 1, "자원설정", 1, .5, 0, "dance_grace", "전투시작"),
+        DancerEffect("insp_02", 2, "자원설정", 1, 1, 0, "dance_passion", "전투시작", conditionType: "분류자원미보유", conditionId: "태세"),
+        DancerEffect("insp_04", 4, "상태효과", 0, 1, 3, "dance_tempo_haste", "자원획득시", "tempo"),
+        DancerEffect("insp_05", 5, "주는피해증가", 0, 1, 3, "dance_tempo_power", "자원획득시", "tempo"),
+        DancerEffect("insp_07", 7, "자원설정", 1, .5, 0, "dance_grace", "자원획득시", "tempo"),
+        DancerEffect("insp_08", 8, "자원설정", 1, 1, 0, "dance_passion", "자원획득시", "tempo", "효과미발동", "insp_07"),
+        DancerEffect("insp_09", 9, "회복", 3676, 1, 0, null, "자원획득시", "tempo"),
+        DancerEffect("insp_10", 10, "자원설정", 1, 1, 0, "dance_new_inspiration", "자원획득시", "tempo")]),
+    ["encore"] = new("encore", true, [DancerEffect("enc_01", 1, "자원증가", 1, 1, 0, "dance_encore_ready", "자원최대치도달시", "tempo")]),
+    ["skilled_dance"] = new("skilled_dance", true, [DancerEffect("sd_01", 1, "자원설정", 1, 1, 0, "dance_harmony_ready", "자원최대치도달시", "tempo")])
+};
+Dictionary<string, BattleResource> DancerResources(int grace = 0, int newInspiration = 0, int harmonyReady = 0) => new()
+{
+    ["dance_grace"] = new("dance_grace", "우아", "태세", 1, grace, 0, "상호배타"),
+    ["dance_passion"] = new("dance_passion", "정열", "태세", 1, 0, 0, "상호배타"),
+    ["tempo"] = new("tempo", "템포", "중첩", 2, 0, 3, "가산"),
+    ["performance_heat"] = new("performance_heat", "공연의 열기", "중첩", 5, 0, 0, "가산"),
+    ["dance_encore_ready"] = new("dance_encore_ready", "앙콜 준비", "자원", 1, 0, 0, "교체"),
+    ["dance_harmony_ready"] = new("dance_harmony_ready", "화합 준비", "자원", 1, harmonyReady, 0, "교체"),
+    ["dance_new_inspiration"] = new("dance_new_inspiration", "새로운 영감", "자원", 1, newInspiration, 0, "교체")
+};
+var dancerStatuses = new Dictionary<string, BattleStatus> { ["dance_tempo_haste"] = new("dance_tempo_haste", "템포: 가속", "쿨다운감소", 1, ""), ["dance_tempo_power"] = new("dance_tempo_power", "템포: 위력", "주는피해증가", .2, "") };
+var tempoUpSkill = new BattleSkill("tempo_up", "템포 획득", "일반", null, true, 0, 0, 1, 1, [DancerEffect("tempo_up_eff", 1, "자원증가", 1, 1, 0, "tempo", null)]);
+var dancerFinale = new BattleSkill("finale", "피날레", "궁극기", null, true, 0, 0, 1, 1, [
+    DancerEffect("finale_01", 1, "자원설정", 5, 1, 0, "performance_heat", null),
+    DancerEffect("finale_02", 2, "자원설정", 2, 1, 0, "tempo", null, numericReferenceId: "tempo", numericReferenceMode: "최대값")]);
+BattleDataSnapshot DancerSnapshot(IReadOnlyList<string> skillIds, int maxActions, Dictionary<string, BattleResource>? resources = null)
+{
+    var rules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+    rules["max_major_actions"] = new("max_major_actions", "종료", "integer", maxActions.ToString(), "");
+    return new()
+    {
+        Rules = rules,
+        Classes = new Dictionary<string, BattleClass> { ["dancer"] = new("dancer", "댄서", skillIds, true, ["inspiration", "encore", "skilled_dance"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+        Skills = new Dictionary<string, BattleSkill> { ["tempo_up"] = tempoUpSkill, ["finale"] = dancerFinale },
+        Passives = dancerPassives,
+        Resources = resources ?? DancerResources(),
+        Statuses = dancerStatuses,
+        LoadedAt = DateTimeOffset.UtcNow
+    };
+}
+IReadOnlyList<string> DancerResourceLog(BattleResult result) => result.Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail ?? "").ToArray();
+
+// 1. 전투 시작 태세: 우아 50% 판정의 양끝에서 우아·정열에 각각 도달하고 둘이 동시에 생기지 않는다.
+var startGraceLog = DancerResourceLog(new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "dancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), DancerSnapshot(Array.Empty<string>(), 0), new FixedBattleRandom([0d])));
+var startPassionLog = DancerResourceLog(new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "dancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), DancerSnapshot(Array.Empty<string>(), 0), new FixedBattleRandom([.99d])));
+Check(startGraceLog.SequenceEqual(["우아 +1 (현재 1)"]) && startPassionLog.SequenceEqual(["정열 +1 (현재 1)"]),
+    "댄서 영감은 전투 시작에 우아 50% 판정 결과에 따라 우아 또는 정열 하나만 얻는다");
+
+// 템포 획득 때의 새로운 영감은 현재 태세와 무관하게 다시 50:50으로 정한다(이전에는 한 번 우아가 되면 정열로 돌아가지 못했다).
+// 난수 순서: 시작 우아 판정, 선공, 매력 돌발, 스킬 추첨, 새로운 영감 우아 판정
+var graceToPassionLog = DancerResourceLog(new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "dancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), DancerSnapshot(["tempo_up"], 1), new FixedBattleRandom([0d, 0d, .9d, .5d, .9d])));
+var passionToGraceLog = DancerResourceLog(new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "dancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), DancerSnapshot(["tempo_up"], 1), new FixedBattleRandom([.9d, 0d, .9d, .5d, 0d])));
+Check(graceToPassionLog.SequenceEqual(["우아 +1 (현재 1)", "템포 +1 (현재 1)", "우아 -1 (현재 0)", "정열 +1 (현재 1)", "새로운 영감 +1 (현재 1)"])
+    && passionToGraceLog.SequenceEqual(["정열 +1 (현재 1)", "템포 +1 (현재 1)", "정열 -1 (현재 0)", "우아 +1 (현재 1)", "새로운 영감 +1 (현재 1)"]),
+    "템포를 얻으면 새로운 영감으로 우아·정열을 50:50으로 다시 정하고 새로운 영감 표식을 남긴다");
+
+// 2. 피날레는 템포를 최대 중첩으로 만들어 템포 강화·새로운 영감·앵콜 준비·화합 준비를 모두 연결한다.
+var finaleTempoBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "dancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), DancerSnapshot(["finale"], 1), new FixedBattleRandom([.9d, 0d, .9d, .5d, .9d]));
+var finaleTempoLog = DancerResourceLog(finaleTempoBattle);
+Check(finaleTempoLog.Contains("공연의 열기 +5 (현재 5)") && finaleTempoLog.Contains("템포 +2 (현재 2)") && finaleTempoLog.Contains("앙콜 준비 +1 (현재 1)") && finaleTempoLog.Contains("화합 준비 +1 (현재 1)") && finaleTempoLog.Contains("새로운 영감 +1 (현재 1)")
+    && finaleTempoBattle.Events.Any(x => x.Type == "StatusApplied" && x.Actor == "A" && x.Detail == "템포: 위력"),
+    "피날레는 템포를 최대 중첩으로 얻어 템포 강화·새로운 영감·앵콜 준비·화합 준비로 이어진다");
+
+// 3. 애드리브 화합 20%는 새로운 영감 표식이 있을 때만 판정하고, 숙련된 댄스의 확정 화합이 먼저 판정된다.
+BattleSkill AdLibChild(string id, string name, params BattleEffect[] effects) => new(id, name, "파생", "ad_lib", true, 0, 0, 0, 1, effects);
+BattleEffect ConsumeNewInspiration(string id, int order) => DancerEffect(id, order, "자원소모", 0, 1, 0, "dance_new_inspiration", null, numericReferenceMode: "전부");
+var adLibSkills = new Dictionary<string, BattleSkill>
+{
+    ["ad_lib"] = new("ad_lib", "애드리브", "일반", null, true, 0, 0, 1, 1, []),
+    ["ad_lib_grace"] = AdLibChild("ad_lib_grace", "애드리브: 우아", ConsumeNewInspiration("ad_lib_grace_03", 3)),
+    ["ad_lib_passion"] = AdLibChild("ad_lib_passion", "애드리브: 정열", ConsumeNewInspiration("ad_lib_passion_03", 3)),
+    ["ad_lib_harmony"] = AdLibChild("ad_lib_harmony", "애드리브: 화합", DancerEffect("ad_lib_harmony_03", 3, "자원소모", 0, 1, 0, "dance_harmony_ready", null, numericReferenceMode: "전부"), ConsumeNewInspiration("ad_lib_harmony_04", 4))
+};
+BattleDerivation[] adLibDerivations =
+[
+    new("ad_lib_harmony", "ad_lib", "ad_lib_harmony", "확률", 0, .2, "자원보유", "dance_new_inspiration=1", false, "즉시", 200),
+    new("ad_lib_grace", "ad_lib", "ad_lib_grace", "조건", 0, 1, "자원보유", "dance_grace=1", false, "즉시", 100),
+    new("ad_lib_passion", "ad_lib", "ad_lib_passion", "조건", 0, 1, "자원보유", "dance_passion=1", false, "즉시", 100),
+    new("ad_lib_harmony_guaranteed", "ad_lib", "ad_lib_harmony", "조건", 0, 1, "자원보유", "dance_harmony_ready=1", false, "즉시", 300)
+];
+// 난수 순서: 선공, 매력 돌발, 스킬 추첨, (표식이 있을 때만) 화합 20% 판정
+BattleResult AdLibBattle(int newInspiration, int harmonyReady, double harmonyRoll) => new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "adlib", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), new BattleDataSnapshot
+{
+    Rules = oneActionRules,
+    Classes = new Dictionary<string, BattleClass> { ["adlib"] = new("adlib", "애드리브", ["ad_lib"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+    Skills = adLibSkills,
+    Resources = DancerResources(grace: 1, newInspiration: newInspiration, harmonyReady: harmonyReady),
+    Derivations = adLibDerivations,
+    LoadedAt = DateTimeOffset.UtcNow
+}, new FixedBattleRandom([0d, .9d, .5d, harmonyRoll]));
+string? AdLibChosen(BattleResult result) => result.Events.FirstOrDefault(x => x.Type == "DerivedSkillUsed" && x.Actor == "A")?.Detail;
+var adLibNoInspiration = AdLibBattle(0, 0, 0d);
+var adLibInspirationHit = AdLibBattle(1, 0, .1d);
+var adLibInspirationMiss = AdLibBattle(1, 0, .5d);
+var adLibGuaranteed = AdLibBattle(1, 1, .9d);
+Check(AdLibChosen(adLibNoInspiration) == "애드리브: 우아" && AdLibChosen(adLibInspirationHit) == "애드리브: 화합" && AdLibChosen(adLibInspirationMiss) == "애드리브: 우아" && AdLibChosen(adLibGuaranteed) == "애드리브: 화합",
+    "애드리브 화합 20%는 새로운 영감 표식이 있을 때만 판정하고, 화합 준비 표식은 확정 화합으로 먼저 판정한다");
+Check(DancerResourceLog(adLibInspirationHit).Contains("새로운 영감 -1 (현재 0)") && DancerResourceLog(adLibInspirationMiss).Contains("새로운 영감 -1 (현재 0)") && DancerResourceLog(adLibGuaranteed).SequenceEqual(["화합 준비 -1 (현재 0)", "새로운 영감 -1 (현재 0)"]),
+    "새로운 영감 표식은 화합 여부와 관계없이 다음 애드리브 한 번에 소모된다");
+
 // 중첩자원ID가 있는 상태는 그 자원의 보유량만큼 값이 곱해진다(날카로운 눈·드라이빙 포스·퀵 어택).
 var stackStatus = new Dictionary<string, BattleStatus> { ["stack_power"] = new("stack_power", "중첩 위력", "주는피해증가", .5, "중첩당 +50%", StackResourceId: "power_stack") };
 var stackSkill = new BattleSkill("stack_strike", "중첩 타격", "일반", null, true, 0, 0, 1, 1, [

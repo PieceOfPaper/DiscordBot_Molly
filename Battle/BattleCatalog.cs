@@ -201,7 +201,15 @@ public sealed class BattleCatalog
             if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
             if (effect.NumericReferenceId is { } referenceId && !resourceMap.ContainsKey(referenceId)) throw new InvalidDataException($"{sheet} '{effect.Id}'의 수치 참조 자원이 올바르지 않습니다.");
         }
-        foreach (var effect in effectMap.Values.SelectMany(x => x)) ValidateEffect(effect, "배틀스킬효과");
+        foreach (var effect in effectMap.Values.SelectMany(x => x))
+        {
+            ValidateEffect(effect, "배틀스킬효과");
+            if (effect.ConditionType == "효과미발동") throw new InvalidDataException($"배틀스킬효과 '{effect.Id}'의 효과미발동 조건은 배틀패시브효과에서만 쓸 수 있습니다.");
+        }
+        foreach (var group in passiveEffectMap.Values)
+            foreach (var effect in group.Where(x => x.ConditionType == "효과미발동"))
+                if (!group.Any(x => x.Id == effect.ConditionId && x.Order < effect.Order && x.Trigger == effect.Trigger))
+                    throw new InvalidDataException($"배틀패시브효과 '{effect.Id}'의 효과미발동 조건ID는 같은 패시브·발동시점에서 먼저 실행되는 효과 ID여야 합니다.");
         foreach (var effect in passiveEffectMap.Values.SelectMany(x => x))
         {
             ValidateEffect(effect, "배틀패시브효과");
@@ -212,6 +220,8 @@ public sealed class BattleCatalog
         if (passiveEffectMap.Keys.Any(id => !passiveMap.ContainsKey(id))) throw new InvalidDataException("배틀패시브효과 시트가 존재하지 않는 배틀패시브 ID를 참조합니다.");
         var derivationList = Unique(derivations, "배틀스킬파생").Select((x, i) => new BattleDerivation(x["ID"], x["부모스킬ID"], x["파생스킬ID"], x["발동방식"], BattleCsv.Double(x["가중치"], "배틀스킬파생", i + 2, "가중치"), BattleCsv.Double(x["발동확률"], "배틀스킬파생", i + 2, "발동확률", 0, 1), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건값"]), string.IsNullOrWhiteSpace(x["중복허용"]) ? false : BattleCsv.Bool(x["중복허용"], "배틀스킬파생", i + 2, "중복허용"), x["실행시점"], string.IsNullOrWhiteSpace(x["우선순위"]) ? 0 : BattleCsv.Int(x["우선순위"], "배틀스킬파생", i + 2, "우선순위"))).ToArray();
         if (derivationList.Any(x => !skillMap.ContainsKey(x.ParentSkillId) || !skillMap.ContainsKey(x.ChildSkillId))) throw new InvalidDataException("배틀스킬파생 시트가 존재하지 않는 배틀 스킬 ID를 참조합니다.");
+        // 엔진이 모르는 조건유형은 항상 거짓으로 판정되어 파생이 조용히 사라지므로 로딩 단계에서 거부한다.
+        if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
         return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LoadedAt = loadedAt };
     }
 
