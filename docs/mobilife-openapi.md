@@ -111,4 +111,21 @@ dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuratio
 | `GET equipment/schema/1.0`, `equipment/example/1.0` | 장비 표준 데이터 스키마·예제(인증 불필요) |
 | `POST equipment/validate` | 장비 문서 형식 검증(최대 1 MiB). 저장하지 않음 |
 
+### 거래소 대분류(`parent_category`) 값
+
+`market/categories` 응답과 `market/prices` 응답의 `parent_category`, `market/prices`의 `parent_category` 조회 조건에는 아래 한글 문자열을 그대로 쓴다. 영문 코드값은 없다.
+
+| 값 | 아이템 수(2026-09-25 확인) |
+| --- | --- |
+| `데코` | 978 |
+| `도구` | 16 |
+| `무기` | 43 |
+| `방어구` | 30 |
+| `아이템` | 238 |
+| `장신구` | 4 |
+
+- 2026-09-25에 `market/categories`를 한 번 호출해 확인한 값이다. 아이템 수는 계속 바뀌므로 참고만 한다.
+- 대분류가 추가·변경될 수 있다. 목록 전체가 필요한 기능(선택지·자동완성 등)은 이 표를 코드에 고정하지 말고 `market/categories`를 캐시해 쓴다. 특정 분류만 쓰는 기능은 상수로 둬도 되지만, 결과가 0건이면 분류 이름이 바뀌었을 가능성을 로그에 남긴다.
+- 값이 바뀐 것 같으면 `market/categories`로 현재 목록을 확인하고 이 표를 갱신한다.
+
 세부 필드는 API 문서를 직접 확인한다. 월드 채팅은 다른 사용자의 발언이므로 공개 채널에 옮길 때 개인정보·비공개 내용 노출을 따로 검토한다.
