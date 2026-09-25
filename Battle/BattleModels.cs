@@ -13,6 +13,8 @@ public sealed class BattleDataSnapshot
     public IReadOnlyDictionary<string, BattleResource> Resources { get; init; } = new ReadOnlyDictionary<string, BattleResource>(new Dictionary<string, BattleResource>());
     public IReadOnlyDictionary<string, BattleStatus> Statuses { get; init; } = new ReadOnlyDictionary<string, BattleStatus>(new Dictionary<string, BattleStatus>());
     public IReadOnlyList<BattleDerivation> Derivations { get; init; } = Array.Empty<BattleDerivation>();
+    /// <summary>생활력으로 드물게 주요 행동을 대신하는 배틀생활스킬. 비어 있으면 생활스킬 판정을 하지 않고 난수도 소비하지 않는다.</summary>
+    public IReadOnlyList<BattleLifeSkill> LifeSkills { get; init; } = Array.Empty<BattleLifeSkill>();
     public DateTimeOffset LoadedAt { get; init; }
     public bool IsUsable => Rules.Count > 0 && Classes.Count > 0 && Skills.Count > 0;
     private IReadOnlySet<string>? battleReadyClassIds;
@@ -68,6 +70,26 @@ public sealed record BattleStatus(string Id, string Name, string EffectType, dou
 }
 public sealed record BattleDerivation(string Id, string ParentSkillId, string ChildSkillId, string ActivationMode,
     double Weight, double Chance, string? ConditionType, string? ConditionValue, bool AllowDuplicate, string Timing, int Priority);
+
+/// <summary><c>배틀생활스킬</c> 한 행. 이름은 <c>생활스킬</c> 시트의 원본 이름과 같다.</summary>
+public sealed record BattleLifeSkill(string Id, string Name, bool Enabled,
+    double BaseChance, double LifeReference, double LifeChanceCoefficient, double MaxChance, int MaxUses, double Weight,
+    string ConditionTarget, string ConditionType, string ConditionOperator, double ConditionValue,
+    string ActionMessage, IReadOnlyList<BattleLifeSkillEffect> Effects)
+{
+    /// <summary>행동당 사용 확률. 생활력 보정은 기준값의 2배에서 멈춘다.</summary>
+    public double UseChance(int lifePower)
+        => Math.Clamp(BaseChance + Math.Clamp(Math.Max(0, lifePower) / LifeReference, 0d, 2d) * LifeChanceCoefficient, 0d, MaxChance);
+}
+
+/// <summary><c>배틀생활스킬효과</c> 한 행. <see cref="SelectionGroup"/>이 같은 행은 가중치로 하나만 실행한다.</summary>
+public sealed record BattleLifeSkillEffect(string Id, string LifeSkillId, int Order, string Type, string Target,
+    string Basis, double Coefficient, int FixedValue, bool LifeScaled, double LifeReference, double MinMultiplier, double MaxMultiplier,
+    int Count, int Duration, string? Message, string? SelectionGroup, double SelectionWeight)
+{
+    public double LifeMultiplier(int lifePower)
+        => LifeScaled ? Math.Clamp(Math.Sqrt(Math.Max(0, lifePower) / LifeReference), MinMultiplier, MaxMultiplier) : 1d;
+}
 
 public sealed record CharacterBattleSnapshot(ulong DiscordUserId, string CharacterName, string ClassId,
     int CombatPower, int LifePower, int CharmPower);

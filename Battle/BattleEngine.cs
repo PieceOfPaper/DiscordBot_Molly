@@ -42,8 +42,17 @@ public sealed class BattleEngine
             var surpriseMultiplier = TrySurprise(actor, random, rules, ref surpriseCooldown, events);
             var actorHealed = false;
             var targetDamaged = false;
-            var skill = actor.TakePendingSkill(data) ?? ChooseSkill(actor, data, random);
-            if (skill is null)
+            // 예약된 다음 행동(파생)은 생활스킬보다 우선한다. 생활스킬은 일반 공격·클래스 스킬 대신 주요 행동을 소비한다.
+            var pendingSkill = actor.TakePendingSkill(data);
+            var lifeSkill = pendingSkill is null ? ChooseLifeSkill(actor, target, data, random, rules) : null;
+            var skill = lifeSkill is not null ? null : pendingSkill ?? ChooseSkill(actor, data, random);
+            if (lifeSkill is not null)
+            {
+                var resolved = ExecuteLifeSkill(actor, target, lifeSkill, surpriseMultiplier, random, rules, events);
+                targetDamaged = resolved.TargetDamaged;
+                actorHealed = resolved.ActorHealed;
+            }
+            else if (skill is null)
             {
                 events.Add(new("NormalAttackUsed", actor.Name, target.Name));
                 var normalAttackMultiplier = rules.NormalAttackMultiplier * (1d + actor.StatusValue("기본공격피해증가"));
@@ -91,7 +100,11 @@ public sealed class BattleEngine
                 targetDamaged = resolved.TargetDamaged;
                 actorHealed = resolved.ActorHealed;
                 if (derivedSkills.Length == 0) FireSkillCompleted(actor, target, performedSkillId, resolved.TargetDamaged, random, rules, events);
+                // 대장 기술·목공·요리의 "다음 전투 스킬" 강화는 파생까지 포함한 이번 스킬 행동이 끝나면 소모한다.
+                actor.ConsumeStatuses("다음스킬소모", events);
             }
+            // 양털 깎기의 "다음 1회 받는 피해 감소"는 다단 공격의 모든 타격에 적용한 뒤, 피해를 받은 이 행동이 끝나면 소모한다.
+            if (targetDamaged && target.Hp > 0) target.ConsumeStatuses("피격소모", events);
             if (targetDamaged && target.Hp > 0) events.Add(new("HpStatus", target.Name, Detail: HpStatus(target)));
             if (actorHealed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
             if (actor.Hp > 0 && target.Hp > 0) EndTurn(actor, target, data, random, rules, events);
@@ -151,19 +164,180 @@ public sealed class BattleEngine
     private static double TrySurprise(Fighter actor, IBattleRandom random, Rules rules, ref int cooldown, List<BattleEvent> events)
     {
         if (cooldown > 0 || actor.SurpriseCount >= rules.MaxSurpriseEvents) return 1d;
-        // 생활력과 매력은 서로 비교하지 않는다. 각각 자신만의 기준값·보정계수·상한으로 판정한다.
-        if ((double)actor.Hp / actor.MaxHp <= rules.LifeSurpriseHpRatioThreshold && random.NextDouble() < rules.LifeSurpriseChance(actor.LifePower))
-        {
-            actor.SurpriseCount++; cooldown = rules.SurpriseCooldown;
-            var healed = Math.Min(actor.MaxHp - actor.Hp, (int)Math.Round(actor.MaxHp * rules.LifeSurpriseHealRatio)); actor.Hp += healed;
-            events.Add(new("SurpriseEventTriggered", actor.Name, Detail: "야전 응급처치")); events.Add(new("HealApplied", actor.Name, actor.Name, healed)); events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
-            return 1d;
-        }
+        // 생활력은 돌발 이벤트가 아니라 배틀생활스킬에만 쓴다(기획서 7.2.3). 돌발 이벤트는 매력만 판정한다.
         if (random.NextDouble() >= rules.CharmSurpriseChance(actor.CharmPower)) return 1d;
         actor.SurpriseCount++; cooldown = rules.SurpriseCooldown;
         events.Add(new("SurpriseEventTriggered", actor.Name, Detail: "관중의 환호"));
         return rules.CharmSurpriseDamageMultiplier;
     }
+    /// <summary>
+    /// 행동 시작에 배틀생활스킬 사용 여부를 판정한다(기획서 7.2.1). 효과가 있는 후보가 없으면 난수를 소비하지 않는다.
+    /// 사용 판정 값은 로딩 단계에서 모든 행이 같음을 검증했으므로 첫 후보의 값을 쓴다.
+    /// </summary>
+    private static BattleLifeSkill? ChooseLifeSkill(Fighter actor, Fighter target, BattleDataSnapshot data, IBattleRandom random, Rules rules)
+    {
+        if (data.LifeSkills.Count == 0 || actor.LifeSkillUses >= rules.LifeSkillMaxUsesPerActor) return null;
+        var candidates = data.LifeSkills.Where(x => x.Enabled && actor.LifeSkillCounts.GetValueOrDefault(x.Id) < x.MaxUses && IsLifeSkillUseful(actor, target, x)).ToArray();
+        if (candidates.Length == 0 || random.NextDouble() >= candidates[0].UseChance(actor.LifePower)) return null;
+        var point = random.NextDouble() * candidates.Sum(x => x.Weight);
+        foreach (var candidate in candidates) { point -= candidate.Weight; if (point <= 0) return candidate; }
+        return candidates[^1];
+    }
+
+    private static bool IsLifeSkillUseful(Fighter actor, Fighter target, BattleLifeSkill skill)
+    {
+        var owner = skill.ConditionTarget == "상대" ? target : actor;
+        double actual = skill.ConditionType switch
+        {
+            "생존" => owner.Hp > 0 ? 1 : 0,
+            "HP비율" => (double)owner.Hp / owner.MaxHp,
+            "해로운상태개수" => owner.HarmfulStatusCount,
+            "재사용대기중스킬개수" => owner.Cooldowns.Values.Count(x => x > 0),
+            _ => throw new InvalidDataException($"배틀생활스킬 '{skill.Id}'의 조건유형 '{skill.ConditionType}'을(를) 지원하지 않습니다.")
+        };
+        return Compare(actual, skill.ConditionOperator, skill.ConditionValue);
+    }
+
+    private static EffectResolution ExecuteLifeSkill(Fighter actor, Fighter target, BattleLifeSkill skill, double surpriseMultiplier, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        actor.LifeSkillUses++;
+        actor.LifeSkillCounts[skill.Id] = actor.LifeSkillCounts.GetValueOrDefault(skill.Id) + 1;
+        events.Add(new("LifeSkillUsed", actor.Name, target.Name, Detail: skill.Name));
+        events.Add(new("LifeSkillNarration", actor.Name, target.Name, Detail: RenderLifeText(skill.ActionMessage, actor.Name, target.Name)));
+        // 낚시·일상 채집처럼 선택그룹이 같은 행은 가중치로 하나만 실행한다.
+        var chosen = new Dictionary<string, BattleLifeSkillEffect>(StringComparer.Ordinal);
+        foreach (var group in skill.Effects.Where(x => x.SelectionGroup is not null).GroupBy(x => x.SelectionGroup!, StringComparer.Ordinal))
+        {
+            var options = group.ToArray();
+            var point = random.NextDouble() * options.Sum(x => x.SelectionWeight);
+            chosen[group.Key] = options.FirstOrDefault(x => (point -= x.SelectionWeight) <= 0) ?? options[^1];
+        }
+        var resolution = new EffectResolution();
+        foreach (var effect in skill.Effects)
+        {
+            if (actor.Hp <= 0 || target.Hp <= 0) break;
+            if (effect.SelectionGroup is { } group && !ReferenceEquals(chosen[group], effect)) continue;
+            ApplyLifeEffect(actor, target, skill, effect, surpriseMultiplier, random, rules, events, resolution);
+        }
+        return resolution;
+    }
+
+    /// <summary>생활스킬 상태 효과유형을 엔진의 상태 효과 종류로 바꾼다. 소모 표식(피격소모·다음스킬소모)이 1회성 효과를 표현한다.</summary>
+    private static readonly Dictionary<string, string> LifeStatusTypes = new(StringComparer.Ordinal)
+    {
+        ["받는피해감소"] = "받는피해감소", ["주는피해증가"] = "주는피해증가", ["브레이크면역"] = "브레이크면역",
+        ["다음피해감소"] = "받는피해감소|피격소모", ["다음행동피해감소"] = "주는피해감소", ["회피확률증가"] = "회피확률",
+        ["다음스킬피해증가"] = "다음스킬피해증가|다음스킬소모", ["다음스킬치명타확률증가"] = "다음스킬치명타확률증가|다음스킬소모", ["다음스킬치명타피해증가"] = "다음스킬치명타피해증가|다음스킬소모"
+    };
+    // 감소·회피·약화 비율은 생활력 배율을 곱한 뒤 life_skill_ratio_cap으로 제한한다(강화 효과는 제한하지 않는다).
+    private static readonly HashSet<string> CappedLifeRatioTypes = new(["받는피해감소", "다음피해감소", "다음행동피해감소", "회피확률증가"], StringComparer.Ordinal);
+    // 다음 전투 스킬 강화는 지속턴으로 만료하지 않고 다음 스킬 행동에 소모될 때까지 유지한다.
+    private const int UntilConsumed = int.MaxValue / 4;
+
+    private static void ApplyLifeEffect(Fighter actor, Fighter target, BattleLifeSkill skill, BattleLifeSkillEffect effect, double surpriseMultiplier, IBattleRandom random, Rules rules, List<BattleEvent> events, EffectResolution resolution)
+    {
+        var receiver = effect.Target == "자신" ? actor : target;
+        var other = ReferenceEquals(receiver, actor) ? target : actor;
+        var multiplier = effect.LifeMultiplier(actor.LifePower);
+        var detail = new List<BattleEvent>();
+        switch (effect.Type)
+        {
+            case "피해":
+            {
+                // 클래스 스킬과 같은 공격력 × 계수 기준이며 다단은 총 계수를 횟수로 나눈다. 생활스킬은 클래스 스킬이 아니므로 sourceSkill 없이 공격한다.
+                var perHit = actor.Attack * effect.Coefficient * multiplier * surpriseMultiplier / effect.Count;
+                for (var hit = 0; hit < effect.Count && receiver.Hp > 0; hit++)
+                    resolution.TargetDamaged |= Attack(actor, receiver, perHit, 1, random, rules, detail);
+                // 이 행이 직접 준 피해·치명타는 효과문구 한 줄로 합친다. 추가타·반응 패시브·쓰러짐 로그는 그대로 남긴다.
+                var hits = detail.Where(x => x.Type == "DamageDealt" && x.Actor == actor.Name && x.Target == receiver.Name).ToArray();
+                if (effect.Message is null || hits.Length == 0) { events.AddRange(detail); return; }
+                var critical = detail.Any(x => x.Type == "CriticalHit" && x.Actor == actor.Name);
+                detail.RemoveAll(x => hits.Contains(x) || x.Type == "CriticalHit" && x.Actor == actor.Name);
+                if (critical) events.Add(new("CriticalHit", actor.Name, receiver.Name));
+                events.Add(new("LifeSkillEffect", actor.Name, receiver.Name, hits.Sum(x => x.Amount ?? 0), RenderLifeText(effect.Message, actor.Name, receiver.Name, damage: hits.Sum(x => x.Amount ?? 0))));
+                events.AddRange(detail);
+                return;
+            }
+            case "회복":
+            {
+                var hpRatioBeforeHeal = (double)receiver.Hp / receiver.MaxHp;
+                var amount = Math.Max(1, (int)Math.Round(receiver.MaxHp * effect.Coefficient * multiplier * (1d + actor.StatusValue("회복량증가"))));
+                var healed = Math.Min(amount, receiver.MaxHp - receiver.Hp);
+                if (healed <= 0) return;
+                receiver.Hp += healed;
+                resolution.ActorHealed |= ReferenceEquals(receiver, actor);
+                events.Add(effect.Message is null
+                    ? new BattleEvent("HealApplied", actor.Name, receiver.Name, healed)
+                    : new BattleEvent("LifeSkillEffect", actor.Name, receiver.Name, healed, RenderLifeText(effect.Message, actor.Name, receiver.Name, heal: healed)));
+                FirePassiveTrigger(receiver, other, "회복적용시", null, null, random, rules, events, hpRatioBeforeHeal);
+                return;
+            }
+            case "지속회복":
+            {
+                var id = "life:" + effect.Id;
+                var perTurn = receiver.MaxHp * effect.Coefficient * multiplier * (1d + actor.StatusValue("회복량증가"));
+                receiver.StatusDefinitions[id] = new BattleStatus(id, skill.Name, "지속회복", 0, "배틀생활스킬 " + skill.Name);
+                receiver.ApplyStatus(id, effect.Duration, "life", detail, harmful: !ReferenceEquals(receiver, actor), announce: false);
+                receiver.ApplyPeriodicEffect(id, actor.Name, perTurn, skill.Name, heal: true);
+                AddLifeMessage(events, effect, actor, receiver, heal: (int)Math.Round(perTurn));
+                events.AddRange(detail);
+                return;
+            }
+            case "브레이크피해":
+                AddLifeMessage(events, effect, actor, receiver);
+                ApplyBreakDamage(actor, receiver, effect.FixedValue, random, rules, events);
+                return;
+            case "쿨다운감소":
+                receiver.ReduceCooldowns(effect.FixedValue, detail);
+                if (detail.Count == 0) return;
+                if (effect.Message is null) events.AddRange(detail); else AddLifeMessage(events, effect, actor, receiver);
+                return;
+            case "해로운상태제거":
+                if (receiver.RemoveHarmfulStatuses(effect.FixedValue, random, detail) == 0) return;
+                AddLifeMessage(events, effect, actor, receiver);
+                events.AddRange(detail);
+                return;
+            default:
+            {
+                if (!LifeStatusTypes.TryGetValue(effect.Type, out var statusTypes)) throw new InvalidDataException($"배틀생활스킬효과 '{effect.Id}'의 효과유형 '{effect.Type}'을(를) 지원하지 않습니다.");
+                var value = effect.Coefficient * multiplier;
+                if (CappedLifeRatioTypes.Contains(effect.Type)) value = Math.Min(value, rules.LifeSkillRatioCap);
+                var id = "life:" + effect.Id;
+                receiver.StatusDefinitions[id] = new BattleStatus(id, skill.Name, statusTypes, value, "배틀생활스킬 " + skill.Name);
+                var duration = statusTypes.Contains("다음스킬소모", StringComparison.Ordinal) ? UntilConsumed : effect.Duration;
+                receiver.ApplyStatus(id, duration, "life", detail, harmful: !ReferenceEquals(receiver, actor), announce: effect.Message is null);
+                AddLifeMessage(events, effect, actor, receiver, value: (int)Math.Round(value * 100));
+                events.AddRange(detail);
+                return;
+            }
+        }
+    }
+
+    private static void AddLifeMessage(List<BattleEvent> events, BattleLifeSkillEffect effect, Fighter actor, Fighter receiver, int? heal = null, int? value = null)
+    {
+        if (effect.Message is { } message) events.Add(new("LifeSkillEffect", actor.Name, receiver.Name, Detail: RenderLifeText(message, actor.Name, receiver.Name, heal: heal, value: value)));
+    }
+
+    /// <summary>시트 문구의 {caster}·{target}·{damage}·{heal}·{value}를 채운다. 이름 뒤 조사는 받침에 맞춰 고른다(종잇장이, ZEL이(가)).</summary>
+    public static string RenderLifeText(string template, string caster, string target, int? damage = null, int? heal = null, int? value = null)
+    {
+        var text = System.Text.RegularExpressions.Regex.Replace(template, "\\{(caster|target)\\}(이|가|을|를|은|는|과|와)?", match =>
+        {
+            var name = match.Groups[1].Value == "caster" ? caster : target;
+            return name + Josa(name, match.Groups[2].Value);
+        });
+        return text.Replace("{damage}", damage?.ToString("N0") ?? "").Replace("{heal}", heal?.ToString("N0") ?? "").Replace("{value}", value?.ToString() ?? "");
+    }
+
+    private static string Josa(string word, string particle)
+    {
+        if (particle.Length == 0) return "";
+        var (withFinal, withoutFinal) = particle switch { "이" or "가" => ("이", "가"), "을" or "를" => ("을", "를"), "은" or "는" => ("은", "는"), _ => ("과", "와") };
+        var last = word.Length == 0 ? ' ' : word[^1];
+        if (last is < '가' or > '힣') return withFinal + "(" + withoutFinal + ")";
+        return (last - '가') % 28 != 0 ? withFinal : withoutFinal;
+    }
+
     private static BattleSkill? ChooseSkill(Fighter actor, BattleDataSnapshot data, IBattleRandom random)
     {
         var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && (actor.Cooldowns.GetValueOrDefault(x.Id) == 0 || ResolveReuse(actor, x, data) is not null) && x.Weight > 0 && CanPaySkillResource(actor, x, data) && (x.Effects.Count > 0 || HasImmediateDerivation(actor, x, data))).Cast<BattleSkill>().ToArray();
@@ -308,7 +482,7 @@ public sealed class BattleEngine
                 }
                 break;
             case "지속피해" when effect.StatusId is { } periodicStatusId && effect.Duration > 0:
-                receiver.ApplyStatus(periodicStatusId, effect.Duration, skill?.Id ?? "passive", events);
+                receiver.ApplyStatus(periodicStatusId, effect.Duration, skill?.Id ?? "passive", events, harmful: !ReferenceEquals(receiver, actor));
                 // 고정값이 있으면 보유자 턴마다 들어가는 1회 피해량(원본 수치)이다. 없으면 공격력 배율 총량을 횟수(총 타격 수)로 나눈다.
                 receiver.ApplyPeriodicEffect(periodicStatusId, actor.Name,
                     effect.FixedValue > 0 ? effect.FixedValue * rules.FixedDamageScale : actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier / Math.Max(1, effect.Count),
@@ -317,7 +491,7 @@ public sealed class BattleEngine
             case "지속회복" when effect.StatusId is { } regenStatusId && effect.Duration > 0 && effect.FixedValue > 0:
                 // 고양·활력처럼 보유자 턴마다 고정량을 회복한다. 회복량 증가는 부여 시점의 시전자 기준으로 고정한다.
                 // 지속회복의 틱은 회복적용시 트리거를 발생시키지 않는다(활력이 자기 회복으로 다시 발동하는 것을 막는다).
-                receiver.ApplyStatus(regenStatusId, effect.Duration, skill?.Id ?? "passive", events);
+                receiver.ApplyStatus(regenStatusId, effect.Duration, skill?.Id ?? "passive", events, harmful: !ReferenceEquals(receiver, actor));
                 receiver.ApplyPeriodicEffect(regenStatusId, actor.Name, effect.FixedValue * rules.FixedDamageScale * (1d + actor.StatusValue("회복량증가")), effect.Message ?? regenStatusId, heal: true);
                 break;
             case "조건부피해증가":
@@ -394,7 +568,7 @@ public sealed class BattleEngine
                 if (effect.StatusId is { } statusId && (effect.Duration > 0 || effect.Trigger == "전투시작"))
                 {
                     if (effect.Trigger == "전투시작") receiver.ApplyPermanentStatus(statusId, events);
-                    else receiver.ApplyStatus(statusId, effect.Duration, skill?.Id ?? "passive", events);
+                    else receiver.ApplyStatus(statusId, effect.Duration, skill?.Id ?? "passive", events, harmful: !ReferenceEquals(receiver, actor));
                 }
                 break;
         }
@@ -424,8 +598,11 @@ public sealed class BattleEngine
     private static bool CompareRatio(double actual, string? op, string? value)
     {
         if (value is null || !double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var expected)) return false;
-        return op switch { "=" or "==" => actual == expected, ">" => actual > expected, ">=" => actual >= expected, "<" => actual < expected, "<=" => actual <= expected, _ => false };
+        return Compare(actual, op, expected);
     }
+
+    private static bool Compare(double actual, string? op, double expected)
+        => op switch { "=" or "==" => actual == expected, ">" => actual > expected, ">=" => actual >= expected, "<" => actual < expected, "<=" => actual <= expected, _ => false };
 
     private static int ResolveFixedAmount(Fighter fighter, BattleEffect effect)
     {
@@ -458,7 +635,7 @@ public sealed class BattleEngine
         events.Add(new("BreakGaugeChanged", actor.Name, target.Name, target.BreakGauge, rules.BreakGaugeMaximum.ToString()));
         if (target.BreakGauge < rules.BreakGaugeMaximum) return;
         target.BreakGauge = 0;
-        target.ApplyStatus("break_broken", rules.BreakDuration, "break", events);
+        target.ApplyStatus("break_broken", rules.BreakDuration, "break", events, harmful: true);
         events.Add(new("BreakActivated", actor.Name, target.Name));
         // 자신 또는 상대가 브레이크되었을 때 반응하는 패시브를 양쪽 관점에서 모두 검사한다.
         FirePassiveTrigger(target, actor, "브레이크발생시", null, null, random, rules, events);
@@ -537,22 +714,32 @@ public sealed class BattleEngine
             events.Add(new("AttackEvaded", actor.Name, target.Name));
             return false;
         }
+        // 경갑 제작의 회피 확률. 값이 없으면 난수를 소비하지 않아 기존 고정 난수 시퀀스를 바꾸지 않는다.
+        var evasion = Math.Clamp(target.StatusValue("회피확률"), 0d, 1d);
+        if (evasion > 0 && random.NextDouble() < evasion)
+        {
+            events.Add(new("AttackEvaded", actor.Name, target.Name));
+            return false;
+        }
+        // 생활스킬의 "다음 전투 스킬" 강화는 클래스 스킬 공격에만 적용한다(일반 공격·생활스킬·패시브 피해 제외).
+        var classSkillAttack = sourceSkill is not null && !normalAttack;
         var damaged = false;
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
-            var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill) + actor.SkillDamageBonus(sourceSkill) + extraDamageMultiplier;
+            var outgoing = Math.Max(.1d, 1d + actor.StatusValue("주는피해증가") - actor.StatusValue("주는피해감소") + actor.MelodySkillDamageBonus(sourceSkill) + actor.SkillDamageBonus(sourceSkill) + extraDamageMultiplier
+                + (classSkillAttack ? actor.StatusValue("다음스킬피해증가") : 0d));
             var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (normalAttack ? target.StatusValue("받는기본공격피해감소") : 0d));
             // 약점 노출의 "방어도 무시 50%"는 이 타격에 반영되는 상대 방어력만 줄인다.
             var defenseIgnore = Math.Clamp(target.StatusValue("받는방어무시"), 0d, 1d);
             var amount = Math.Max(1, baseDamage - target.Defense * (1d - defenseIgnore) * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
-            var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + target.StatusValue("받는치명타확률증가") - target.StatusValue("받는치명타확률감소")) * criticalChanceMultiplier, 0d, 1d);
+            var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + (classSkillAttack ? actor.StatusValue("다음스킬치명타확률증가") : 0d) + target.StatusValue("받는치명타확률증가") - target.StatusValue("받는치명타확률감소")) * criticalChanceMultiplier, 0d, 1d);
             var critical = random.NextDouble() < criticalChance;
             // 약점 노출은 "첫 스킬 공격"에만 적용된다. 다단 스킬도 첫 타격이 판정된 순간 소모되어 나머지 타격에는 적용되지 않는다.
             // 치명타 반응 패시브(활력)가 이 타격으로 새 약점 노출을 거는 경우를 살리기 위해 트리거보다 먼저 소모한다.
             if (sourceSkill is not null && !normalAttack) target.ConsumeStatuses("첫스킬타격소모", events);
             if (critical)
             {
-                amount *= rules.CriticalMultiplier + actor.StatusValue("치명타피해증가");
+                amount *= rules.CriticalMultiplier + actor.StatusValue("치명타피해증가") + (classSkillAttack ? actor.StatusValue("다음스킬치명타피해증가") : 0d);
                 events.Add(new("CriticalHit", actor.Name, target.Name));
                 // 일반 공격·패시브 피해도 치명타 판정 대상이다. 특정 스킬로 한정한 패시브는 대상스킬ID가 맞지 않아 반응하지 않는다.
                 FirePassiveTrigger(actor, target, "치명타적중시", sourceSkill?.Id, null, random, rules, events);
@@ -589,8 +776,14 @@ public sealed class BattleEngine
 
     private sealed class Fighter
     {
-        public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds; public required IReadOnlyDictionary<string, BattleResource> ResourceDefinitions; public required IReadOnlyDictionary<string, BattleStatus> StatusDefinitions;
+        public required string Name; public required int MaxHp; public required int Hp; public required double Attack; public required double Defense; public required int LifePower; public required int CharmPower; public required IReadOnlyList<string> SkillIds; public required IReadOnlyDictionary<string, BattleResource> ResourceDefinitions;
+        // 시트 상태 정의의 파이터별 사본. 배틀생활스킬은 생활력 비례 값으로 만든 상태를 여기에 추가해 기존 상태 처리(지속턴·만료·합산)를 그대로 쓴다.
+        public required Dictionary<string, BattleStatus> StatusDefinitions;
         public int SurpriseCount; public string? LastSkillId;
+        public int LifeSkillUses;
+        public Dictionary<string, int> LifeSkillCounts { get; } = new(StringComparer.Ordinal);
+        // 상대가 건 상태(디버프·지속 피해·브레이크). 약초 채집·천옷 제작이 제거하는 "해로운 상태"의 기준이다.
+        public HashSet<string> HarmfulStatuses { get; } = new(StringComparer.Ordinal);
         public int BreakGauge;
         public string? PendingSkillId;
         public IReadOnlyList<BattlePassive> Passives = Array.Empty<BattlePassive>();
@@ -607,7 +800,7 @@ public sealed class BattleEngine
         public static Fighter Create(CharacterBattleSnapshot source, double scale, Rules rules, BattleDataSnapshot data)
         {
             var c = data.Classes[source.ClassId]; var max = Math.Max(1, (int)Math.Round(rules.BaseHp * scale));
-            var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds, ResourceDefinitions = data.Resources, StatusDefinitions = data.Statuses };
+            var fighter = new Fighter { Name = source.CharacterName, MaxHp = max, Hp = max, Attack = rules.BaseAttack * scale, Defense = rules.BaseDefense * scale, LifePower = source.LifePower, CharmPower = source.CharmPower, SkillIds = c.SkillIds, ResourceDefinitions = data.Resources, StatusDefinitions = new Dictionary<string, BattleStatus>(data.Statuses, StringComparer.Ordinal) };
             foreach (var id in c.SkillIds) if (data.Skills.TryGetValue(id, out var skill)) fighter.Cooldowns[id] = skill.InitialCooldown;
             foreach (var resource in data.Resources.Values) fighter.Resources[resource.Id] = resource.InitialValue;
             // 아직 배틀패시브가 구현되지 않은 ID는 스킬의 활성화=FALSE와 동일하게 조용히 무시한다.
@@ -698,7 +891,9 @@ public sealed class BattleEngine
             }
             return expired;
         }
-        public void ApplyStatus(string id, int duration, string sourceSkillId, List<BattleEvent> events)
+        /// <param name="harmful">상대가 건 상태이면 true. 해로운 상태 제거 대상이 된다.</param>
+        /// <param name="announce">false이면 상태 적용 로그를 남기지 않는다(생활스킬은 효과문구로 대신 알린다).</param>
+        public void ApplyStatus(string id, int duration, string sourceSkillId, List<BattleEvent> events, bool harmful = false, bool announce = true)
         {
             var previous = Statuses.GetValueOrDefault(id);
             // 지속방식=누적인 상태(고양)는 다시 받을 때마다 남은 턴에 더하고, 나머지는 큰 값으로 갱신한다.
@@ -707,8 +902,25 @@ public sealed class BattleEngine
             if (applied == previous && Statuses.ContainsKey(id)) return;
             Statuses[id] = applied;
             StatusSources[id] = sourceSkillId;
+            if (harmful) HarmfulStatuses.Add(id); else HarmfulStatuses.Remove(id);
             var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
-            events.Add(new("StatusApplied", Name, Amount: applied, Detail: name));
+            if (announce) events.Add(new("StatusApplied", Name, Amount: applied, Detail: name));
+        }
+        public int HarmfulStatusCount => Statuses.Keys.Count(HarmfulStatuses.Contains);
+        /// <summary>상대가 건 상태를 무작위로 <paramref name="count"/>개 제거한다. 후보가 하나 이하이면 난수를 소비하지 않는다.</summary>
+        public int RemoveHarmfulStatuses(int count, IBattleRandom random, List<BattleEvent> events)
+        {
+            var removed = 0;
+            while (removed < count)
+            {
+                var candidates = Statuses.Keys.Where(HarmfulStatuses.Contains).Order(StringComparer.Ordinal).ToArray();
+                if (candidates.Length == 0) break;
+                var id = candidates.Length == 1 ? candidates[0] : candidates[Math.Min(candidates.Length - 1, (int)(random.NextDouble() * candidates.Length))];
+                RemoveStatus(id);
+                events.Add(new("StatusCleansed", Name, Detail: StatusDefinitions.GetValueOrDefault(id)?.Name ?? id));
+                removed++;
+            }
+            return removed;
         }
         public void ApplyPermanentStatus(string id, List<BattleEvent> events)
         {
@@ -752,13 +964,15 @@ public sealed class BattleEngine
         public IReadOnlyList<(string Id, string SourceSkillId)> ExpireStatuses(List<BattleEvent> events)
         {
             var expired = new List<(string Id, string SourceSkillId)>();
+            var announced = new HashSet<string>(StringComparer.Ordinal);
             foreach (var id in Statuses.Keys.ToArray())
             {
                 // 행동 중 다시 부여되어 지속턴이 새로 채워진 상태는 남는다.
                 if (Statuses[id] > 0) continue;
                 var source = RemoveStatus(id);
                 var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
-                events.Add(new("StatusExpired", Name, Detail: name));
+                // 천옷 제작처럼 한 생활스킬이 같은 이름의 상태를 여러 개 걸면 해제 로그는 한 번만 남긴다.
+                if (announced.Add(name)) events.Add(new("StatusExpired", Name, Detail: name));
                 if (!string.IsNullOrEmpty(source)) expired.Add((id, source));
             }
             return expired;
@@ -767,6 +981,7 @@ public sealed class BattleEngine
         public string? RemoveStatus(string id)
         {
             if (!Statuses.Remove(id)) return null;
+            HarmfulStatuses.Remove(id);
             PeriodicEffects.Remove(id);
             var source = StatusSources.GetValueOrDefault(id);
             StatusSources.Remove(id);
@@ -775,10 +990,11 @@ public sealed class BattleEngine
         /// <summary>지정한 효과유형을 가진 보유 상태를 소모한다(약점 노출의 첫 스킬 공격).</summary>
         public void ConsumeStatuses(string effectType, List<BattleEvent> events)
         {
+            var announced = new HashSet<string>(StringComparer.Ordinal);
             foreach (var id in Statuses.Keys.Where(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType)).ToArray())
             {
                 RemoveStatus(id);
-                events.Add(new("StatusConsumed", Name, Detail: StatusDefinitions[id].Name));
+                if (announced.Add(StatusDefinitions[id].Name)) events.Add(new("StatusConsumed", Name, Detail: StatusDefinitions[id].Name));
             }
         }
         public BattleSkill? TakePendingSkill(BattleDataSnapshot data)
@@ -802,10 +1018,10 @@ public sealed class BattleEngine
         public double NormalAttackMultiplier => Number("normal_attack_multiplier"); public double SkillDamageMinMultiplier => Number("skill_damage_min_multiplier"); public double SkillDamageMaxMultiplier => Number("skill_damage_max_multiplier"); public double UltimateDamageMultiplier => Number("ultimate_damage_multiplier");
         public double SkillHealMinMultiplier => Number("skill_heal_min_multiplier"); public double SkillHealMaxMultiplier => Number("skill_heal_max_multiplier"); public double UltimateHealMultiplier => Number("ultimate_heal_multiplier");
         public int MinimumSkillCooldown => checked((int)Number("minimum_skill_cooldown")); public int MaxSurpriseEvents => checked((int)Number("max_surprise_events_per_actor")); public int SurpriseCooldown => checked((int)Number("surprise_event_global_cooldown"));
-        public double LifeSurpriseHpRatioThreshold => Number("life_surprise_hp_ratio_threshold"); public double LifeSurpriseHealRatio => Number("life_surprise_heal_ratio"); public double CharmSurpriseDamageMultiplier => Number("charm_surprise_damage_multiplier");
+        public double CharmSurpriseDamageMultiplier => Number("charm_surprise_damage_multiplier");
+        public int LifeSkillMaxUsesPerActor => checked((int)Number("life_skill_max_uses_per_actor")); public double LifeSkillRatioCap => Number("life_skill_ratio_cap");
         public double AdditionalHitChance => Number("additional_hit_chance"); public double AdditionalHitDamageRatio => Number("additional_hit_damage_ratio");
         public int BreakGaugeMaximum => checked((int)Number("break_gauge_maximum")); public int BreakDuration => checked((int)Number("break_duration_turns"));
-        public double LifeSurpriseChance(int lifePower) => SurpriseChance("life_surprise", lifePower);
         public double CharmSurpriseChance(int charmPower) => SurpriseChance("charm_surprise", charmPower);
         private double SurpriseChance(string prefix, int value) => Math.Min(Number(prefix + "_max_chance"), Number(prefix + "_base_chance") + Math.Min(2d, Math.Max(0, value) / Number(prefix + "_stat_reference")) * Number(prefix + "_stat_coefficient"));
     }

@@ -439,6 +439,7 @@ await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 CrossbowBattleTests.Run();
+LifeSkillBattleTests.Run();
 var battleRules = new Dictionary<string, BattleRule>
 {
     ["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100", ""), ["base_attack"] = new("base_attack", "전투능력치", "number", "40", ""), ["base_defense"] = new("base_defense", "전투능력치", "number", "0", ""),

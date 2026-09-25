@@ -11,10 +11,10 @@ public interface IBattleDataSource
     Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct);
 }
 
-/// <summary>전투용 10개 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
+/// <summary>전투용 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
 public sealed class GoogleSheetsBattleSource(HttpClient client, string spreadsheetId) : IBattleDataSource
 {
-    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과"];
+    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"];
     public string CacheKey => spreadsheetId;
 
     public async Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct)
@@ -112,7 +112,7 @@ public sealed class BattleCatalog
         var statuses = BattleCsv.Read(tables["배틀상태효과"], "배틀상태효과");
         var rules = BattleCsv.Read(tables["배틀규칙"], "배틀규칙");
         // 나머지 표도 누락/깨진 CSV를 허용하지 않습니다. 상세 효과는 이후 엔진 단계에서 공통 모델로 확장합니다.
-        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙"])) BattleCsv.Read(tables[name], name);
+        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"])) BattleCsv.Read(tables[name], name);
         BattleCsv.Headers(classes, "클래스", "ID", "이름", "스킬1", "스킬2", "스킬3", "스킬4", "스킬5", "궁극기", "패시브1", "패시브2", "패시브3", "패시브4", "패시브5", "패시브6");
         BattleCsv.Headers(skills, "스킬", "ID", "이름", "스킬구분", "부모스킬ID");
         BattleCsv.Headers(passiveSkills, "패시브스킬", "ID", "이름");
@@ -226,7 +226,92 @@ public sealed class BattleCatalog
         if (derivationList.Any(x => !skillMap.ContainsKey(x.ParentSkillId) || !skillMap.ContainsKey(x.ChildSkillId))) throw new InvalidDataException("배틀스킬파생 시트가 존재하지 않는 배틀 스킬 ID를 참조합니다.");
         // 엔진이 모르는 조건유형은 항상 거짓으로 판정되어 파생이 조용히 사라지므로 로딩 단계에서 거부한다.
         if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
-        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LoadedAt = loadedAt };
+        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LifeSkills = ParseLifeSkills(tables), LoadedAt = loadedAt };
+    }
+
+    /// <summary>생활력 성장과 무관해 배틀생활스킬을 만들지 않는 원본 생활스킬.</summary>
+    private static readonly HashSet<string> NonBattleLifeSkillNames = new(["연금술"], StringComparer.Ordinal);
+    private static readonly HashSet<string> LifeConditionTypes = new(["생존", "HP비율", "해로운상태개수", "재사용대기중스킬개수"], StringComparer.Ordinal);
+    private static readonly HashSet<string> ConditionOperators = new(["=", "==", "<", "<=", ">", ">="], StringComparer.Ordinal);
+    /// <summary>생활스킬 효과유형별로 허용하는 계수기준. 엔진이 모르는 조합을 조용히 무시하지 않도록 로딩 단계에서 거부한다.</summary>
+    private static readonly Dictionary<string, string> LifeEffectBasis = new(StringComparer.Ordinal)
+    {
+        ["피해"] = "공격력", ["회복"] = "최대HP", ["지속회복"] = "최대HP",
+        ["브레이크피해"] = "개수", ["해로운상태제거"] = "개수", ["쿨다운감소"] = "턴", ["브레이크면역"] = "턴",
+        ["받는피해감소"] = "비율", ["주는피해증가"] = "비율", ["다음피해감소"] = "비율", ["다음행동피해감소"] = "비율", ["회피확률증가"] = "비율",
+        ["다음스킬피해증가"] = "비율", ["다음스킬치명타확률증가"] = "비율", ["다음스킬치명타피해증가"] = "비율"
+    };
+
+    private static IReadOnlyList<BattleLifeSkill> ParseLifeSkills(IReadOnlyDictionary<string, string> tables)
+    {
+        var sourceRows = BattleCsv.Read(tables["생활스킬"], "생활스킬");
+        var skillRows = BattleCsv.Read(tables["배틀생활스킬"], "배틀생활스킬");
+        var effectRows = BattleCsv.Read(tables["배틀생활스킬효과"], "배틀생활스킬효과");
+        // BattleCsv.Headers는 첫 행에서 헤더를 읽는다. 행이 없는 시트는 불러올 배틀생활스킬이 없다는 뜻이므로 헤더 검사를 건너뛴다.
+        if (sourceRows.Count > 0) BattleCsv.Headers(sourceRows, "생활스킬", "이름");
+        if (skillRows.Count > 0) BattleCsv.Headers(skillRows, "배틀생활스킬", "ID", "생활스킬이름", "활성화", "기본사용확률", "생활력기준값", "생활력확률보정계수", "최대사용확률", "전투당최대횟수", "선택가중치", "조건대상", "조건유형", "조건연산자", "조건값", "행동문구");
+        if (effectRows.Count > 0) BattleCsv.Headers(effectRows, "배틀생활스킬효과", "ID", "배틀생활스킬ID", "실행순서", "효과유형", "대상", "계수기준", "계수", "고정값", "생활력비례", "생활력기준값", "생활력최소배율", "생활력최대배율", "횟수", "지속턴", "효과문구");
+        var sourceNames = sourceRows.Select((x, i) => x.Required("이름", "생활스킬", i + 2)).ToHashSet(StringComparer.Ordinal);
+
+        var effects = new List<BattleLifeSkillEffect>();
+        foreach (var (row, index) in Unique(effectRows, "배틀생활스킬효과").Select((x, i) => (x, i + 2)))
+        {
+            const string sheet = "배틀생활스킬효과";
+            var type = row.Required("효과유형", sheet, index);
+            if (!LifeEffectBasis.TryGetValue(type, out var basis)) throw new InvalidDataException($"{sheet} 시트 {index}행의 효과유형 '{type}'을(를) 지원하지 않습니다.");
+            if (row["계수기준"] != basis) throw new InvalidDataException($"{sheet} 시트 {index}행의 {type} 효과는 계수기준이 '{basis}'여야 합니다.");
+            var target = row.Required("대상", sheet, index);
+            if (target is not ("자신" or "상대")) throw new InvalidDataException($"{sheet} 시트 {index}행의 대상은 자신 또는 상대여야 합니다.");
+            var group = EmptyAsNull(row.GetValueOrDefault("선택그룹", ""));
+            var groupWeight = group is null ? 0d : BattleCsv.Double(row.GetValueOrDefault("선택가중치", ""), sheet, index, "선택가중치", double.Epsilon);
+            var effect = new BattleLifeSkillEffect(row["ID"], row.Required("배틀생활스킬ID", sheet, index), BattleCsv.Int(row["실행순서"], sheet, index, "실행순서", 1), type, target,
+                basis, BattleCsv.Double(row["계수"], sheet, index, "계수"), BattleCsv.Int(row["고정값"], sheet, index, "고정값"), BattleCsv.Bool(row["생활력비례"], sheet, index, "생활력비례"),
+                BattleCsv.Double(row["생활력기준값"], sheet, index, "생활력기준값", 1), BattleCsv.Double(row["생활력최소배율"], sheet, index, "생활력최소배율"), BattleCsv.Double(row["생활력최대배율"], sheet, index, "생활력최대배율"),
+                BattleCsv.Int(row["횟수"], sheet, index, "횟수", 1), BattleCsv.Int(row["지속턴"], sheet, index, "지속턴"), EmptyAsNull(row["효과문구"]), group, groupWeight);
+            if (effect.MinMultiplier > effect.MaxMultiplier) throw new InvalidDataException($"{sheet} 시트 {index}행의 생활력최소배율이 최대배율보다 큽니다.");
+            if (basis is "공격력" or "최대HP" or "비율" && effect.Coefficient <= 0) throw new InvalidDataException($"{sheet} 시트 {index}행의 계수는 0보다 커야 합니다.");
+            if (basis is "개수" && effect.FixedValue <= 0 || type == "쿨다운감소" && effect.FixedValue <= 0) throw new InvalidDataException($"{sheet} 시트 {index}행의 고정값은 1 이상이어야 합니다.");
+            // 상태형 효과는 지속턴 동안 유지된다. 다음 스킬 강화는 다음 전투 스킬에 소모될 때까지 남으므로 지속턴을 1회 표기로만 쓴다.
+            if (basis is "비율" || type is "브레이크면역" or "지속회복")
+                if (effect.Duration < 1) throw new InvalidDataException($"{sheet} 시트 {index}행의 {type} 효과는 지속턴이 1 이상이어야 합니다.");
+            effects.Add(effect);
+        }
+
+        var result = new List<BattleLifeSkill>();
+        var usedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (row, index) in Unique(skillRows, "배틀생활스킬").Select((x, i) => (x, i + 2)))
+        {
+            const string sheet = "배틀생활스킬";
+            var id = row["ID"];
+            var name = row.Required("생활스킬이름", sheet, index);
+            if (!sourceNames.Contains(name)) throw new InvalidDataException($"{sheet} 시트 {index}행의 생활스킬이름 '{name}'이(가) 생활스킬 시트에 없습니다.");
+            if (NonBattleLifeSkillNames.Contains(name)) throw new InvalidDataException($"{sheet} 시트 {index}행의 '{name}'은(는) 생활력과 무관해 배틀생활스킬로 만들지 않습니다.");
+            if (!usedNames.Add(name)) throw new InvalidDataException($"{sheet} 시트의 생활스킬이름 '{name}'이(가) 중복되었습니다.");
+            var conditionTarget = row.Required("조건대상", sheet, index);
+            var conditionType = row.Required("조건유형", sheet, index);
+            var conditionOperator = row.Required("조건연산자", sheet, index);
+            if (conditionTarget is not ("자신" or "상대")) throw new InvalidDataException($"{sheet} 시트 {index}행의 조건대상은 자신 또는 상대여야 합니다.");
+            if (!LifeConditionTypes.Contains(conditionType)) throw new InvalidDataException($"{sheet} 시트 {index}행의 조건유형 '{conditionType}'을(를) 지원하지 않습니다.");
+            if (!ConditionOperators.Contains(conditionOperator)) throw new InvalidDataException($"{sheet} 시트 {index}행의 조건연산자 '{conditionOperator}'을(를) 지원하지 않습니다.");
+            var skillEffects = effects.Where(x => x.LifeSkillId == id).OrderBy(x => x.Order).ToArray();
+            var skill = new BattleLifeSkill(id, name, BattleCsv.Bool(row["활성화"], sheet, index, "활성화"),
+                BattleCsv.Double(row["기본사용확률"], sheet, index, "기본사용확률", 0, 1), BattleCsv.Double(row["생활력기준값"], sheet, index, "생활력기준값", 1),
+                BattleCsv.Double(row["생활력확률보정계수"], sheet, index, "생활력확률보정계수", 0, 1), BattleCsv.Double(row["최대사용확률"], sheet, index, "최대사용확률", 0, 1),
+                BattleCsv.Int(row["전투당최대횟수"], sheet, index, "전투당최대횟수", 1), BattleCsv.Double(row["선택가중치"], sheet, index, "선택가중치", double.Epsilon),
+                conditionTarget, conditionType, conditionOperator, BattleCsv.Double(row.Required("조건값", sheet, index), sheet, index, "조건값"),
+                row.Required("행동문구", sheet, index), skillEffects);
+            if (skill.Enabled && skillEffects.Length == 0) throw new InvalidDataException($"배틀생활스킬 '{id}'가 활성화되어 있지만 효과가 하나도 없습니다.");
+            result.Add(skill);
+        }
+        var missing = sourceNames.Where(x => !NonBattleLifeSkillNames.Contains(x) && !usedNames.Contains(x)).ToArray();
+        if (missing.Length > 0) throw new InvalidDataException($"배틀생활스킬 시트에 생활스킬이 누락되었습니다: {string.Join(", ", missing)}");
+        var knownIds = result.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+        if (effects.FirstOrDefault(x => !knownIds.Contains(x.LifeSkillId)) is { } orphan) throw new InvalidDataException($"배틀생활스킬효과 '{orphan.Id}'가 존재하지 않는 배틀생활스킬 ID '{orphan.LifeSkillId}'를 참조합니다.");
+        // 사용 판정은 후보를 고르기 전에 한 번만 하므로, 행마다 다른 판정 값이 있으면 어느 값을 쓸지 정의되지 않는다.
+        var enabled = result.Where(x => x.Enabled).ToArray();
+        if (enabled.Select(x => (x.BaseChance, x.LifeReference, x.LifeChanceCoefficient, x.MaxChance)).Distinct().Count() > 1)
+            throw new InvalidDataException("배틀생활스킬의 기본사용확률·생활력기준값·생활력확률보정계수·최대사용확률은 활성화된 모든 행에서 같아야 합니다.");
+        return result;
     }
 
     private static IEnumerable<Dictionary<string, string>> Unique(IReadOnlyList<Dictionary<string, string>> rows, string sheet)
