@@ -184,10 +184,14 @@ public sealed class BattleCatalog
         foreach (var status in statusMap.Values)
             if (status.TargetSkillId is { } targetSkillId && !skillMap.ContainsKey(targetSkillId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 대상스킬ID가 존재하지 않는 배틀 스킬 ID '{targetSkillId}'를 참조합니다.");
+        // 스킬피해증가는 대상스킬ID(스킬 또는 부모 스킬)로 한정한 피해 증가다. 대상 없이 쓰면 주는피해증가와 같아지므로 거부한다.
+        foreach (var status in statusMap.Values)
+            if (status.HasEffectType("스킬피해증가") && status.TargetSkillId is null)
+                throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 스킬피해증가에는 대상스킬ID가 필요합니다.");
         foreach (var status in statusMap.Values)
             if (status.StackResourceId is { } stackResourceId && !resourceMap.ContainsKey(stackResourceId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 중첩자원ID가 존재하지 않는 자원 ID '{stackResourceId}'를 참조합니다.");
-        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시"], StringComparer.Ordinal);
+        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "스킬적중완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시"], StringComparer.Ordinal);
         void ValidateEffect(BattleEffect effect, string sheet)
         {
             if (effect.Type is "자원설정" or "자원증가" or "자원소모")

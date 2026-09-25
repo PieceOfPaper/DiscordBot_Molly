@@ -1081,6 +1081,145 @@ var stackDamages = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A
 Check(stackDamages.Length == 2 && Math.Abs(stackDamages[1] - stackDamages[0] * 2) <= 1,
     "중첩자원ID 상태는 자원이 0이면 효과가 없고, 2중첩이면 값×2(+100%)가 적용된다");
 
+// GitHub Issue #1 후속: 검술사 집중은 sw_focus 하나로 판정한다. 집중 효과 상태는 중첩자원ID=sw_focus 영구 상태라
+// sw_focus가 사라지면 함께 꺼지고, 일섬·집중력 100 어느 경로로 얻든 같은 지속턴을 쓴다. 교체 자원은 보유 중 다시 얻으면 지속턴을 새로 채운다.
+// probe는 실제 강철 쐐기처럼 집중 보유/미보유 조건 두 행으로 갈리고(확률은 1로 고정해 경로만 센다), 집중 중에는 치명타가 확정된다.
+BattleEffect SwordEffect(string id, int order, string type, int fixedValue, string? statusId, string? conditionType = null, string? conditionId = null, string? op = null, string? value = null, string? trigger = null, string? triggerResourceId = null, string? numericReferenceMode = null)
+    => new(id, order, type, type == "피해" ? "상대" : "자신", fixedValue, 1, 1, 0, statusId, 0, null, conditionType is null ? null : "자신", conditionType, conditionId, op, value, null, numericReferenceMode, Trigger: trigger, TriggerResourceId: triggerResourceId);
+BattleResult SwordFocusBattle(bool viaGauge, int entryCooldown)
+{
+    var entry = new BattleSkill("entry", "집중 진입", "일반", null, true, entryCooldown, 0, 1, 1,
+        [viaGauge ? SwordEffect("entry_gauge", 1, "자원증가", 100, "sw_focus_gauge") : SwordEffect("entry_focus", 1, "자원설정", 1, "sw_focus")]);
+    var probe = new BattleSkill("probe", "강철 쐐기", "일반", null, true, 1, 2, 1, 1, [
+        SwordEffect("probe_hit", 1, "피해", 1000, null),
+        SwordEffect("probe_focus", 2, "자원증가", 1, "focus_path", "자원보유", "sw_focus", ">=", "1"),
+        SwordEffect("probe_plain", 3, "자원증가", 1, "plain_path", "분류자원미보유", "태세")]);
+    var concentration = new BattlePassive("concentration", true, [
+        SwordEffect("con_02", 2, "자원설정", 1, "sw_focus", trigger: "자원최대치도달시", triggerResourceId: "sw_focus_gauge"),
+        SwordEffect("con_03", 3, "자원소모", 0, "sw_focus_gauge", trigger: "자원최대치도달시", triggerResourceId: "sw_focus_gauge", numericReferenceMode: "전부"),
+        SwordEffect("con_04", 4, "상태효과", 0, "sw_focus_precision", trigger: "전투시작")]);
+    return new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "sword", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), new BattleDataSnapshot
+    {
+        Rules = RulesWith(("base_max_hp", "1000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "20"), ("minimum_skill_cooldown", "1")),
+        Classes = new Dictionary<string, BattleClass> { ["sword"] = new("sword", "검술사", ["entry", "probe"], true, ["concentration"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+        Skills = new Dictionary<string, BattleSkill> { ["entry"] = entry, ["probe"] = probe },
+        Passives = new Dictionary<string, BattlePassive> { ["concentration"] = concentration },
+        Resources = new Dictionary<string, BattleResource>
+        {
+            ["sw_focus"] = new("sw_focus", "집중", "태세", 1, 0, 4, "교체"),
+            ["sw_focus_gauge"] = new("sw_focus_gauge", "집중력", "자원", 100, 0, 0, "가산"),
+            ["focus_path"] = new("focus_path", "집중 경로", "기록", 0, 0, 0, "가산"),
+            ["plain_path"] = new("plain_path", "기본 경로", "기록", 0, 0, 0, "가산")
+        },
+        Statuses = new Dictionary<string, BattleStatus> { ["sw_focus_precision"] = new("sw_focus_precision", "집중", "치명타확률증가", 1, "", StackResourceId: "sw_focus") },
+        LoadedAt = DateTimeOffset.UtcNow
+    }, new FixedBattleRandom([0d]));
+}
+(int Focus, int Plain, int Critical) SwordFocusCounts(BattleResult result)
+    => (result.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail?.StartsWith("집중 경로 +1") == true),
+        result.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail?.StartsWith("기본 경로 +1") == true),
+        result.Events.Count(x => x.Type == "CriticalHit" && x.Actor == "A"));
+// A의 턴: 1 진입, 2~10 probe. 집중(지속턴 4)은 2~5턴 probe에 적용되고 5턴 행동 뒤 사라진다.
+var focusOnceFlash = SwordFocusCounts(SwordFocusBattle(false, 100));
+var focusOnceGauge = SwordFocusCounts(SwordFocusBattle(true, 100));
+Check(focusOnceFlash == (4, 5, 4) && focusOnceGauge == focusOnceFlash,
+    "집중은 일섬·집중력 100 어느 경로든 4턴 뒤 sw_focus와 집중 효과(치명타)가 함께 끝나고, 강철 쐐기는 다시 기본(25%) 경로로 돌아간다");
+// A의 턴: 진입(1·3·5·7·9)과 probe(2·4·6·8·10)가 번갈아 나온다. 집중 중 재진입이 지속턴을 새로 채우므로 기본 경로가 한 번도 나오지 않는다.
+var focusRefreshFlash = SwordFocusCounts(SwordFocusBattle(false, 2));
+var focusRefreshGauge = SwordFocusCounts(SwordFocusBattle(true, 2));
+Check(focusRefreshFlash == (5, 0, 5) && focusRefreshGauge == focusRefreshFlash,
+    "집중 중 일섬·집중력 100으로 다시 집중에 들어가면 sw_focus 지속턴이 갱신되어 집중 효과와 비검 준비 확률이 함께 유지된다");
+
+// 석궁사수 드라이빙 포스: 판정 창(교체, 1턴)이 연속 소모 스킬마다 갱신되어 거스팅→스프레딩→거스팅 연속 사용 시 2중첩에 도달한다.
+// 이전에는 두 번째 볼트에서 창을 다시 설정해도 값이 같아 지속턴이 갱신되지 않았고, 창이 닫혀 1중첩을 넘지 못했다.
+BattleEffect DrivingEffect(string id, int order, string type, string statusId, string skillId, string? conditionId = null)
+    => new(id, order, type, "자신", 1, 1, 1, 0, statusId, 0, null, conditionId is null ? null : "자신", conditionId is null ? null : "자원보유", conditionId, conditionId is null ? null : ">=", conditionId is null ? null : "1", null, null, Trigger: "스킬사용완료시", TriggerSkillId: skillId);
+var drivingLog = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "crossbow", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), new BattleDataSnapshot
+{
+    Rules = RulesWith(("base_max_hp", "1000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "6"), ("minimum_skill_cooldown", "1")),
+    Classes = new Dictionary<string, BattleClass> { ["crossbow"] = new("crossbow", "석궁사수", ["gusting_bolt", "spreading_bolt"], true, ["driving_force"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill>
+    {
+        ["gusting_bolt"] = new("gusting_bolt", "거스팅 볼트", "일반", null, true, 1, 0, 1, 1, [SwordEffect("gust_hit", 1, "피해", 1000, null)]),
+        ["spreading_bolt"] = new("spreading_bolt", "스프레딩 볼트", "일반", null, true, 1, 0, 1, 1, [SwordEffect("spread_hit", 1, "피해", 1000, null)])
+    },
+    Passives = new Dictionary<string, BattlePassive>
+    {
+        ["driving_force"] = new("driving_force", true, [
+            DrivingEffect("df_01", 1, "자원증가", "cb_driving_force", "gusting_bolt", "cb_driving_window"),
+            DrivingEffect("df_02", 2, "자원증가", "cb_driving_force", "spreading_bolt", "cb_driving_window"),
+            DrivingEffect("df_03", 3, "자원설정", "cb_driving_window", "gusting_bolt"),
+            DrivingEffect("df_04", 4, "자원설정", "cb_driving_window", "spreading_bolt")])
+    },
+    Resources = new Dictionary<string, BattleResource>
+    {
+        ["cb_driving_window"] = new("cb_driving_window", "드라이빙 포스 연속 판정", "자원", 1, 0, 1, "교체"),
+        ["cb_driving_force"] = new("cb_driving_force", "드라이빙 포스", "중첩", 2, 0, 1, "가산")
+    },
+    LoadedAt = DateTimeOffset.UtcNow
+}, new FixedBattleRandom([0d])).Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail).ToArray();
+Check(drivingLog.Contains("드라이빙 포스 +1 (현재 2)") && !drivingLog.Contains("드라이빙 포스 연속 판정이(가) 사라졌습니다."),
+    "드라이빙 포스 판정 창은 소모 스킬을 연속으로 쓰는 동안 유지되어 3연속 사용에서 2중첩에 도달한다");
+
+// 가산 자원(댄서 템포)은 최대 중첩에서 다시 얻어도 지속턴을 갱신하지 않고 자원획득시(템포 강화·회복·새로운 영감)를 다시 발동하지 않는다.
+// 템포 가속으로 tempo_up을 매 턴 쓴다. A의 3턴부터는 이미 2중첩이라 변화가 없고, 2턴에 채운 지속턴 3이 끝나 5턴 뒤 사라진다.
+var tempoCapSnapshot = DancerSnapshot(["tempo_up"], 12);
+tempoCapSnapshot = new BattleDataSnapshot { Rules = RulesWith(("base_max_hp", "1000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "12")), Classes = tempoCapSnapshot.Classes, Skills = tempoCapSnapshot.Skills, Passives = tempoCapSnapshot.Passives, Resources = tempoCapSnapshot.Resources, Statuses = tempoCapSnapshot.Statuses, LoadedAt = tempoCapSnapshot.LoadedAt };
+var tempoCapEvents = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "dancer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), tempoCapSnapshot, new FixedBattleRandom([0d, 0d])).Events;
+Check(tempoCapEvents.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail?.StartsWith("템포 +1") == true) == 2
+    && tempoCapEvents.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "템포이(가) 사라졌습니다.")
+    && tempoCapEvents.Count(x => x.Type == "StatusApplied" && x.Actor == "A" && x.Detail == "템포: 위력") == 2,
+    "댄서 템포(가산)는 최대 중첩에서 다시 얻어도 지속턴 갱신이나 템포 획득 효과 재발동이 일어나지 않는다");
+
+// 연계 검술: 스킬피해증가 상태는 대상스킬ID가 스킬 자신 또는 부모 스킬일 때만 적용되고, 중첩자원ID로 중첩 수만큼 곱한다.
+int LinkedFirstDamage(string? parentSkillId)
+{
+    var strike = new BattleSkill("strike", "비검 파생", "일반", parentSkillId, true, 1, 0, 1, 1, [SwordEffect("strike_hit", 1, "피해", 1000, null)]);
+    return new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "linked", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), new BattleDataSnapshot
+    {
+        Rules = RulesWith(("base_max_hp", "1000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "1")),
+        Classes = new Dictionary<string, BattleClass> { ["linked"] = new("linked", "연계", ["strike"], true, ["linked_swordsmanship"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+        Skills = new Dictionary<string, BattleSkill> { ["strike"] = strike },
+        Passives = new Dictionary<string, BattlePassive> { ["linked_swordsmanship"] = new("linked_swordsmanship", true, [SwordEffect("ls_power", 1, "스킬피해증가", 0, "sw_linked_power", trigger: "전투시작")]) },
+        Resources = new Dictionary<string, BattleResource> { ["sw_linked_stack"] = new("sw_linked_stack", "연계 검술", "중첩", 5, 2, 4, "가산") },
+        Statuses = new Dictionary<string, BattleStatus> { ["sw_linked_power"] = new("sw_linked_power", "연계 검술", "스킬피해증가", .5, "", "secret_sword", "sw_linked_stack") },
+        LoadedAt = DateTimeOffset.UtcNow
+    }, new FixedBattleRandom([0d])).Events.First(x => x.Type == "DamageDealt" && x.Actor == "A").Amount ?? 0;
+}
+var linkedPlainDamage = LinkedFirstDamage(null);
+var linkedSecretDamage = LinkedFirstDamage("secret_sword");
+Check(Math.Abs(linkedSecretDamage - linkedPlainDamage * 2) <= 1,
+    "연계 검술의 스킬피해증가는 부모가 비검인 파생 스킬에만 중첩당 비율로 적용된다(2중첩×50% = 2배)");
+// 질풍태세: 준비 자세는 상대에게 피해를 준 스킬(스킬적중완료시)에서만 돌진하고 소모된다. 간파처럼 같은 스킬이
+// 스킬사용완료시에 준비 자세를 다시 얻으면, 그 스킬 자신은 방금 얻은 준비 자세를 소모하지 않는다.
+IReadOnlyList<string?> StanceLog(IReadOnlyList<string> skillIds, params BattleSkill[] skills)
+{
+    var passive = new BattlePassive("sword_stance", true, [
+        SwordEffect("sst_01", 1, "자원설정", 1, "sw_stance_ready", trigger: "전투시작"),
+        SwordEffect("sst_02", 2, "자원증가", 1, "dash", "자원보유", "sw_stance_ready", ">=", "1", trigger: "스킬적중완료시"),
+        SwordEffect("sst_04", 4, "자원소모", 0, "sw_stance_ready", "자원보유", "sw_stance_ready", ">=", "1", trigger: "스킬적중완료시", numericReferenceMode: "전부"),
+        new BattleEffect("sst_05", 5, "자원설정", "자신", 1, 1, 1, 0, "sw_stance_ready", 0, null, null, null, null, null, null, null, null, Trigger: "스킬사용완료시", TriggerSkillId: "insight")]);
+    return new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "stance", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), new BattleDataSnapshot
+    {
+        Rules = RulesWith(("base_max_hp", "1000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "3"), ("minimum_skill_cooldown", "1")),
+        Classes = new Dictionary<string, BattleClass> { ["stance"] = new("stance", "질풍태세", skillIds, true, ["sword_stance"]), ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+        Skills = skills.ToDictionary(x => x.Id),
+        Passives = new Dictionary<string, BattlePassive> { ["sword_stance"] = passive },
+        Resources = new Dictionary<string, BattleResource> { ["sw_stance_ready"] = new("sw_stance_ready", "질풍태세 준비", "자원", 1, 0, 0, "교체"), ["dash"] = new("dash", "돌진", "기록", 0, 0, 0, "가산"), ["buffed"] = new("buffed", "강화", "기록", 0, 0, 0, "가산") },
+        LoadedAt = DateTimeOffset.UtcNow
+    }, new FixedBattleRandom([0d])).Events.Where(x => x.Type is "ResourceChanged" or "SkillUsed" && x.Actor == "A").Select(x => x.Detail).ToArray();
+}
+// A의 턴: 1 강화(피해 없음), 2 공격. 피해 없는 스킬은 준비 자세를 쓰지 않고, 다음 공격 스킬이 돌진한다.
+var stanceBuffLog = StanceLog(["buff", "hit"],
+    new BattleSkill("buff", "자기 강화", "일반", null, true, 100, 0, 1, 1, [SwordEffect("buff_self", 1, "자원증가", 1, "buffed")]),
+    new BattleSkill("hit", "공격", "일반", null, true, 1, 2, 1, 1, [SwordEffect("hit_dmg", 1, "피해", 1000, null)]));
+Check(stanceBuffLog.SequenceEqual(["질풍태세 준비 +1 (현재 1)", "자기 강화", "강화 +1 (현재 1)", "공격", "돌진 +1 (현재 1)", "질풍태세 준비 -1 (현재 0)"]),
+    "질풍태세는 피해를 주지 않은 스킬에서는 발동하지 않고, 다음으로 피해를 준 스킬에서 돌진한다");
+var stanceInsightLog = StanceLog(["insight"],
+    new BattleSkill("insight", "간파", "일반", null, true, 100, 0, 1, 1, [SwordEffect("insight_dmg", 1, "피해", 1000, null)]));
+Check(stanceInsightLog.SequenceEqual(["질풍태세 준비 +1 (현재 1)", "간파", "돌진 +1 (현재 1)", "질풍태세 준비 -1 (현재 0)", "질풍태세 준비 +1 (현재 1)"]),
+    "간파는 가진 준비 자세로 먼저 돌진한 뒤 준비 자세를 다시 얻고, 방금 얻은 준비 자세는 소모하지 않는다");
+
 // 치명타미적중시(날카로운 눈 초기화)와 피격시(선수필승 상실) 트리거, 그리고 패시브 피해는 일반 공격이 아니므로
 // 받는기본공격피해감소를 적용하지 않는다.
 var missPassive = new BattlePassive("miss_test", true, [

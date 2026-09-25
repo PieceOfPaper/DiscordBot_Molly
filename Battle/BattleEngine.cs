@@ -83,14 +83,14 @@ public sealed class BattleEngine
                     var child = ExecuteEffects(actor, target, derived, surpriseMultiplier, random, rules, events);
                     resolved.TargetDamaged |= child.TargetDamaged;
                     resolved.ActorHealed |= child.ActorHealed;
-                    if (actor.Hp > 0) FirePassiveTrigger(actor, target, "스킬사용완료시", derived.Id, null, random, rules, events);
+                    FireSkillCompleted(actor, target, derived.Id, resolved.TargetDamaged, random, rules, events);
                     performedSkillId = derived.Id;
                 }
                 GainSkillResource(actor, target, skill, data, random, rules, events);
                 SpendDeferredSkillResource(actor, target, skill, data, random, rules, events);
                 targetDamaged = resolved.TargetDamaged;
                 actorHealed = resolved.ActorHealed;
-                if (actor.Hp > 0 && derivedSkills.Length == 0) FirePassiveTrigger(actor, target, "스킬사용완료시", performedSkillId, null, random, rules, events);
+                if (derivedSkills.Length == 0) FireSkillCompleted(actor, target, performedSkillId, resolved.TargetDamaged, random, rules, events);
             }
             if (targetDamaged && target.Hp > 0) events.Add(new("HpStatus", target.Name, Detail: HpStatus(target)));
             if (actorHealed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
@@ -107,6 +107,16 @@ public sealed class BattleEngine
             : (double)left.Hp / left.MaxHp > (double)right.Hp / right.MaxHp ? BattleOutcome.FighterAWin : BattleOutcome.FighterBWin;
         events.Add(new("BattleEnded", outcome == BattleOutcome.FighterBWin ? right.Name : outcome == BattleOutcome.FighterAWin ? left.Name : "무승부"));
         return new BattleResult(outcome, major, left.Hp, left.MaxHp, right.Hp, right.MaxHp, events);
+    }
+
+    /// <summary>
+    /// 스킬 사용 완료 패시브를 발동한다. 상대에게 피해를 준 스킬이면 스킬적중완료시(질풍태세의 "다음 공격")를 먼저 발동해,
+    /// 같은 스킬이 스킬사용완료시에 새로 얻는 표식(간파 후 준비 자세)을 그 스킬이 바로 소모하지 않게 한다.
+    /// </summary>
+    private static void FireSkillCompleted(Fighter actor, Fighter target, string skillId, bool targetDamaged, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        if (actor.Hp > 0 && targetDamaged) FirePassiveTrigger(actor, target, "스킬적중완료시", skillId, null, random, rules, events);
+        if (actor.Hp > 0) FirePassiveTrigger(actor, target, "스킬사용완료시", skillId, null, random, rules, events);
     }
 
     /// <summary>행동이 끝난 뒤 이번 턴에 지속턴이 0이 된 상태·자원을 제거한다. 행동 중 다시 부여·갱신된 것은 남는다.</summary>
@@ -474,7 +484,13 @@ public sealed class BattleEngine
     private static void ChangeResource(Fighter fighter, Fighter opponent, BattleResource definition, int value, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         var previous = fighter.Resources.GetValueOrDefault(definition.Id);
-        if (previous == value) return;
+        if (previous == value)
+        {
+            // 중첩방식=교체인 지속 자원은 보유 중에 다시 얻으면 지속턴만 새로 채운다(집중 중 일섬으로 재진입, 드라이빙 포스 판정 창 연장).
+            // 값이 그대로이므로 자원획득시 패시브는 다시 발동하지 않는다. 가산 자원(템포 등)의 최대 중첩 갱신은 다루지 않는다.
+            if (value > 0 && definition.Duration > 0 && definition.Stacking == "교체") fighter.ResourceTurns[definition.Id] = definition.Duration;
+            return;
+        }
         fighter.Resources[definition.Id] = value;
         if (definition.Duration > 0) fighter.ResourceTurns[definition.Id] = definition.Duration;
         events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + (value > previous ? "+" : "") + (value - previous) + " (현재 " + value + ")"));
@@ -524,7 +540,7 @@ public sealed class BattleEngine
         var damaged = false;
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
-            var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill) + extraDamageMultiplier;
+            var outgoing = 1d + actor.StatusValue("주는피해증가") + actor.MelodySkillDamageBonus(sourceSkill) + actor.SkillDamageBonus(sourceSkill) + extraDamageMultiplier;
             var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (normalAttack ? target.StatusValue("받는기본공격피해감소") : 0d));
             // 약점 노출의 "방어도 무시 50%"는 이 타격에 반영되는 상대 방어력만 줄인다.
             var defenseIgnore = Math.Clamp(target.StatusValue("받는방어무시"), 0d, 1d);
@@ -639,6 +655,14 @@ public sealed class BattleEngine
             var hasMelody = Resources.Any(x => x.Value > 0 && ResourceDefinitions.TryGetValue(x.Key, out var resource) && resource.Kind == "악상");
             var melodySkill = skill.ParentSkillId == "bards_tale" || skill.Effects.Any(x => x.ConditionType == "자원보유" && x.ConditionId?.StartsWith("bard_", StringComparison.Ordinal) == true);
             return hasMelody && melodySkill ? StatusValue("악상피해증가") : 0d;
+        }
+        /// <summary>대상스킬ID가 이 스킬 또는 부모 스킬인 스킬피해증가 상태의 합. 연계 검술처럼 비검 파생 3종을 부모 ID 하나로 지정한다.</summary>
+        public double SkillDamageBonus(BattleSkill? skill)
+        {
+            if (skill is null) return 0d;
+            return ActiveStatusIds().Select(id => StatusDefinitions.GetValueOrDefault(id))
+                .Where(status => status is not null && status.HasEffectType("스킬피해증가") && (status.TargetSkillId == skill.Id || status.TargetSkillId is not null && status.TargetSkillId == skill.ParentSkillId))
+                .Sum(status => ScaledValue(status!, "스킬피해증가"));
         }
         public void ReduceCooldowns(int amount, List<BattleEvent> events)
         {
