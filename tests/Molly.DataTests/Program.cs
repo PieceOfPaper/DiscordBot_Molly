@@ -438,6 +438,7 @@ await QuizFlowTests.RunAsync();
 await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
+CrossbowBattleTests.Run();
 var battleRules = new Dictionary<string, BattleRule>
 {
     ["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100", ""), ["base_attack"] = new("base_attack", "전투능력치", "number", "40", ""), ["base_defense"] = new("base_defense", "전투능력치", "number", "0", ""),
@@ -1130,8 +1131,9 @@ var focusRefreshGauge = SwordFocusCounts(SwordFocusBattle(true, 2));
 Check(focusRefreshFlash == (5, 0, 5) && focusRefreshGauge == focusRefreshFlash,
     "집중 중 일섬·집중력 100으로 다시 집중에 들어가면 sw_focus 지속턴이 갱신되어 집중 효과와 비검 준비 확률이 함께 유지된다");
 
-// 석궁사수 드라이빙 포스: 판정 창(교체, 1턴)이 연속 소모 스킬마다 갱신되어 거스팅→스프레딩→거스팅 연속 사용 시 2중첩에 도달한다.
+// 교체 자원 지속턴 갱신: 판정 창(교체, 1턴)이 연속 소모 스킬마다 갱신되어 거스팅→스프레딩→거스팅 연속 사용 시 2중첩에 도달한다.
 // 이전에는 두 번째 볼트에서 창을 다시 설정해도 값이 같아 지속턴이 갱신되지 않았고, 창이 닫혀 1중첩을 넘지 못했다.
+// (GitHub Issue #1 당시 석궁사수 드라이빙 포스 구성. #7에서 실제 시트는 판정 창 없이 볼트 전용 중첩으로 바뀌었고, 그 흐름은 CrossbowBattleTests에서 검사한다.)
 BattleEffect DrivingEffect(string id, int order, string type, string statusId, string skillId, string? conditionId = null)
     => new(id, order, type, "자신", 1, 1, 1, 0, statusId, 0, null, conditionId is null ? null : "자신", conditionId is null ? null : "자원보유", conditionId, conditionId is null ? null : ">=", conditionId is null ? null : "1", null, null, Trigger: "스킬사용완료시", TriggerSkillId: skillId);
 var drivingLog = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "crossbow", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), new BattleDataSnapshot
@@ -1159,7 +1161,7 @@ var drivingLog = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A",
     LoadedAt = DateTimeOffset.UtcNow
 }, new FixedBattleRandom([0d])).Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail).ToArray();
 Check(drivingLog.Contains("드라이빙 포스 +1 (현재 2)") && !drivingLog.Contains("드라이빙 포스 연속 판정이(가) 사라졌습니다."),
-    "드라이빙 포스 판정 창은 소모 스킬을 연속으로 쓰는 동안 유지되어 3연속 사용에서 2중첩에 도달한다");
+    "교체 자원 판정 창은 보유 중 다시 설정할 때마다 지속턴이 갱신되어 3연속 사용에서 2중첩에 도달한다");
 
 // 가산 자원(댄서 템포)은 최대 중첩에서 다시 얻어도 지속턴을 갱신하지 않고 자원획득시(템포 강화·회복·새로운 영감)를 다시 발동하지 않는다.
 // 템포 가속으로 tempo_up을 매 턴 쓴다. A의 3턴부터는 이미 2중첩이라 변화가 없고, 2턴에 채운 지속턴 3이 끝나 5턴 뒤 사라진다.
