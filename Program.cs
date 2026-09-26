@@ -87,6 +87,14 @@ class Program
             // 멤버 목록의 봇 이름 아래에 도움말 명령을 표시합니다.
             await m_Client.SetCustomStatusAsync("/도움말");
 
+            // 배틀에서 클래스 이름 앞에 붙일 봇 이모지를 준비합니다. 없는 것만 올리므로 재연결 때 다시 실행해도 됩니다.
+            // 실패해도 배틀은 클래스 이름만으로 진행되므로 Ready 처리를 막지 않습니다.
+            _ = Task.Run(async () =>
+            {
+                try { await ClassEmojis.SyncAsync(m_Client); }
+                catch (Exception ex) { Console.WriteLine($"[클래스 이모지] 동기화 실패: {ex.GetType().Name}: {ex.Message}"); }
+            });
+
             // 개발 초기에는 길드 명령(즉시 반영). 운영은 글로벌 명령(전파 수분~1시간)
             // 환경변수/설정: Discord:GuildId (환경변수는 Discord__GuildId)
             var guildIdRaw = m_Config["Discord:GuildId"];

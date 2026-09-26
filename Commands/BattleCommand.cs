@@ -102,14 +102,14 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
     {
         var data = Program.instance.Battles.Current;
         if (data.IsClassBattleReady(classId)) return;
-        var className = data.Classes.TryGetValue(classId, out var battleClass) ? battleClass.Name : classId;
-        var readyNames = data.BattleReadyClassIds.Select(id => data.Classes[id].Name).Order(StringComparer.Ordinal).ToArray();
+        var className = ClassEmojis.Label(classId, data.Classes.TryGetValue(classId, out var battleClass) ? battleClass.Name : classId);
+        var readyNames = data.BattleReadyClassIds.Select(id => (Id: id, data.Classes[id].Name)).OrderBy(x => x.Name, StringComparer.Ordinal).Select(x => ClassEmojis.Label(x.Id, x.Name)).ToArray();
         throw new InvalidDataException(characterName + " 캐릭터의 " + className + " 클래스는 아직 배틀을 지원하지 않아요." + (readyNames.Length > 0 ? " 현재 배틀 가능 클래스: " + string.Join(", ", readyNames) : ""));
     }
 
     private static string CombatantName(IUser user, CharacterBattleSnapshot character)
     {
-        var className = Program.instance.Battles.Current.Classes.TryGetValue(character.ClassId, out var battleClass) ? battleClass.Name : character.ClassId;
+        var className = ClassEmojis.Label(character.ClassId, Program.instance.Battles.Current.Classes.TryGetValue(character.ClassId, out var battleClass) ? battleClass.Name : character.ClassId);
         return user.Mention + "(" + character.CharacterName + " · " + className + ")";
     }
 
