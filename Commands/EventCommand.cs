@@ -8,7 +8,7 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
     private const int EVENT_TIMEOUT_MS = 60_000;
     [SlashCommand("진행중인이벤트", "현재 진행중인 이벤트를 보자.")]
     public async Task Command_CurrentEvents(
-        [Summary("마감미정", "마감일 미정(별도 안내 시 까지) 이벤트를 포함할지 여부 (기본 포함)")] bool includePerma = false)
+        [Summary("마감미정", "마감일 미정(별도 안내 시 까지) 이벤트를 포함할지 여부 (기본 포함)")] bool includePerma = true)
     {
         // 1) 3초 내 ACK (동시 요청은 서비스가 한 번의 수집으로 합쳐 처리)
         await DeferAsync(ephemeral: true);
