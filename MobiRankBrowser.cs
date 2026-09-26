@@ -111,7 +111,7 @@ public static class MobiRankBrowser
             return true;
         }
 
-        private void ReleaseReservation() => Volatile.Write(ref m_IsRunning, 0);
+        internal void ReleaseReservation() => Volatile.Write(ref m_IsRunning, 0);
 
         private async Task<IPage> GetRankingPageAsync(Action<string> log)
         {
@@ -170,9 +170,10 @@ public static class MobiRankBrowser
             return null;
         }
 
+        // log는 호출부(Run·EnsureRankingPageReadyAsync)에서 이미 접두어를 붙인 함수이므로 그대로 씁니다.
         private async Task Init(CancellationToken ct = default, Action<string>? log = null)
         {
-            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {index}: {msg}");
+            void Log(string msg) => (log ?? (m => Console.WriteLine($"[MabiRankBrowser] {index}: {m}"))).Invoke(msg);
 
             m_Pw = await Playwright.CreateAsync();
             Log("init pw");
@@ -226,6 +227,24 @@ public static class MobiRankBrowser
 
             await WaitForRankingControlsAsync(page, PAGE_READY_TIMEOUT, ct, log);
             return page;
+        }
+
+        // 서버 시작 시 예열: 브라우저를 띄우고 랭킹 페이지의 보안 검사까지 통과해 둡니다.
+        // 이후 Run은 이 탭에서 rankdata를 바로 호출하는 빠른 경로를 탑니다. 예약 해제는 호출부가 담당합니다.
+        public async Task WarmUpAsync(CancellationToken ct = default, Action<string>? log = null)
+        {
+            void Log(string msg) => (log ?? Console.WriteLine).Invoke($"[MabiRankBrowser] {index}: {msg}");
+            try
+            {
+                await EnsureRankingPageReadyAsync(4, ct, Log);
+                Log("예열 완료");
+            }
+            catch
+            {
+                if (m_RankingPage?.IsClosed == true)
+                    m_RankingPage = null;
+                throw;
+            }
         }
 
         public async Task<MobiRankResult?> Run(
@@ -365,6 +384,96 @@ public static class MobiRankBrowser
     private static readonly Dictionary<ulong, int> m_GuildReservations = new();
     private static readonly object m_BrowserLock = new();
 
+    // 예열 중에는 랭킹을 쓰는 명령(랭킹·캐릭터등록·배틀)이 대기 안내로 응답합니다.
+    // 첫 브라우저가 준비되면(또는 재시도까지 모두 실패하면) 명령을 받기 시작하고, 나머지 브라우저는 예약된 채로 이어서 예열합니다.
+    // 예열이 실패해도 명령을 막지 않고, 요청 시 브라우저를 초기화하는 기존 흐름으로 넘어갑니다.
+    private const int WARM_UP_ATTEMPTS = 3;
+    private static readonly TimeSpan s_WarmUpRetryDelay = TimeSpan.FromSeconds(10);
+    private const int WARM_UP_NOT_STARTED = 0, WARM_UP_RUNNING = 1, WARM_UP_DONE = 2;
+    private static int s_WarmUpState;
+
+    public const string WarmingUpMessage = "⏳ 봇이 막 시작되어 랭킹 조회용 브라우저를 준비하고 있어요. 1~2분 뒤에 다시 시도해주세요.";
+    public static bool IsWarmingUp => Volatile.Read(ref s_WarmUpState) == WARM_UP_RUNNING;
+
+    public static Task WarmUpAsync(CancellationToken ct)
+        => WarmUpAsync((container, token) => container.WarmUpAsync(token), ct);
+
+    /// <summary>예열 흐름. 테스트에서 실제 브라우저 대신 예열 동작을 주입할 수 있도록 분리했습니다.</summary>
+    public static async Task WarmUpAsync(Func<BrowserContainer, CancellationToken, Task> warmUp, CancellationToken ct)
+    {
+        if (Interlocked.CompareExchange(ref s_WarmUpState, WARM_UP_RUNNING, WARM_UP_NOT_STARTED) != WARM_UP_NOT_STARTED)
+            return;
+
+        var containers = new List<BrowserContainer>();
+        lock (m_BrowserLock)
+        {
+            for (var i = 0; i < BROWSER_COUNT; i ++)
+            {
+                var container = GetOrAddContainer(i);
+                if (container.TryReserve(4))
+                    containers.Add(container);
+            }
+        }
+
+        try
+        {
+            foreach (var container in containers)
+            {
+                try
+                {
+                    await WarmUpContainerAsync(container, warmUp, ct);
+                }
+                finally
+                {
+                    container.ReleaseReservation();
+                    Volatile.Write(ref s_WarmUpState, WARM_UP_DONE);
+                }
+            }
+        }
+        finally
+        {
+            // 예약하지 못해 반복문이 돌지 않은 경우에도 명령이 계속 막히지 않도록 합니다.
+            Volatile.Write(ref s_WarmUpState, WARM_UP_DONE);
+        }
+    }
+
+    private static async Task WarmUpContainerAsync(
+        BrowserContainer container, Func<BrowserContainer, CancellationToken, Task> warmUp, CancellationToken ct)
+    {
+        for (var attempt = 1; attempt <= WARM_UP_ATTEMPTS; attempt ++)
+        {
+            try
+            {
+                await warmUp(container, ct);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MabiRankBrowser] {container.index}: 예열 실패({attempt}/{WARM_UP_ATTEMPTS}) - {ex.GetType().Name}: {ex.Message}");
+            }
+
+            if (attempt < WARM_UP_ATTEMPTS)
+            {
+                try { await Task.Delay(s_WarmUpRetryDelay, ct); }
+                catch (OperationCanceledException) { return; }
+            }
+        }
+
+        Console.WriteLine($"[MabiRankBrowser] {container.index}: 예열을 포기하고 요청 시 초기화합니다.");
+    }
+
+    // m_BrowserLock 안에서만 호출합니다.
+    private static BrowserContainer GetOrAddContainer(int i)
+    {
+        while (m_BrowserPool.Count <= i)
+            m_BrowserPool.Add(new() { index = m_BrowserPool.Count });
+        return m_BrowserPool[i];
+    }
+
     public static bool IsFullRunning(ulong guildId)
     {
         lock (m_BrowserLock)
@@ -402,13 +511,11 @@ public static class MobiRankBrowser
 
             for (var i = 0; i < BROWSER_COUNT; i ++)
             {
-                if (i >= m_BrowserPool.Count)
-                    m_BrowserPool.Add(new() { index = i });
-
-                if (!m_BrowserPool[i].TryReserve(rankingIndex))
+                var candidate = GetOrAddContainer(i);
+                if (!candidate.TryReserve(rankingIndex))
                     continue;
 
-                browserContainer = m_BrowserPool[i];
+                browserContainer = candidate;
                 m_GuildReservations[guildId] = m_GuildReservations.GetValueOrDefault(guildId) + 1;
                 break;
             }

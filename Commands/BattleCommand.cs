@@ -16,18 +16,19 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
     {
         if (Context.Guild is null || Context.Channel is IThreadChannel) { await RespondAsync("배틀은 서버의 일반 텍스트 채널에서만 시작해주세요.", ephemeral: true); return; }
         if (opponent.Id == Context.User.Id || opponent.IsBot) { await RespondAsync("자기 자신이나 봇과는 배틀할 수 없어요.", ephemeral: true); return; }
-        try { await Context.Client.Rest.GetGuildUserAsync(Context.Guild.Id, opponent.Id); }
-        catch { await RespondAsync("상대는 현재 이 서버의 사용자여야 해요.", ephemeral: true); return; }
+        if (MobiRankBrowser.IsWarmingUp) { await RespondAsync(MobiRankBrowser.WarmingUpMessage, ephemeral: true); return; }
         if (!Program.instance.Battles.Current.IsUsable) { await RespondAsync("배틀 데이터가 아직 준비되지 않았어요. 시트 데이터와 마지막 갱신 상태를 확인해주세요.", ephemeral: true); return; }
-        if (!Program.instance.BattleSessions.TryEnter(Context.Guild.Id, out var session)) { await RespondAsync("이 서버에서는 이미 배틀이 진행 중이에요.", ephemeral: true); return; }
+        // 상대 확인은 REST 호출이라 서버가 바쁠 때 3초 응답 제한을 넘길 수 있으므로 먼저 응답을 지연합니다.
+        // 세션 입장 전에 지연하므로 여기서 실패해도 배틀 슬롯이 "진행 중"으로 남지 않습니다.
+        await DeferAsync(ephemeral: true);
+        try { await Context.Client.Rest.GetGuildUserAsync(Context.Guild.Id, opponent.Id); }
+        catch { await ModifyOriginalResponseAsync(x => x.Content = "상대는 현재 이 서버의 사용자여야 해요."); return; }
+        if (!Program.instance.BattleSessions.TryEnter(Context.Guild.Id, out var session)) { await ModifyOriginalResponseAsync(x => x.Content = "이 서버에서는 이미 배틀이 진행 중이에요."); return; }
         IThreadChannel? thread = null;
         string? aLabel = null;
         string? bLabel = null;
         try
         {
-            // DeferAsync를 try 밖에서 호출하면 실패 시 finally의 세션 해제가 실행되지 않아
-            // 길드의 배틀 슬롯이 영구히 "진행 중" 상태로 남으므로 반드시 try 안에서 호출합니다.
-            await DeferAsync(ephemeral: true);
             var a = await ResolveAsync(Context.User.Id, Context.Guild.Id, session.CancellationToken);
             var b = await ResolveAsync(opponent.Id, Context.Guild.Id, session.CancellationToken);
             session.CancellationToken.ThrowIfCancellationRequested();
@@ -49,6 +50,10 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
                 await ModifyOriginalResponseAsync(x => x.Content = "배틀 시작 전에 강제 종료되었어요.");
             else
                 await SendAsync(thread, "🛑 전투가 강제 종료되었습니다." + (aLabel is null || bLabel is null ? "" : "\n⚔️ **" + aLabel + " vs " + bLabel + "**"));
+        }
+        catch (OperationCanceledException) when (thread is null)
+        {
+            await ModifyOriginalResponseAsync(x => x.Content = "캐릭터 랭킹 조회 시간이 초과되어 배틀을 시작하지 못했어요. 잠시 후 다시 시도해주세요.");
         }
         catch (InvalidDataException ex) { if (thread is null) await ModifyOriginalResponseAsync(x => x.Content = ex.Message); else await SendAsync(thread, "배틀을 시작할 수 없어요: " + ex.Message); }
         catch (Exception ex) { Console.WriteLine("[배틀] 진행 실패: " + ex.GetType().Name); if (thread is null) await ModifyOriginalResponseAsync(x => x.Content = "배틀을 시작하지 못했어요. 잠시 후 다시 시도해주세요."); else await SendAsync(thread, "배틀 진행 중 오류가 발생해 중단했어요."); }

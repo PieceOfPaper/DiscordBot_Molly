@@ -41,6 +41,12 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
+        if (MobiRankBrowser.IsWarmingUp)
+        {
+            await RespondAsync(MobiRankBrowser.WarmingUpMessage, ephemeral: true);
+            return;
+        }
+
         var guildId = Context.Guild?.Id ?? 0;
         if (MobiRankBrowser.IsFullRunning(guildId))
         {

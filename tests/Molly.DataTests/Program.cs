@@ -252,6 +252,21 @@ Parallel.For(0, 50, rankingIndex =>
 });
 Check(reservedRankBrowsers == 1 && rankBrowserReservation.isRunning,
     "랭킹 브라우저 컨테이너는 동시 요청에서 한 번만 예약");
+var warmUpGate = new TaskCompletionSource();
+var warmedBrowsers = new System.Collections.Concurrent.ConcurrentQueue<int>();
+Check(!MobiRankBrowser.IsWarmingUp, "랭킹 브라우저 예열 전에는 명령을 막지 않음");
+var warmUpTask = MobiRankBrowser.WarmUpAsync(async (container, _) =>
+{
+    warmedBrowsers.Enqueue(container.index);
+    if (container.index == 0) await warmUpGate.Task;
+}, default);
+Check(MobiRankBrowser.IsWarmingUp && MobiRankBrowser.IsFullRunning(1), "랭킹 브라우저 예열 중에는 대기 안내 대상이고 풀 전체가 예약됨");
+warmUpGate.SetResult();
+await warmUpTask;
+Check(!MobiRankBrowser.IsWarmingUp && !MobiRankBrowser.IsFullRunning(1) && warmedBrowsers.SequenceEqual([0, 1]),
+    "랭킹 브라우저 예열이 끝나면 예약을 풀고 명령을 받음");
+await MobiRankBrowser.WarmUpAsync((_, _) => throw new Exception("다시 실행되면 안 됨"), default);
+Check(!MobiRankBrowser.IsWarmingUp, "랭킹 브라우저 예열은 한 번만 실행");
 Check(NunchiTargetParser.ParseMentions("<@12345678901234567> <@!23456789012345678> <@12345678901234567>").SequenceEqual(new ulong[] { 12345678901234567, 23456789012345678 }), "눈치게임 대상자 멘션을 중복 없이 읽기");
 var nunchi = new NunchiRound([1, 2, 3, 4, 5]);
 Check(nunchi.Submit(1, "1", DateTimeOffset.UnixEpoch) is null && nunchi.Submit(2, "2", DateTimeOffset.UnixEpoch.AddSeconds(1)) is null &&

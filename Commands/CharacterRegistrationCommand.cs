@@ -25,6 +25,12 @@ public sealed class CharacterRegistrationCommand : InteractionModuleBase<SocketI
             return;
         }
 
+        if (MobiRankBrowser.IsWarmingUp)
+        {
+            await RespondAsync(MobiRankBrowser.WarmingUpMessage, ephemeral: true);
+            return;
+        }
+
         var guildId = Context.Guild?.Id ?? 0;
         if (MobiRankBrowser.IsFullRunning(guildId))
         {

@@ -143,6 +143,9 @@ class Program
             appCts.Cancel();
         };
         AppDomain.CurrentDomain.ProcessExit += (_, __) => appCts.Cancel();
+        // 첫 랭킹 조회가 브라우저 실행·보안 검사로 1분 넘게 걸리지 않도록 시작하자마자 예열합니다.
+        // 예열이 끝날 때까지 랭킹·캐릭터등록·배틀 명령은 대기 안내로 응답합니다.
+        _ = MobiRankBrowser.WarmUpAsync(appCts.Token);
 
         MollyDataPaths.Configure(m_Config);
         MobiLifeOptions mobiLifeOptions;
