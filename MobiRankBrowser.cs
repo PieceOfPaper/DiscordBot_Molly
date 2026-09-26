@@ -385,8 +385,11 @@ public static class MobiRankBrowser
     private static readonly object m_BrowserLock = new();
 
     // 예열 중에는 랭킹을 쓰는 명령(랭킹·캐릭터등록·배틀)이 대기 안내로 응답합니다.
-    // 첫 브라우저가 준비되면(또는 재시도까지 모두 실패하면) 명령을 받기 시작하고, 나머지 브라우저는 예약된 채로 이어서 예열합니다.
+    // 브라우저가 준비되면(또는 재시도까지 모두 실패하면) 명령을 받기 시작합니다.
     // 예열이 실패해도 명령을 막지 않고, 요청 시 브라우저를 초기화하는 기존 흐름으로 넘어갑니다.
+    // 512MB Lightsail에서 Chromium 두 개를 상시 띄우면 스왑으로 봇 전체(Discord 응답 포함)가 느려지므로
+    // 예열은 첫 브라우저만 하고, 나머지는 동시 요청이 생겼을 때 띄웁니다.
+    private const int WARM_UP_BROWSER_COUNT = 1;
     private const int WARM_UP_ATTEMPTS = 3;
     private static readonly TimeSpan s_WarmUpRetryDelay = TimeSpan.FromSeconds(10);
     private const int WARM_UP_NOT_STARTED = 0, WARM_UP_RUNNING = 1, WARM_UP_DONE = 2;
@@ -407,7 +410,7 @@ public static class MobiRankBrowser
         var containers = new List<BrowserContainer>();
         lock (m_BrowserLock)
         {
-            for (var i = 0; i < BROWSER_COUNT; i ++)
+            for (var i = 0; i < WARM_UP_BROWSER_COUNT; i ++)
             {
                 var container = GetOrAddContainer(i);
                 if (container.TryReserve(4))
