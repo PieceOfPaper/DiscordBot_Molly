@@ -113,17 +113,21 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         try { await channel.SendMessageAsync(text, allowedMentions: allowedMentions); }
         catch { await channel.SendMessageAsync(text, allowedMentions: allowedMentions); }
     }
-    private static IEnumerable<string> Format(IEnumerable<BattleEvent> events)
+    /// <summary>전투 이벤트를 행동 단위 Discord 메시지로 묶는다. 테스트에서 로그 문구를 검사할 수 있도록 공개한다.</summary>
+    public static IEnumerable<string> Format(IEnumerable<BattleEvent> events)
     {
         var current = new List<string>();
         var hasActionHeader = false;
         var hasTurnStatusHeader = false;
         var pendingCritical = false;
+        // 턴 시작 상태 효과 묶음의 제목은 그 턴의 주인이다. 지속 피해 이벤트의 Actor는 피해를 건 쪽이라 제목에 쓰면 상대의 상태처럼 보인다.
+        string? turnOwner = null;
         foreach (var x in events)
         {
             if (x.Type is "BattleStarted" or "BattleEnded") continue;
             if (x.Type == "TurnStarted")
             {
+                turnOwner = x.Actor;
                 if (current.Count > 0) { yield return string.Join("\n", current); current.Clear(); hasActionHeader = false; hasTurnStatusHeader = false; }
                 continue;
             }
@@ -145,11 +149,11 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
             if (x.Type == "CriticalHit") { pendingCritical = true; continue; }
             var text = x.Type switch
             {
-                "LifeSkillNarration" => x.Detail, "LifeSkillEffect" => (pendingCritical ? "💥 **치명타!** " : "") + x.Detail, "StatusCleansed" => "🌿 " + x.Actor + "의 **" + x.Detail + "** 상태가 사라졌습니다.", "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AttackEvaded" => "💨 " + x.Target + "은(는) 상대의 시야에서 벗어나 공격을 흘려냈습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "AdditionalDamage" => "✨ " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해를 입혔습니다!", "StatusDamage" => "🌒 **" + x.Detail + "!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 지속 피해를 입혔습니다!", "BreakGaugeChanged" => x.Target + "의 브레이크 게이지가 " + x.Amount + "/" + x.Detail + "이 되었습니다.", "BreakActivated" => "💢 " + x.Target + "이(가) **브레이크** 상태에 빠졌습니다!", "BreakActionLost" => "💢 " + x.Target + "은(는) 브레이크로 행동하지 못했습니다!", "BreakImmune" => "🛡️ " + x.Target + "은(는) 브레이크를 버텨냈습니다!", "CooldownReduced" => x.Actor + "의 스킬 쿨다운이 " + x.Detail + "턴씩 감소했습니다.", "ResourceChanged" => x.Actor + "의 " + x.Detail, "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "StatusApplied" => x.Actor + "에게 **" + x.Detail + "** 상태가 적용되었습니다!" + (x.Amount is > 0 ? " (" + x.Amount + "턴)" : ""), "StatusExpired" => x.Actor + "의 **" + x.Detail + "** 상태가 풀렸습니다.", "StatusConsumed" => x.Actor + "의 **" + x.Detail + "** 상태가 공격에 소모되었습니다.", "StatusHeal" => "💚 **" + x.Detail + "!** " + x.Target + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
+                "LifeSkillNarration" => x.Detail, "LifeSkillEffect" => (pendingCritical ? "💥 **치명타!** " : "") + x.Detail, "StatusCleansed" => "🌿 " + x.Actor + "의 **" + x.Detail + "** 상태가 사라졌습니다.", "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AttackEvaded" => "💨 " + x.Target + "은(는) 상대의 시야에서 벗어나 공격을 흘려냈습니다!", "ShieldAbsorbed" => "🛡️ " + x.Target + "의 **" + x.Detail + "**이(가) " + x.Amount?.ToString("N0") + "의 피해를 흡수했습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "AdditionalDamage" => "✨ " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해를 입혔습니다!", "StatusDamage" => "🌒 **" + x.Detail + "!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 지속 피해를 입혔습니다!", "BreakGaugeChanged" => x.Target + "의 브레이크 게이지가 " + x.Amount + "/" + x.Detail + "이 되었습니다.", "BreakActivated" => "💢 " + x.Target + "이(가) **브레이크** 상태에 빠졌습니다!", "BreakActionLost" => "💢 " + x.Target + "은(는) 브레이크로 행동하지 못했습니다!", "BreakImmune" => "🛡️ " + x.Target + "은(는) 브레이크를 버텨냈습니다!", "CooldownReduced" => x.Actor + "의 스킬 쿨다운이 " + x.Detail + "턴씩 감소했습니다.", "ResourceChanged" => x.Actor + "의 " + x.Detail, "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "StatusApplied" => x.Actor + "에게 **" + x.Detail + "** 상태가 적용되었습니다!" + (x.Amount is > 0 ? " (" + x.Amount + "턴)" : ""), "StatusExpired" => x.Actor + "의 **" + x.Detail + "** 상태가 풀렸습니다.", "StatusConsumed" => x.Actor + "의 **" + x.Detail + "** 상태가 공격에 소모되었습니다.", "StatusHeal" => "💚 **" + x.Detail + "!** " + x.Target + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
             };
             pendingCritical = false;
             var isTurnStatus = !hasActionHeader && (x.Type is "StatusDamage" or "StatusHeal" or "StatusExpired" or "HpStatus" or "BreakActionLost");
-            if (isTurnStatus && !hasTurnStatusHeader) { current.Add("⏳ **" + x.Actor + "의 상태 효과**"); hasTurnStatusHeader = true; }
+            if (isTurnStatus && !hasTurnStatusHeader) { current.Add("⏳ **" + (turnOwner ?? x.Actor) + "의 상태 효과**"); hasTurnStatusHeader = true; }
             if (text is not null) current.Add((hasActionHeader || isTurnStatus ? "　↳ " : "") + text);
         }
         if (current.Count > 0) yield return string.Join("\n", current);

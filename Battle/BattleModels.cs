@@ -57,6 +57,8 @@ public sealed record BattleStatus(string Id, string Name, string EffectType, dou
     public IReadOnlySet<string> SynergyTypes { get; init; } = new HashSet<string>(StringComparer.Ordinal);
     /// <summary>true이면 이미 보유 중일 때 다시 받으면 남은 턴에 지속턴을 더한다. false이면 남은 턴과 새 지속턴 중 큰 값으로 갱신한다.</summary>
     public bool AccumulatesDuration { get; init; }
+    /// <summary>턴당자원증가 효과가 보유자의 턴 시작마다 채울 배틀 자원 ID(힐러 라이프 링크의 빛의 결정체).</summary>
+    public string? TargetResourceId { get; init; }
     public IReadOnlyList<string> EffectTypes => EffectType.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
     /// <summary>복합 상태는 시트에서 <c>효과A|효과B</c>로 선언한다.</summary>
     public bool HasEffectType(string effectType) => EffectTypes.Contains(effectType, StringComparer.Ordinal);

@@ -27,9 +27,11 @@ public sealed class BattleEngine
             // 따라서 지속턴 N은 "적용된 행동을 제외한 보유자의 다음 N회 행동"이다. 상대에게 건 디버프는 상대의 턴으로 센다.
             actor.TickResources();
             actor.TickStatuses();
-            var periodic = actor.TickPeriodicEffects(rules, events);
+            var periodic = actor.TickPeriodicEffects(rules, events, damage => AbsorbShield(actor, target, damage, random, rules, events));
             if (periodic.Damaged && actor.Hp > 0 || periodic.Healed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
             if (actor.Hp <= 0) break;
+            // 턴당자원증가(힐러 라이프 링크 연결 중 빛의 결정체)는 행동을 잃는 턴에도 턴 시작마다 쌓인다.
+            foreach (var (resourceId, amount) in actor.TurnResourceGains()) AddResource(actor, target, resourceId, amount, random, rules, events);
             var actionBroken = actor.HasStatusEffect("브레이크");
             if (actionBroken)
             {
@@ -57,6 +59,8 @@ public sealed class BattleEngine
                 events.Add(new("NormalAttackUsed", actor.Name, target.Name));
                 var normalAttackMultiplier = rules.NormalAttackMultiplier * (1d + actor.StatusValue("기본공격피해증가"));
                 targetDamaged = Attack(actor, target, actor.Attack * normalAttackMultiplier * surpriseMultiplier, 1, random, rules, events, normalAttack: true);
+                // 힐러 전이의 "기본 공격 시"처럼 일반 공격이 실제로 피해를 줬을 때 반응하는 패시브를 발동한다.
+                if (targetDamaged && actor.Hp > 0 && target.Hp > 0) FirePassiveTrigger(actor, target, "기본공격적중시", null, null, random, rules, events);
             }
             else
             {
@@ -488,11 +492,12 @@ public sealed class BattleEngine
                     effect.FixedValue > 0 ? effect.FixedValue * rules.FixedDamageScale : actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier / Math.Max(1, effect.Count),
                     effect.Message ?? periodicStatusId);
                 break;
-            case "지속회복" when effect.StatusId is { } regenStatusId && effect.Duration > 0 && effect.FixedValue > 0:
+            case "지속회복" when effect.StatusId is { } regenStatusId && effect.Duration > 0 && ResolveFixedAmount(actor, effect) > 0:
                 // 고양·활력처럼 보유자 턴마다 고정량을 회복한다. 회복량 증가는 부여 시점의 시전자 기준으로 고정한다.
                 // 지속회복의 틱은 회복적용시 트리거를 발생시키지 않는다(활력이 자기 회복으로 다시 발동하는 것을 막는다).
+                // 수치참조가 있으면 부여 시점의 참조 결과를 턴당 회복량으로 고정한다.
                 receiver.ApplyStatus(regenStatusId, effect.Duration, skill?.Id ?? "passive", events, harmful: !ReferenceEquals(receiver, actor));
-                receiver.ApplyPeriodicEffect(regenStatusId, actor.Name, effect.FixedValue * rules.FixedDamageScale * (1d + actor.StatusValue("회복량증가")), effect.Message ?? regenStatusId, heal: true);
+                receiver.ApplyPeriodicEffect(regenStatusId, actor.Name, ResolveFixedAmount(actor, effect) * rules.FixedDamageScale * (1d + actor.StatusValue("회복량증가")), effect.Message ?? regenStatusId, heal: true);
                 break;
             case "조건부피해증가":
                 // ExecuteEffects가 스킬 실행 전에 판정해 피해 배율로 반영한다. 행 자체는 아무것도 하지 않는다.
@@ -501,14 +506,17 @@ public sealed class BattleEngine
                 if (random.NextDouble() < effect.Chance)
                 {
                     var damage = ResolveFixedAmount(actor, effect);
-                    ApplyAdditionalDamage(actor, receiver, damage, events);
+                    ApplyAdditionalDamage(actor, receiver, damage, random, rules, events);
                     resolution.TargetDamaged = true;
                 }
                 break;
             case "회복":
             {
                 // 피해와 동일한 구조: 다단 효과의 총 회복량은 유지하고 타격마다 나눈다.
-                var totalBaseHeal = (effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * HealMultiplier(skill, rules)) * (1d + actor.StatusValue("회복량증가"));
+                // 수치참조가 있으면 고정값 대신 참조 결과를 1회 회복량으로 쓴다(루미너스 샤드: 빛의 결정 1개당 회복). 참조 결과가 0이면 회복하지 않는다.
+                var fixedHeal = effect.NumericReferenceId is not null ? ResolveFixedAmount(actor, effect) : effect.FixedValue;
+                if (effect.NumericReferenceId is not null && fixedHeal <= 0) break;
+                var totalBaseHeal = (fixedHeal > 0 ? fixedHeal * effect.Count * rules.FixedDamageScale : actor.Attack * HealMultiplier(skill, rules)) * (1d + actor.StatusValue("회복량증가"));
                 var healPerTick = totalBaseHeal / effect.Count;
                 var totalHealed = 0;
                 // 활력의 "체력이 40% 미만인 아군을 회복시키면"은 회복 전 체력으로 판정한다.
@@ -557,6 +565,14 @@ public sealed class BattleEngine
                 break;
             case "쿨다운감소":
                 receiver.ReduceCooldowns(Math.Max(1, ResolveFixedAmount(receiver, effect)), events);
+                break;
+            case "상태해제" when effect.StatusId is { } releasedStatusId:
+                // 연결을 끊는 효과(서먼 스프라이트가 라이프 링크 해제). 보유 중일 때만 제거하고 해제 로그를 남긴다. "상태만료 시" 파생은 발동하지 않는다.
+                if (receiver.Statuses.ContainsKey(releasedStatusId))
+                {
+                    receiver.RemoveStatus(releasedStatusId);
+                    events.Add(new("StatusExpired", receiver.Name, Detail: receiver.StatusDefinitions.GetValueOrDefault(releasedStatusId)?.Name ?? releasedStatusId));
+                }
                 break;
             case "다음행동지정" when effect.StatusId is { } scheduledSkillId:
                 // 패시브가 다음 주요 행동을 특정 스킬로 강제 지정한다(즉흥 연주처럼 "즉시 1회 연주"를 단순화한 표현).
@@ -616,12 +632,35 @@ public sealed class BattleEngine
         };
     }
 
-    private static void ApplyAdditionalDamage(Fighter actor, Fighter target, int amount, List<BattleEvent> events)
+    private static void ApplyAdditionalDamage(Fighter actor, Fighter target, int amount, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         var damage = Math.Max(1, amount);
-        target.Hp = Math.Max(0, target.Hp - damage);
         events.Add(new("AdditionalDamage", actor.Name, target.Name, damage));
+        target.Hp = Math.Max(0, target.Hp - AbsorbShield(target, actor, damage, random, rules, events));
         if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+    }
+
+    /// <summary>
+    /// 분류=보호막 자원이 피해를 먼저 흡수하고 HP에 들어갈 남은 피해를 돌려준다(힐러 오든 실드·프로텍션).
+    /// 보호막 자원 값은 화면 흡수량이며 fixed_damage_scale을 곱한 만큼 배틀 HP 피해를 막는다. 모두 깎이면 자원소진시 패시브를 발동한다.
+    /// </summary>
+    private static int AbsorbShield(Fighter target, Fighter attacker, int damage, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        var remaining = damage;
+        foreach (var shield in target.ResourceDefinitions.Values.Where(x => x.Kind == "보호막").OrderBy(x => x.Id, StringComparer.Ordinal))
+        {
+            var value = target.Resources.GetValueOrDefault(shield.Id);
+            if (remaining <= 0 || value <= 0) continue;
+            var capacity = (int)Math.Floor(value * rules.FixedDamageScale);
+            var absorbed = Math.Min(remaining, capacity);
+            remaining -= absorbed;
+            // 흡수 한도를 모두 쓰면 환산 반올림으로 남는 자투리 없이 보호막을 없앤다.
+            var left = absorbed >= capacity ? 0 : Math.Max(0, value - (int)Math.Ceiling(absorbed / rules.FixedDamageScale));
+            target.Resources[shield.Id] = left;
+            events.Add(new("ShieldAbsorbed", attacker.Name, target.Name, absorbed, shield.Name));
+            if (left == 0) FirePassiveTrigger(target, attacker, "자원소진시", null, shield.Id, random, rules, events);
+        }
+        return remaining;
     }
 
     private static void ApplyBreakDamage(Fighter actor, Fighter target, int amount, IBattleRandom random, Rules rules, List<BattleEvent> events)
@@ -661,6 +700,8 @@ public sealed class BattleEngine
     private static void ChangeResource(Fighter fighter, Fighter opponent, BattleResource definition, int value, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         var previous = fighter.Resources.GetValueOrDefault(definition.Id);
+        // 중첩방식=개별(힐러 소생)은 중첩마다 남은 턴을 따로 센다. 늘면 새 중첩을, 줄면 가장 먼저 끝날 중첩부터 지우고, 최대 중첩에서 다시 얻으면 가장 오래된 중첩의 턴을 새로 채운다.
+        if (definition.Stacking == "개별" && definition.Duration > 0) fighter.UpdateStackTurns(definition, previous, value);
         if (previous == value)
         {
             // 중첩방식=교체인 지속 자원은 보유 중에 다시 얻으면 지속턴만 새로 채운다(집중 중 일섬으로 재진입, 드라이빙 포스 판정 창 연장).
@@ -669,7 +710,7 @@ public sealed class BattleEngine
             return;
         }
         fighter.Resources[definition.Id] = value;
-        if (definition.Duration > 0) fighter.ResourceTurns[definition.Id] = definition.Duration;
+        if (definition.Duration > 0 && definition.Stacking != "개별") fighter.ResourceTurns[definition.Id] = definition.Duration;
         events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + (value > previous ? "+" : "") + (value - previous) + " (현재 " + value + ")"));
         // 자원 변화 자체를 구독하는 패시브(악상 획득 시, 리듬이 임계값에 도달했을 때, 템포가 소진됐을 때 등)를 발동한다.
         // 상호배타·1개 상한 자원(악상 등)은 이미 보유 중이면 재설정이 무시되므로(위 previous==value 조기 반환) 매 증가마다 발동해도 실질적으로는 최초 획득 때만 발동한다.
@@ -745,17 +786,21 @@ public sealed class BattleEngine
                 FirePassiveTrigger(actor, target, "치명타적중시", sourceSkill?.Id, null, random, rules, events);
             }
             else FirePassiveTrigger(actor, target, "치명타미적중시", sourceSkill?.Id, null, random, rules, events);
-            var damage = Math.Max(1, (int)Math.Round(amount)); target.Hp = Math.Max(0, target.Hp - damage);
+            // DamageDealt는 보호막 흡수 전 피해량이다. 보호막이 막은 양은 뒤따르는 ShieldAbsorbed로 알린다.
+            var damage = Math.Max(1, (int)Math.Round(amount));
             damaged = true;
             events.Add(new("DamageDealt", actor.Name, target.Name, damage));
+            target.Hp = Math.Max(0, target.Hp - AbsorbShield(target, actor, damage, random, rules, events));
             if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
             if (target.Hp > 0 && random.NextDouble() < rules.AdditionalHitChance + actor.StatusValue("추가타확률증가"))
             {
                 // 추가타는 이미 확정된 피해의 일부만 더하고, 치명타 판정을 따로 하지 않습니다.
                 var additionalDamage = Math.Max(1, (int)Math.Round(damage * rules.AdditionalHitDamageRatio));
-                target.Hp = Math.Max(0, target.Hp - additionalDamage);
                 events.Add(new("AdditionalHit", actor.Name, target.Name, additionalDamage));
+                target.Hp = Math.Max(0, target.Hp - AbsorbShield(target, actor, additionalDamage, random, rules, events));
                 if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+                // 힐러 소생의 "공격이 추가타로 적중하면"에 반응한다. 대상스킬ID를 지정하면 그 스킬의 추가타에만 반응한다.
+                if (target.Hp > 0 && actor.Hp > 0) FirePassiveTrigger(actor, target, "추가타적중시", sourceSkill?.Id, null, random, rules, events);
             }
         }
         // 선수필승처럼 "상대에게 먼저 공격받았는지"에 반응하는 패시브를 피격자 관점에서 발동한다.
@@ -841,6 +886,10 @@ public sealed class BattleEngine
             var synergy = matching.Where(status => status.IsSynergy(effectType)).Select(status => ScaledValue(status, effectType)).DefaultIfEmpty(0d).Max();
             return matching.Where(status => !status.IsSynergy(effectType)).Sum(status => ScaledValue(status, effectType)) + synergy;
         }
+        /// <summary>보유 중인 턴당자원증가 상태가 이번 턴에 채울 자원과 양. 값에 중첩자원ID 배율을 적용하고 반올림한다.</summary>
+        public IReadOnlyList<(string ResourceId, int Amount)> TurnResourceGains() => ActiveStatusIds().Select(id => StatusDefinitions.GetValueOrDefault(id))
+            .Where(status => status is not null && status.HasEffectType("턴당자원증가") && status.TargetResourceId is not null)
+            .Select(status => (status!.TargetResourceId!, (int)Math.Round(ScaledValue(status, "턴당자원증가")))).Where(x => x.Item2 > 0).ToArray();
         public bool HasStatusEffect(string effectType) => Statuses.Keys.Concat(PermanentStatuses).Any(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType(effectType));
         public double MelodySkillDamageBonus(BattleSkill? skill)
         {
@@ -872,11 +921,32 @@ public sealed class BattleEngine
         public void TickResources()
         {
             foreach (var id in ResourceTurns.Keys.ToArray()) ResourceTurns[id] = Math.Max(0, ResourceTurns[id] - 1);
+            foreach (var turns in StackTurns.Values) for (var i = 0; i < turns.Count; i++) turns[i] = Math.Max(0, turns[i] - 1);
+        }
+        // 중첩방식=개별 자원의 중첩별 남은 턴.
+        private Dictionary<string, List<int>> StackTurns { get; } = new(StringComparer.Ordinal);
+        public void UpdateStackTurns(BattleResource definition, int previous, int value)
+        {
+            if (!StackTurns.TryGetValue(definition.Id, out var turns)) StackTurns[definition.Id] = turns = [];
+            turns.Sort();
+            if (value > previous) turns.AddRange(Enumerable.Repeat(definition.Duration, value - previous));
+            else if (value < previous) turns.RemoveRange(0, Math.Min(turns.Count, previous - value));
+            else if (value > 0 && turns.Count > 0) turns[0] = definition.Duration;
         }
         /// <returns>지속턴 만료로 사라진 자원 ID. 호출자가 자원소진시 패시브를 발동한다(예: 템포가 시간 초과로 사라질 때).</returns>
         public IReadOnlyList<string> ExpireResources(List<BattleEvent> events)
         {
             var expired = new List<string>();
+            foreach (var (id, turns) in StackTurns)
+            {
+                // 이번 행동까지 적용한 뒤 턴이 다 된 중첩만 빠진다. 모두 빠지면 자원소진시 대상이다.
+                var ended = turns.RemoveAll(x => x <= 0);
+                if (ended == 0 || !ResourceDefinitions.TryGetValue(id, out var stacked)) continue;
+                var left = Math.Max(0, Resources.GetValueOrDefault(id) - ended);
+                Resources[id] = left;
+                events.Add(new("ResourceChanged", Name, Detail: stacked.Name + " -" + ended + " (현재 " + left + ")"));
+                if (left == 0) expired.Add(id);
+            }
             foreach (var id in ResourceTurns.Keys.ToArray())
             {
                 // 행동 중 다시 얻어 지속턴이 새로 채워진 자원은 남는다.
@@ -930,7 +1000,8 @@ public sealed class BattleEngine
         }
         public void ApplyPeriodicEffect(string statusId, string sourceName, double baseAmount, string message, bool heal = false)
             => PeriodicEffects.TryAdd(statusId, new PeriodicEffect(sourceName, baseAmount, message, heal));
-        public (bool Damaged, bool Healed) TickPeriodicEffects(Rules rules, List<BattleEvent> events)
+        /// <param name="absorbShield">지속 피해를 보호막으로 먼저 흡수하고 HP에 들어갈 남은 피해를 돌려준다.</param>
+        public (bool Damaged, bool Healed) TickPeriodicEffects(Rules rules, List<BattleEvent> events, Func<int, int> absorbShield)
         {
             var damaged = false;
             var healed = false;
@@ -947,11 +1018,13 @@ public sealed class BattleEngine
                     continue;
                 }
                 var incoming = Math.Max(.1d, 1d + StatusValue("받는피해증가") - StatusValue("받는피해감소"));
-                var amount = Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount - Defense * rules.DefenseCoefficient) * incoming));
-                Hp = Math.Max(0, Hp - amount);
+                // 체력비례지속피해증폭(힐러 쇠약): 틱 직전 HP 비율에 비례해 이 지속 피해만 키운다. 값 1이면 체력이 가득할 때 ×2.
+                var hpScaling = StatusDefinitions.GetValueOrDefault(statusId) is { } periodicStatus && periodicStatus.HasEffectType("체력비례지속피해증폭") ? 1d + periodicStatus.ValueOf("체력비례지속피해증폭") * Hp / MaxHp : 1d;
+                var amount = Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount - Defense * rules.DefenseCoefficient) * incoming * hpScaling));
                 damaged = true;
                 var name = StatusDefinitions.GetValueOrDefault(statusId)?.Name ?? periodic.Message;
                 events.Add(new("StatusDamage", periodic.SourceName, Name, amount, name));
+                Hp = Math.Max(0, Hp - absorbShield(amount));
                 if (Hp == 0) events.Add(new("CharacterDefeated", periodic.SourceName, Name));
             }
             return (damaged, healed);

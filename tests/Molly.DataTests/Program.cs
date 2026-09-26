@@ -183,14 +183,14 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
         Console.WriteLine($"{c.Name,-10} 승 {w,5}/{m,-5} ({(double)w / m:P1})  무 {d,4} ({(double)d / m:P1})");
     }
     Console.WriteLine();
-    Console.WriteLine("=== 클래스별 스킬 사용 빈도와 사용 전투 승률 (상위 8개) ===");
+    Console.WriteLine("=== 클래스별 스킬 사용 빈도와 사용 전투 승률 (상위 12개) ===");
     foreach (var c in classes)
     {
         var uses = skillUses[c.Id];
         var total = uses.Values.Sum();
         if (total == 0) { Console.WriteLine($"[{c.Name}] 사용 스킬 없음"); continue; }
         Console.WriteLine($"[{c.Name}] 총 {total}회, 클래스 승률 {(double)wins[c.Id] / matches[c.Id]:P1}");
-        foreach (var (skill, count) in uses.OrderByDescending(x => x.Value).Take(8))
+        foreach (var (skill, count) in uses.OrderByDescending(x => x.Value).Take(12))
         {
             var (usedBattles, wonBattles) = skillBattles[c.Id][skill];
             Console.WriteLine($"  {skill,-16} {count,6}회 ({(double)count / total:P1})  사용 전투 {usedBattles,5}/{matches[c.Id],-5} 승률 {(double)wonBattles / usedBattles:P1}");
@@ -468,6 +468,7 @@ await MobiLifeTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await KeywordMarketTests.RunAsync();
 CrossbowBattleTests.Run();
+HealerBattleTests.Run();
 LifeSkillBattleTests.Run();
 var battleRules = new Dictionary<string, BattleRule>
 {
@@ -1375,6 +1376,104 @@ var feignBothSnapshot = new BattleDataSnapshot { Rules = RulesWith(("base_max_hp
     Skills = new Dictionary<string, BattleSkill> { ["feign_both"] = feignBoth, ["rising_both"] = risingBoth }, Statuses = new Dictionary<string, BattleStatus> { ["feign_both_state"] = new("feign_both_state", "죽은 척", "받는피해감소", .4, "") },
     Derivations = [new BattleDerivation("both_expire", "feign_both", "rising_both", "조건", 0, 1, "상태효과보유", "feign_both_state", false, "상태만료 시", 100), new BattleDerivation("both_reuse", "feign_both", "rising_both", "조건", 0, 1, "상태효과보유", "feign_both_state", false, "재사용 시", 100)], LoadedAt = DateTimeOffset.UtcNow };
 Check(Duel(feignBothSnapshot).Events.Count(x => x.Type == "SkillUsed" && x.Detail == "라이징 윈드밀") == 1, "죽은 척을 재사용으로 끝내면 라이징 윈드밀은 한 번만 발동한다");
+
+// 힐러 보호막: 분류=보호막 자원은 화면 흡수량 × fixed_damage_scale만큼 지속 피해·일반 공격을 먼저 흡수하고, 모두 깎이면 자원소진시가 발동한다.
+var shieldRules = RulesWith(("base_max_hp", "1000"), ("base_attack", "100"), ("base_defense", "0"), ("fixed_damage_scale", "0.5"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "4"));
+var shieldResources = new Dictionary<string, BattleResource> { ["test_shield"] = new("test_shield", "보호막", "보호막", 0, 0, 0, "가산"), ["test_shield_broken"] = new("test_shield_broken", "보호막 파괴", "자원", 1, 0, 0, "교체") };
+var shieldBrokenPassive = new BattlePassive("test_shield_passive", true, [new BattleEffect("tsp_01", 1, "자원설정", "자신", 1, 1, 1, 0, "test_shield_broken", 0, null, null, null, null, null, null, null, null, 1d, "자원소진시", null, "test_shield")]);
+var shieldSnapshot = new BattleDataSnapshot
+{
+    Rules = shieldRules,
+    Classes = new Dictionary<string, BattleClass> { ["guard"] = new("guard", "보호막", ["test_guard"], PassiveIds: ["test_shield_passive"]), ["curse"] = new("curse", "저주", ["test_curse"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["test_guard"] = new("test_guard", "보호", "일반", null, true, 99, 0, 1, 1, [Fx("test_guard_1", 1, "자원증가", "자신", fixedValue: 100, status: "test_shield")]), ["test_curse"] = new("test_curse", "저주", "일반", null, true, 99, 0, 1, 1, [Fx("test_curse_1", 1, "지속피해", "상대", fixedValue: 40, duration: 2, status: "test_curse_dot")]) },
+    Passives = new Dictionary<string, BattlePassive> { ["test_shield_passive"] = shieldBrokenPassive }, Resources = shieldResources,
+    Statuses = new Dictionary<string, BattleStatus> { ["test_curse_dot"] = new("test_curse_dot", "저주", "없음", 0, "") }, LoadedAt = DateTimeOffset.UtcNow
+};
+var shieldBattle = Duel(shieldSnapshot, "guard", "curse");
+Check(shieldBattle.Events.Where(x => x.Type == "ShieldAbsorbed" && x.Target == "A").Select(x => x.Amount).SequenceEqual(new int?[] { 20, 30 })
+    && shieldBattle.FighterAHp == 900 && shieldBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "보호막 파괴 +1 (현재 1)"),
+    "보호막 100(×0.5=50)은 지속 피해 20을 흡수한 뒤 남은 30으로 일반 공격 130 중 30만 막고, 모두 깎이면 자원소진시 패시브를 발동한다");
+
+// 기본공격적중시는 일반 공격이 피해를 줬을 때만, 추가타적중시는 스킬·일반 공격의 추가타마다 발동한다.
+var hitTriggerRules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "3"), ("additional_hit_chance", "1"));
+var hitTriggerResources = new Dictionary<string, BattleResource> { ["basic_hits"] = new("basic_hits", "기본 공격 적중", "중첩", 0, 0, 0, "가산"), ["extra_hits"] = new("extra_hits", "추가타 적중", "중첩", 0, 0, 0, "가산") };
+var hitTriggerPassive = new BattlePassive("test_hit_trigger", true,
+[
+    new BattleEffect("tht_01", 1, "자원증가", "자신", 1, 1, 1, 0, "basic_hits", 0, null, null, null, null, null, null, null, null, 1d, "기본공격적중시"),
+    new BattleEffect("tht_02", 2, "자원증가", "자신", 1, 1, 1, 0, "extra_hits", 0, null, null, null, null, null, null, null, null, 1d, "추가타적중시")
+]);
+var hitTriggerSnapshot = new BattleDataSnapshot
+{
+    Rules = hitTriggerRules,
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "적중", ["test_strike"], PassiveIds: ["test_hit_trigger"]), ["idle"] = idleClass },
+    Skills = new Dictionary<string, BattleSkill> { ["test_strike"] = new("test_strike", "일격", "일반", null, true, 99, 0, 1, 1, [Fx("test_strike_1", 1, "피해", "상대", fixedValue: 10)]) },
+    Passives = new Dictionary<string, BattlePassive> { ["test_hit_trigger"] = hitTriggerPassive }, Resources = hitTriggerResources, LoadedAt = DateTimeOffset.UtcNow
+};
+var hitTriggerEvents = Duel(hitTriggerSnapshot).Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail).ToArray();
+Check(hitTriggerEvents.SequenceEqual(new[] { "추가타 적중 +1 (현재 1)", "추가타 적중 +1 (현재 2)", "기본 공격 적중 +1 (현재 1)" }),
+    "스킬 추가타와 일반 공격 추가타는 추가타적중시를 두 번, 일반 공격 적중은 기본공격적중시를 한 번만 발동한다");
+
+// 체력비례지속피해증폭(힐러 쇠약): 틱 직전 HP 비율만큼 그 지속 피해를 키운다(값 1 → 가득 찬 체력에서 ×2).
+var weakenRules = RulesWith(("base_max_hp", "1000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "5"));
+var weakenSkill = new BattleSkill("weaken", "쇠약", "일반", null, true, 99, 0, 1, 1, [Fx("weaken_1", 1, "지속피해", "상대", fixedValue: 100, duration: 2, status: "weaken_dot")]);
+var weakenSnapshot = new BattleDataSnapshot { Rules = weakenRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "쇠약", ["weaken"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["weaken"] = weakenSkill },
+    Statuses = new Dictionary<string, BattleStatus> { ["weaken_dot"] = new("weaken_dot", "쇠약", "주는피해감소|체력비례지속피해증폭", 0, "") { Values = [0, 1] } }, LoadedAt = DateTimeOffset.UtcNow };
+Check(Duel(weakenSnapshot).Events.Where(x => x.Type == "StatusDamage" && x.Target == "B").Select(x => x.Amount).SequenceEqual(new int?[] { 200, 175 }),
+    "쇠약 100은 체력이 가득할 때 200, 일반 공격 52까지 받아 74.8%일 때 175가 된다");
+
+// 턴 시작 상태 효과 묶음의 제목은 그 턴의 주인이다. A가 건 지속 피해가 B의 턴에 들어가도 "B의 상태 효과"로 보여야 한다(힐러 공포 로그 오해 사례).
+var dotLog = DiscordBot_Molly.Commands.BattleCommand.Format(Duel(weakenSnapshot).Events).ToArray();
+Check(dotLog.Any(x => x.StartsWith("⏳ **B의 상태 효과**") && x.Contains("쇠약!")) && !dotLog.Any(x => x.StartsWith("⏳ **A의 상태 효과**") && x.Contains("쇠약!")),
+    "A가 건 지속 피해는 B의 턴에 '⏳ B의 상태 효과' 제목 아래 표시된다");
+
+// 회복의 수치참조(루미너스 샤드): 소모중첩배율이면 고정값 × 참조 자원을 1회 회복량으로 쓰고, 참조가 0이면 회복하지 않는다.
+var shardHealResources = new Dictionary<string, BattleResource> { ["shards"] = new("shards", "결정", "중첩", 0, 0, 0, "가산"), ["no_shards"] = new("no_shards", "빈 결정", "중첩", 0, 0, 0, "가산") };
+var shardHealSkill = new BattleSkill("shard_heal", "결정 치유", "일반", null, true, 99, 0, 1, 1,
+[
+    Fx("shard_heal_1", 1, "피해", "자신", fixedValue: 500), Fx("shard_heal_2", 2, "자원증가", "자신", fixedValue: 3, status: "shards"),
+    new BattleEffect("shard_heal_3", 3, "회복", "자신", 20, 1, 1, 0, null, 0, null, null, null, null, null, null, "shards", "소모중첩배율"),
+    new BattleEffect("shard_heal_4", 4, "회복", "자신", 20, 1, 1, 0, null, 0, null, null, null, null, null, null, "no_shards", "소모중첩배율")
+]);
+var shardHealSnapshot = new BattleDataSnapshot { Rules = quietRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "결정", ["shard_heal"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["shard_heal"] = shardHealSkill }, Resources = shardHealResources, LoadedAt = DateTimeOffset.UtcNow };
+Check(Duel(shardHealSnapshot).Events.Where(x => x.Type == "HealApplied" && x.Target == "A").Select(x => x.Amount).SequenceEqual(new int?[] { 60 }),
+    "결정 3개 × 20 = 60을 회복하고, 참조 자원이 0인 회복 행은 공격력 배율 회복으로 넘어가지 않고 건너뛴다");
+
+// 중첩방식=개별(힐러 소생): 중첩마다 따로 만료되어 한 개씩 빠진다(가산이면 두 번째 획득이 전체 지속턴을 새로 채워 한꺼번에 사라진다).
+var eachStackRules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "8"));
+var eachStackResources = new Dictionary<string, BattleResource> { ["each_stack"] = new("each_stack", "개별 중첩", "중첩", 5, 0, 2, "개별") };
+var eachStackSnapshot = new BattleDataSnapshot
+{
+    Rules = eachStackRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "중첩", ["stack_first", "stack_second"]), ["idle"] = idleClass },
+    Skills = new Dictionary<string, BattleSkill> { ["stack_first"] = new("stack_first", "첫 중첩", "일반", null, true, 99, 0, 1, 1, [Fx("stack_first_1", 1, "자원증가", "자신", fixedValue: 1, status: "each_stack")]), ["stack_second"] = new("stack_second", "둘째 중첩", "일반", null, true, 99, 0, 1, 1, [Fx("stack_second_1", 1, "자원증가", "자신", fixedValue: 1, status: "each_stack")]) },
+    Resources = eachStackResources, LoadedAt = DateTimeOffset.UtcNow
+};
+Check(Duel(eachStackSnapshot).Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail).SequenceEqual(new[] { "개별 중첩 +1 (현재 1)", "개별 중첩 +1 (현재 2)", "개별 중첩 -1 (현재 1)", "개별 중첩 -1 (현재 0)" }),
+    "개별 중첩은 먼저 얻은 중첩부터 2턴이 지나면 하나씩 빠진다");
+
+// 턴당자원증가(힐러 라이프 링크): 보유자의 턴 시작마다 대상자원ID를 값만큼 채운다. 부여한 행동에는 채우지 않고, 마지막 지속턴까지 채운다.
+var turnGainRules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "10"));
+var turnGainSnapshot = new BattleDataSnapshot
+{
+    Rules = turnGainRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "연결", ["bind"]), ["idle"] = idleClass },
+    Skills = new Dictionary<string, BattleSkill> { ["bind"] = new("bind", "연결", "일반", null, true, 99, 0, 1, 1, [Fx("bind_1", 1, "상태효과", "자신", duration: 3, status: "bound")]) },
+    Resources = new Dictionary<string, BattleResource> { ["orbs"] = new("orbs", "결정", "자원", 0, 0, 0, "가산") },
+    Statuses = new Dictionary<string, BattleStatus> { ["bound"] = new("bound", "연결 중", "턴당자원증가", 2, "") { TargetResourceId = "orbs" } }, LoadedAt = DateTimeOffset.UtcNow
+};
+Check(Duel(turnGainSnapshot).Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail).SequenceEqual(new[] { "결정 +2 (현재 2)", "결정 +2 (현재 4)", "결정 +2 (현재 6)" }),
+    "턴당자원증가 2(지속 3턴)는 부여 뒤 내 턴 시작마다 세 번 결정을 2개씩 채운다");
+
+// 상태해제(서먼 스프라이트의 연결 해제): 대상이 가진 상태를 즉시 지우고, 다시 만료되지 않는다.
+var releaseSnapshot = new BattleDataSnapshot
+{
+    Rules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "12")),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "해제", ["bond_on", "bond_off"]), ["idle"] = idleClass },
+    Skills = new Dictionary<string, BattleSkill> { ["bond_on"] = new("bond_on", "유대", "일반", null, true, 99, 0, 1, 1, [Fx("bond_on_1", 1, "상태효과", "상대", duration: 5, status: "bond")]), ["bond_off"] = new("bond_off", "해제", "일반", null, true, 99, 0, 1, 1, [Fx("bond_off_1", 1, "상태해제", "상대", status: "bond")]) },
+    Statuses = new Dictionary<string, BattleStatus> { ["bond"] = new("bond", "유대", "없음", 0, "") }, LoadedAt = DateTimeOffset.UtcNow
+};
+var releaseEvents = Duel(releaseSnapshot).Events.ToList();
+Check(releaseEvents.Count(x => x.Type == "StatusExpired" && x.Actor == "B" && x.Detail == "유대") == 1
+    && releaseEvents.FindIndex(x => x.Type == "StatusExpired" && x.Detail == "유대") > releaseEvents.FindIndex(x => x.Type == "SkillUsed" && x.Detail == "해제"),
+    "상태해제는 5턴 남은 상태를 해제 스킬 사용 시 지우고, 이후 다시 만료 로그를 남기지 않는다");
 
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 

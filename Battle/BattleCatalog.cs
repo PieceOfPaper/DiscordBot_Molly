@@ -180,6 +180,7 @@ public sealed class BattleCatalog
             if (!passiveMap.TryAdd(id, passive)) throw new InvalidDataException($"배틀패시브 ID '{id}'가 중복되었습니다.");
         }
         var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]), StringComparer.Ordinal);
+        if (resourceMap.Values.FirstOrDefault(x => x.Stacking == "개별" && x.Duration <= 0) is { } untimedStack) throw new InvalidDataException($"배틀자원 '{untimedStack.Id}'의 중첩방식=개별은 지속턴이 1 이상이어야 합니다.");
         var statusMap = Unique(statuses, "배틀상태효과").Select((x, i) => ParseStatus(x, i + 2)).ToDictionary(x => x.Id, StringComparer.Ordinal);
         foreach (var status in statusMap.Values)
             if (status.TargetSkillId is { } targetSkillId && !skillMap.ContainsKey(targetSkillId))
@@ -188,17 +189,21 @@ public sealed class BattleCatalog
         foreach (var status in statusMap.Values)
             if (status.HasEffectType("스킬피해증가") && status.TargetSkillId is null)
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 스킬피해증가에는 대상스킬ID가 필요합니다.");
+        // 턴당자원증가는 대상자원ID의 자원을 턴 시작마다 채운다. 자원이 없으면 효과가 조용히 사라지므로 로딩 단계에서 거부한다.
+        foreach (var status in statusMap.Values)
+            if (status.HasEffectType("턴당자원증가") && (status.TargetResourceId is not { } turnResourceId || !resourceMap.ContainsKey(turnResourceId)))
+                throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 턴당자원증가에는 존재하는 대상자원ID가 필요합니다.");
         foreach (var status in statusMap.Values)
             if (status.StackResourceId is { } stackResourceId && !resourceMap.ContainsKey(stackResourceId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 중첩자원ID가 존재하지 않는 자원 ID '{stackResourceId}'를 참조합니다.");
-        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "스킬적중완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시"], StringComparer.Ordinal);
+        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "스킬적중완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시", "추가타적중시", "기본공격적중시"], StringComparer.Ordinal);
         void ValidateEffect(BattleEffect effect, string sheet)
         {
             if (effect.Type is "자원설정" or "자원증가" or "자원소모")
             {
                 if (effect.StatusId is null || !resourceMap.ContainsKey(effect.StatusId)) throw new InvalidDataException($"{sheet} '{effect.Id}'가 존재하지 않는 자원을 참조합니다.");
             }
-            else if (effect.Duration > 0 && effect.StatusId is { } statusId && !statusMap.ContainsKey(statusId))
+            else if ((effect.Duration > 0 || effect.Type == "상태해제") && effect.StatusId is { } statusId && !statusMap.ContainsKey(statusId))
                 throw new InvalidDataException($"{sheet} '{effect.Id}'가 존재하지 않는 상태 효과 ID '{statusId}'를 참조합니다.");
             if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
             if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
@@ -342,7 +347,8 @@ public sealed class BattleCatalog
         {
             Values = values,
             SynergyTypes = synergy,
-            AccumulatesDuration = durationMode == "누적"
+            AccumulatesDuration = durationMode == "누적",
+            TargetResourceId = EmptyAsNull(row.GetValueOrDefault("대상자원ID", ""))
         };
     }
 
