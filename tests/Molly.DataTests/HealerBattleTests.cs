@@ -13,6 +13,29 @@ internal static class HealerBattleTests
         LinkAndSpriteTests(data);
         OathShieldTests(data);
         ControlTests(data);
+        Issue13Tests(data);
+    }
+
+    /// <summary>GitHub Issue #13: 서먼 스프라이트는 단계마다 12타이고, 프로텍션 지속 회복은 프로텍션 보호막이 유지되는 동안만 들어간다.</summary>
+    private static void Issue13Tests(BattleDataSnapshot data)
+    {
+        foreach (var (orbs, perHit) in new[] { (2, 2714), (3, 3619) })
+        {
+            // 결정체를 미리 채워 두면 첫 행동부터 라이프 링크 재사용 조건이 맞아 서먼 스프라이트가 나간다.
+            var first = Turns(Duel(data, ["life_link"], maxActions: 2, initial: [("heal_light_orb", orbs)]))[0];
+            Assert(first.Skill == "서먼 스프라이트" && first.Hits == 13 && first.Resources.Contains($"빛의 결정체 -{orbs} (현재 0)"),
+                $"서먼 스프라이트 {orbs}단계는 {perHit:N0}×12(12타)와 연결 해제 1타만 준다");
+        }
+
+        // 상대 일반 공격 1,512가 프로텍션 보호막(4,337×0.25=1,084)을 먼저 깨면 프로텍션 회복이 끝나고, 나머지는 오든 실드가 막는다.
+        var broken = Duel(data, ["protection"], maxActions: 4).Events;
+        Assert(broken.SkipWhile(x => !(x.Type == "SkillUsed" && x.Detail == "프로텍션")).Where(x => x.Type == "ShieldAbsorbed").Take(2).Select(x => (x.Detail, x.Amount)).SequenceEqual(new (string?, int?)[] { ("프로텍션 보호막", 1084), ("오든 실드", 237) })
+            && broken.Any(x => x.Type == "StatusExpired" && x.Actor == "A" && x.Detail == "프로텍션") && !broken.Any(x => x.Type == "StatusHeal" && x.Detail == "프로텍션"),
+            "상대 공격은 프로텍션 보호막을 오든 실드보다 먼저 깎고, 프로텍션 보호막이 깨지면 프로텍션 지속 회복도 끝난다");
+        // 오든 실드 패시브를 빼 두면 상대의 첫 공격(432)이 체력을 깎는다. 그 뒤 프로텍션 보호막이 두 번째 공격을 다 막고 남아 있으면 다음 턴에 회복이 들어간다.
+        var held = Duel(data, ["protection"], maxActions: 4, rules: [("normal_attack_multiplier", "0.5")], withoutPassives: ["oath_shield"]).Events;
+        Assert(!held.Any(x => x.Type == "StatusExpired" && x.Detail == "프로텍션") && held.Any(x => x.Type == "StatusHeal" && x.Target == "A" && x.Detail == "프로텍션"),
+            "프로텍션 보호막이 남아 있는 동안에는 프로텍션 지속 회복이 들어간다");
     }
 
     private static void ControlTests(BattleDataSnapshot data)
@@ -63,8 +86,8 @@ internal static class HealerBattleTests
         var absorbed = result.Events.Where(x => x.Type == "ShieldAbsorbed" && x.Target == "A").Select(x => x.Amount ?? 0).ToArray();
         var resources = result.Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail ?? "").ToList();
         var recharge = resources.IndexOf("오든 실드 재생 대기 +1 (현재 1)");
-        var regenerated = resources.FindIndex(recharge + 1, x => x == "보호막 +6996 (현재 6996)");
-        Assert(resources.First() == "보호막 +6996 (현재 6996)" && absorbed.Take(2).Sum() == 1749 && recharge > 0
+        var regenerated = resources.FindIndex(recharge + 1, x => x == "오든 실드 +6996 (현재 6996)");
+        Assert(resources.First() == "오든 실드 +6996 (현재 6996)" && absorbed.Take(2).Sum() == 1749 && recharge > 0
             && resources.IndexOf("오든 실드 재생 대기이(가) 사라졌습니다.") is var expired && expired > recharge && regenerated == expired + 1,
             "오든 실드는 전투 시작에 생기고, 흡수 한도(1,749)를 다 쓰면 재생 대기 8턴이 끝난 직후 다시 생긴다");
         var aTurnsBetween = result.Events.SkipWhile(x => !(x.Type == "ResourceChanged" && x.Detail == "오든 실드 재생 대기 +1 (현재 1)"))
@@ -76,17 +99,19 @@ internal static class HealerBattleTests
             "소생은 오든 실드를 얻을 때(전투 시작·재생)마다 2턴 동안 턴당 40을 지속 회복한다");
     }
 
-    private sealed record Turn(string Skill, int Damage, IReadOnlyList<string> Resources, IReadOnlyList<string> Statuses);
+    private sealed record Turn(string Skill, int Damage, IReadOnlyList<string> Resources, IReadOnlyList<string> Statuses, int Hits);
 
-    private static BattleResult Duel(BattleDataSnapshot data, string[] skills, int maxActions = 12, double random = .9, bool sprite = true)
+    private static BattleResult Duel(BattleDataSnapshot data, string[] skills, int maxActions = 12, double random = .9, bool sprite = true, (string Id, string Value)[]? rules = null, (string Id, int Value)[]? initial = null, string[]? withoutPassives = null)
     {
-        var rules = data.Rules.ToDictionary(x => x.Key, x => x.Value);
-        foreach (var (id, value) in new[] { ("base_max_hp", "10000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", maxActions.ToString()) }) rules[id] = rules[id] with { Value = value };
+        var ruleMap = data.Rules.ToDictionary(x => x.Key, x => x.Value);
+        foreach (var (id, value) in new[] { ("base_max_hp", "10000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", maxActions.ToString()) }.Concat(rules ?? [])) ruleMap[id] = ruleMap[id] with { Value = value };
+        var resources = data.Resources.ToDictionary(x => x.Key, x => x.Value);
+        foreach (var (id, value) in initial ?? []) resources[id] = resources[id] with { InitialValue = value };
         var snapshot = new BattleDataSnapshot
         {
-            Rules = rules,
-            Classes = new Dictionary<string, BattleClass> { ["healer"] = data.Classes["healer"] with { SkillIds = skills }, ["idle"] = new("idle", "대상", Array.Empty<string>()) },
-            Skills = data.Skills, Passives = data.Passives, Resources = data.Resources, Statuses = data.Statuses, Derivations = sprite ? data.Derivations : data.Derivations.Where(x => x.Id != "life_link_sprite").ToArray(), LoadedAt = data.LoadedAt
+            Rules = ruleMap,
+            Classes = new Dictionary<string, BattleClass> { ["healer"] = data.Classes["healer"] with { SkillIds = skills, PassiveIds = data.Classes["healer"].PassiveIds.Except(withoutPassives ?? []).ToArray() }, ["idle"] = new("idle", "대상", Array.Empty<string>()) },
+            Skills = data.Skills, Passives = data.Passives, Resources = resources, Statuses = data.Statuses, Derivations = sprite ? data.Derivations : data.Derivations.Where(x => x.Id != "life_link_sprite").ToArray(), LoadedAt = data.LoadedAt
         };
         return new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "healer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), snapshot, new ConstantRandom(random));
     }
@@ -103,7 +128,8 @@ internal static class HealerBattleTests
                 turns.Add(new(current.FirstOrDefault(x => x.Type is "SkillUsed" or "NormalAttackUsed") is { } used ? used.Detail ?? "(일반 공격)" : "(행동 없음)",
                     current.Where(x => x.Type is "DamageDealt" or "AdditionalHit" or "AdditionalDamage" && x.Actor == "A").Sum(x => x.Amount ?? 0),
                     current.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail ?? "").ToArray(),
-                    current.Where(x => x.Type == "StatusApplied").Select(x => x.Detail ?? "").ToArray()));
+                    current.Where(x => x.Type == "StatusApplied").Select(x => x.Detail ?? "").ToArray(),
+                    current.Count(x => x.Type == "DamageDealt" && x.Actor == "A")));
             current = e.Actor == "A" ? [] : null;
         }
         return turns;
@@ -149,7 +175,7 @@ combat_mastery_support_healer,전투 숙련: 지원,후방에서 아군을 치�
         ["배틀스킬"] = """"
 ID,활성화,행동분류,대상유형,기본쿨다운,최초쿨다운,사용우선순위,사용조건,자원유형,자원소모,자원획득,궁극기여부,배틀설명,사용문구,비고
 life_link,TRUE,공격·보조,상대,1,0,70,항상,궁극기 게이지,,150,FALSE,적과 생명의 띠를 연결해 해제할 때까지 지속 피해를 주고 기본 공격을 강화하며 빛의 결정체를 모은다. 다시 누르면 서먼 스프라이트로 발산한다.,{caster}가 {target}에게 생명의 띠를 연결합니다!,"원본 재사용 대기 1초→1턴. 짧게 누르기(적 연결)만 반영하고 길게 누르기(아군 연결·빛의 파동)는 1:1이라 제외. 연결은 서먼 스프라이트로 해제할 때까지 유지(99턴)되고, 연결 중 턴마다 빛의 결정체 2개가 쌓인다. 결정체 2개 이상에서 다시 누르면(재사용 시 파생 life_link_sprite) 서먼 스프라이트로 발산·해제"
-summon_sprite,TRUE,공격·파생,상대,0,0,0,라이프 링크 재사용·빛의 결정체 2개 이상,,,0,FALSE,모은 빛의 결정체를 발산해 결정체 수(1~3단계)에 비례한 피해를 주고 생명의 띠 연결을 해제한다.,{caster}가 생명의 띠에 모인 빛의 결정체를 발산합니다!,"파생 전용. 1~3단계를 결정체 1~3개로 판정. 원본 단계별 1809/2714/3619×12를 그대로 반영(단계 차이는 추가 피해 행 2,715×4로 표현. 라이프 링크 행동과 한 세트라 낮추지 않음). 원본 연결 해제 대미지 2,714를 주고 연결 상태를 모두 해제한다"
+summon_sprite,TRUE,공격·파생,상대,0,0,0,라이프 링크 재사용·빛의 결정체 2개 이상,,,0,FALSE,모은 빛의 결정체를 발산해 결정체 수(1~3단계)에 비례한 피해를 주고 생명의 띠 연결을 해제한다.,{caster}가 생명의 띠에 모인 빛의 결정체를 발산합니다!,"파생 전용. 1~3단계를 결정체 1~3개로 판정. 원본 단계별 1809/2714/3619×12를 타수까지 그대로 반영(단계마다 12타 행 하나, 높은 단계부터 판정. 라이프 링크 행동과 한 세트라 낮추지 않음, GitHub Issue #13). 원본 연결 해제 대미지 2,714를 주고 연결 상태를 모두 해제한다"
 phantom_pain,TRUE,공격·방해,상대,2,0,65,항상,궁극기 게이지,,150,FALSE,마력 구체로 적을 공격해 브레이크 피해와 침식을 남긴다. 다음 행동은 나이트메어로 이어진다.,{caster}가 불안정한 마력 구체를 {target}에게 터뜨립니다!,"원본 재사용 대기 12초→2턴, 표시 피해 10,452, 브레이크 1칸. 침식 1초마다 1583×10초를 2턴에 나눔. 원문의 '공포에 휩싸이게 만든다'는 멘탈 브레이크(공식 가이드 브레이크 타입: 몬스터가 도망침)라 브레이크 대미지 1칸으로 반영하고 따로 부여하지 않음"
 nightmare,TRUE,공격·방해,상대,2,0,0,팬텀 페인 재사용,,,0,FALSE,침식을 증폭시켜 피해와 두려움을 준다.,{caster}가 {target}에게 스며든 마력을 증폭시킵니다!,"파생 전용. 나이트메어 준비(heal_phantom_mark) 중 재사용하면 실행. 기본쿨다운 2는 재사용 시 팬텀 페인의 쿨다운으로 적용된다. 표시 피해 14,253. 브레이크된 적 기절은 스턴 브레이크라 상대가 브레이크 상태일 때 브레이크를 다시 거는 것으로 반영(GitHub Issue #11)"
 pain_of_life,TRUE,공격·회복,자신·상대,2,0,62,항상,궁극기 게이지,,150,FALSE,생명의 띠를 퍼뜨려 연속 피해를 주고 체력을 조금 회복한다. 브레이크된 적에게 더 큰 피해를 준다.,{caster}가 정신을 집중해 생명의 띠를 퍼뜨립니다!,"원본 재사용 대기 10초→2턴. 표시 피해 4,208×9(브레이크 6,334×9)가 다른 힐러 스킬보다 3배 이상 커서 2,000×9(3,000×9)로 보정. 감속은 원본 수치가 없어 채널링 3초 기준 1턴 쿨다운증가(heal_slowed)로 반영"
@@ -162,16 +188,18 @@ ID,스킬ID,실행순서,효과유형,대상,계수기준,고정값,횟수,발�
 life_link_03,life_link,3,상태효과,자신,,0,1,1,99,heal_link_self,1,생명의 띠가 이어져 빛의 결정체가 모이기 시작합니다.,연결 유지 표식(앞 행들의 연결 전 조건을 위해 마지막 순서). 턴당자원증가로 연결 중 턴 시작마다 빛의 결정체 +2(충전 3초 → 6초 턴당 2개). 서먼 스프라이트가 해제할 때까지 유지(99턴),자신,상태효과미보유,heal_link_self,,,,,
 life_link_01,life_link,1,지속피해,상대,,5428,1,1,99,heal_life_link,1,생명의 띠가 {target}의 생명력을 갉아먹습니다.,"원본 1초마다 2,714. 연결은 해제할 때까지 유지(99턴)되고 턴당 5,428(2초분)로 환산",자신,상태효과미보유,heal_link_self,,,,,
 life_link_02,life_link,2,상태효과,자신,,0,1,1,99,heal_link_basic,1,생명의 띠로 기본 공격이 강화됩니다.,"원본 기본 공격 추가 타격 1,357을 일반 공격 피해 +20%로 단순화. 연결이 유지되는 동안",자신,상태효과미보유,heal_link_self,,,,,
-summon_sprite_01,summon_sprite,1,피해,상대,,1809,12,1,0,,0,빛의 결정체가 쏟아져 {target}에게 총 {damage}의 피해!,"1단계(결정체 1개) 원본 1,809×12",자신,자원보유,heal_light_orb,>=,1,,,
-summon_sprite_02,summon_sprite,2,피해,상대,,2715,4,1,0,,0,2단계 결정체가 더해져 {damage}의 피해!,"2단계(결정체 2개 이상) 추가분. 원본 2,714×12와 1단계의 차이 905×12를 2,715×4로 표현",자신,자원보유,heal_light_orb,>=,2,,,
-summon_sprite_03,summon_sprite,3,피해,상대,,2715,4,1,0,,0,3단계 결정체가 더해져 {damage}의 피해!,"3단계(결정체 3개) 추가분. 원본 3,619×12와 2단계의 차이 905×12를 2,715×4로 표현",자신,자원보유,heal_light_orb,>=,3,,,
-summon_sprite_04,summon_sprite,4,상태효과,자신,,0,1,1,2,heal_sprite_power,1,강화된 빛의 결정체로 주는 피해가 증가합니다.,"서먼 루미너스 이후 첫 서먼 스프라이트만. [시너지] 대미지 증가 40%, 9초→2턴",자신,자원보유,heal_sprite_boost,>=,1,,,
-summon_sprite_05,summon_sprite,5,자원소모,자신,,0,1,1,0,heal_sprite_boost,0,,강화 표식 소모,자신,자원보유,heal_sprite_boost,>=,1,,전부,
-summon_sprite_06,summon_sprite,6,자원소모,자신,,0,1,1,0,heal_light_orb,0,모은 빛의 결정체를 모두 발산했습니다.,빛의 결정체 전부 소모,,,,,,,전부,
-summon_sprite_07,summon_sprite,7,피해,상대,,2714,1,1,0,,0,끊어지는 생명의 띠가 {target}에게 {damage}의 피해!,"원본 연결 해제 대미지 2,714",,,,,,,,
-summon_sprite_08,summon_sprite,8,상태해제,상대,,0,1,1,0,heal_life_link,0,,라이프 링크 연결 해제(적의 생명의 띠),,,,,,,,
-summon_sprite_09,summon_sprite,9,상태해제,자신,,0,1,1,0,heal_link_basic,0,,라이프 링크 연결 해제(기본 공격 강화),,,,,,,,
-summon_sprite_10,summon_sprite,10,상태해제,자신,,0,1,1,0,heal_link_self,0,,라이프 링크 연결 해제(결정체 적립 중지),,,,,,,,
+summon_sprite_01,summon_sprite,1,피해,상대,,3619,12,1,0,,0,3단계 빛의 결정체가 쏟아져 {target}에게 총 {damage}의 피해!,"3단계(결정체 3개) 원본 3,619×12. 높은 단계부터 판정하고 바로 결정체를 소모해 아래 단계 행이 실행되지 않게 한다",자신,자원보유,heal_light_orb,>=,3,,,
+summon_sprite_11,summon_sprite,2,자원소모,자신,,0,1,1,0,heal_light_orb,0,,3단계 판정 뒤 결정체 소모(2·1단계 행이 다시 실행되지 않도록),자신,자원보유,heal_light_orb,>=,3,,전부,
+summon_sprite_02,summon_sprite,3,피해,상대,,2714,12,1,0,,0,2단계 빛의 결정체가 쏟아져 {target}에게 총 {damage}의 피해!,"2단계(결정체 2개) 원본 2,714×12",자신,자원보유,heal_light_orb,>=,2,,,
+summon_sprite_12,summon_sprite,4,자원소모,자신,,0,1,1,0,heal_light_orb,0,,2단계 판정 뒤 결정체 소모(1단계 행이 다시 실행되지 않도록),자신,자원보유,heal_light_orb,>=,2,,전부,
+summon_sprite_03,summon_sprite,5,피해,상대,,1809,12,1,0,,0,빛의 결정체가 쏟아져 {target}에게 총 {damage}의 피해!,"1단계(결정체 1개) 원본 1,809×12",자신,자원보유,heal_light_orb,>=,1,,,
+summon_sprite_04,summon_sprite,6,상태효과,자신,,0,1,1,2,heal_sprite_power,1,강화된 빛의 결정체로 주는 피해가 증가합니다.,"서먼 루미너스 이후 첫 서먼 스프라이트만. [시너지] 대미지 증가 40%, 9초→2턴",자신,자원보유,heal_sprite_boost,>=,1,,,
+summon_sprite_05,summon_sprite,7,자원소모,자신,,0,1,1,0,heal_sprite_boost,0,,강화 표식 소모,자신,자원보유,heal_sprite_boost,>=,1,,전부,
+summon_sprite_06,summon_sprite,8,자원소모,자신,,0,1,1,0,heal_light_orb,0,모은 빛의 결정체를 모두 발산했습니다.,빛의 결정체 전부 소모,,,,,,,전부,
+summon_sprite_07,summon_sprite,9,피해,상대,,2714,1,1,0,,0,끊어지는 생명의 띠가 {target}에게 {damage}의 피해!,"원본 연결 해제 대미지 2,714",,,,,,,,
+summon_sprite_08,summon_sprite,10,상태해제,상대,,0,1,1,0,heal_life_link,0,,라이프 링크 연결 해제(적의 생명의 띠),,,,,,,,
+summon_sprite_09,summon_sprite,11,상태해제,자신,,0,1,1,0,heal_link_basic,0,,라이프 링크 연결 해제(기본 공격 강화),,,,,,,,
+summon_sprite_10,summon_sprite,12,상태해제,자신,,0,1,1,0,heal_link_self,0,,라이프 링크 연결 해제(결정체 적립 중지),,,,,,,,
 phantom_pain_01,phantom_pain,1,피해,상대,,10452,1,1,0,,0,마력 구체가 폭발해 {target}에게 {damage}의 피해!,"표시 피해 10,452",,,,,,,,
 phantom_pain_02,phantom_pain,2,브레이크피해,상대,,1,1,1,0,,0,{target}의 균형이 흔들립니다!,브레이크 대미지 1칸,,,,,,,,
 phantom_pain_03,phantom_pain,3,지속피해,상대,,7915,1,1,2,heal_erosion,1,흩뿌려진 마력이 {target}에게 침식을 남깁니다.,"원본 침식 1초마다 1,583×10초=15,830을 2턴(10초→2턴)에 나눔",,,,,,,,
@@ -184,8 +212,8 @@ pain_of_life_02,pain_of_life,2,피해,상대,,3000,9,1,0,,0,무너진 {target}�
 pain_of_life_03,pain_of_life,3,회복,자신,,295,9,1,0,,0,생명의 띠가 {caster}의 체력을 {heal} 회복시킵니다.,원본 시전자 회복량 295×9,,,,,,,,
 pain_of_life_05,pain_of_life,5,쿨다운증가,상대,,0,1,1,1,heal_slowed,1,{target}의 움직임이 느려집니다.,"원본 감속은 수치·지속시간이 없어 채널링 3초 기준 1턴, 석궁사수 둔화(cb_slowed)와 같은 쿨다운증가 1로 반영",,,,,,,,
 protection_01,protection,1,피해,상대,,7239,1,1,0,,0,보호막이 {target}을 밀쳐내 {damage}의 피해!,"원본 표시 피해 7,239(공격을 반격해 밀쳐냄)를 사용 시 1회 피해로 단순화",,,,,,,,
-protection_02,protection,2,자원증가,자신,,4337,1,1,0,heal_shield,0,보호막이 피해를 흡수할 준비를 합니다.,"원본 피해 흡수량 4,337. 보호막 자원은 fixed_damage_scale을 곱한 만큼 배틀 피해를 흡수한다",,,,,,,,
-protection_03,protection,3,지속회복,자신,,2478,1,1,3,heal_protection_regen,1,보호막 안에서 체력이 차오릅니다.,"원본 1초마다 413×15초. 15초→3턴, 턴당 413×6",,,,,,,,
+protection_02,protection,2,자원설정,자신,,4337,1,1,0,heal_protection_shield,0,보호막이 피해를 흡수할 준비를 합니다.,"원본 피해 흡수량 4,337·지속 15초→3턴. 오든 실드와 분리한 heal_protection_shield(분류=보호막)에 설정하고 오든 실드보다 먼저 피해를 흡수한다. 다시 쓰면 4,337로 채우고 3턴을 새로 시작한다(GitHub Issue #13)",,,,,,,,
+protection_03,protection,3,지속회복,자신,,2478,1,1,3,heal_protection_regen,1,보호막 안에서 체력이 차오릅니다.,"원본 1초마다 413×15초. 15초→3턴, 턴당 413×6. 보호막이 유지되는 동안만: heal_protection_regen의 유지자원ID=heal_protection_shield라 보호막이 깨지거나 만료되면 함께 끝난다(GitHub Issue #13)",,,,,,,,
 protection_04,protection,4,지속피해,상대,,6033,1,1,3,heal_weakness,1,생명의 띠를 타고 {target}에게 쇠약이 스며듭니다.,"적과 연결된 경우의 약화 효과: 쇠약. 원본 18,099를 3턴(15초)에 나눔. 남은 체력 비율 비례 증폭(최대 200%)은 체력비례지속피해증폭(체력이 가득하면 ×2)으로 반영. [시너지] 공격력 감소 10%는 상태로 반영",상대,상태효과보유,heal_life_link,,,,,
 summon_luminous_01,summon_luminous,1,지속피해,상대,,6332,1,1,3,heal_luminous_summon,1,빛의 결정체가 {target} 주위를 맴돌며 공격합니다.,"원본 1,583을 1.5초마다(턴당 4회)×15초(3턴)",,,,,,,,
 summon_luminous_02,summon_luminous,2,지속회복,자신,,1544,1,1,3,heal_luminous_regen,1,빛의 결정체가 {caster}를 치유합니다.,원본 회복량 386을 턴당 4회×3턴,,,,,,,,
@@ -200,7 +228,7 @@ phantom_pain_nightmare,phantom_pain,nightmare,조건,0,1,상태효과보유,heal
 """",
         ["배틀패시브"] = """"
 ID,활성화,비고
-oath_shield,TRUE,"전투 시작 시 보호막 6,996. 파괴되면 45초→8턴 뒤 재생. 프로텍션 보호막과 같은 보호막 자원을 쓰므로 둘이 합쳐 모두 깎였을 때를 파괴로 본다."
+oath_shield,TRUE,"전투 시작 시 보호막 6,996. 파괴되면 45초→8턴 뒤 재생. 프로텍션 보호막과는 별도 자원이며 프로텍션 보호막이 먼저 피해를 흡수한다(GitHub Issue #13)."
 vital_boost,TRUE,아군 회복은 1:1이라 자기 회복으로 해석. 즉시 회복(생명의 고통·소생)만 회복적용시를 일으키고 지속 회복 틱은 발동하지 않는다. 이동 속도 증가는 생략.
 combat_mastery_support_healer,TRUE,"회복량 +10%, 연타(다단) 피해 +3%. 음유시인 전투 숙련: 지원과 같은 상태를 쓴다. 레벨 30 어시스트 해금 문구는 구현 범위에서 제외(항상 만렙 가정)."
 resurgence,TRUE,"보호막 획득 시 회복은 1초마다 최대 체력 0.03%×10초(기본 HP 기준 턴당 36×2턴)로 해석. 지속 회복이라 바이탈 부스트(회복적용시)는 일으키지 않는다. 자신을 제외한 아군 회복 30%는 1:1이라 제외. 추가타 적중마다 중첩, 최대 중첩은 원본에 없어 10으로 가정. 중첩마다 따로 2턴(10초) 뒤 만료(중첩방식=개별)."
@@ -215,7 +243,7 @@ os_03,oath_shield,3,자원증가,자신,6996,1,1,0,heal_shield,0,오든 실드�
 vb_01,vital_boost,1,상태효과,자신,0,1,1,1,heal_vital_boost,0,회복의 기운으로 주는 피해가 증가합니다.,,,,,,,,회복적용시,,,원문 [시너지] 대미지 증가 10%·3초→1턴. 아군 회복은 자기 회복으로 해석,
 cmsh_01,combat_mastery_support_healer,1,회복량증가,자신,0,1,1,0,combat_mastery_support_heal,0,전투 숙련: 지원으로 회복량이 증가합니다.,,,,,,,,전투시작,,,회복량 +10%,
 cmsh_02,combat_mastery_support_healer,2,멀티히트피해증가,자신,0,1,1,0,combat_mastery_support_multi,0,전투 숙련: 지원으로 연타 피해가 증가합니다.,,,,,,,,전투시작,,,연타 대미지 +3%,
-rs_01,resurgence,1,지속회복,자신,144,1,1,2,heal_resurgence_regen,0,신성한 보호막에 반응해 체력이 차오릅니다.,,,,,,,,자원획득시,,heal_shield,"원문 최대 체력의 0.03%에 시간 표기가 없어 1초마다 0.03%×10초로 해석(2026-09-26 사용자 확인). 기본 HP 20,000 기준 턴(6초)당 36을 고정값 144×fixed_damage_scale로 환산, 10초→2턴. 전투력에 따른 최대 HP 차이는 반영하지 않음",
+rs_01,resurgence,1,지속회복,자신,144,1,1,2,heal_resurgence_regen,0,신성한 보호막에 반응해 체력이 차오릅니다.,,,,,,,,자원획득시,,보호막,"원문 최대 체력의 0.03%에 시간 표기가 없어 1초마다 0.03%×10초로 해석(2026-09-26 사용자 확인). 기본 HP 20,000 기준 턴(6초)당 36을 고정값 144×fixed_damage_scale로 환산, 10초→2턴. 전투력에 따른 최대 HP 차이는 반영하지 않음",
 rs_02,resurgence,2,주는피해증가,자신,0,1,1,0,heal_resurgence_power,0,,,,,,,,,전투시작,,,중첩자원ID=heal_resurgence로 중첩당 +1.5%,
 rs_03,resurgence,3,자원증가,자신,1,1,1,0,heal_resurgence,0,소생의 힘이 공격에 깃듭니다.,,,,,,,,추가타적중시,,,추가타 적중 시 발동 확률 100%,
 tf_01,transference,1,지속피해,상대,3771,1,0.4,2,heal_transference_fear,0,기본 공격에 실린 마력이 {target}에게 두려움을 심습니다.,,,,,,,,기본공격적중시,,,"원문 발동 확률 40%, 두려움 지속 대미지 7,541을 2턴에 나눔",
@@ -232,36 +260,37 @@ ls_06,luminous_shard,7,자원소모,자신,0,1,1,0,heal_luminous_shard,0,,자신
 ID,이름,분류,최대값,초기값,지속턴,중첩방식,전투종료시제거,설명
 ultimate_gauge,궁극기 게이지,궁극기 게이지,300,0,0,가산,TRUE,모든 클래스가 공유하는 궁극기 자원 분류. 기본기 사용마다 쌓이며 궁극기 사용 시 300을 소모한다.
 heal_light_orb,빛의 결정체,자원,3,0,0,가산,TRUE,"라이프 링크 연결 중 힐러의 턴 시작마다 2개씩 쌓이는 결정체(충전 3초, 6초=1턴, 최대 3, 서먼 스프라이트 1~3단계). 서먼 스프라이트가 모두 소모한다."
-heal_shield,보호막,보호막,0,0,0,가산,TRUE,"힐러의 오든 실드·프로텍션 보호막(화면 흡수량). 분류=보호막 자원은 fixed_damage_scale을 곱한 만큼 받는 피해를 먼저 흡수하고, 모두 깎이면 자원소진시가 발동한다."
+heal_shield,오든 실드,보호막,0,0,0,가산,TRUE,"오든 실드 보호막(화면 흡수량). 분류=보호막 자원은 fixed_damage_scale을 곱한 만큼 받는 피해를 먼저 흡수하고(지속턴이 있는 보호막부터), 모두 깎이면 자원소진시가 발동해 오든 실드 재생 대기를 시작한다."
+heal_protection_shield,프로텍션 보호막,보호막,0,0,3,교체,TRUE,"프로텍션 보호막(화면 흡수량 4,337, 15초→3턴). 지속턴이 있어 오든 실드보다 먼저 피해를 흡수하고, 깨지거나 만료되면 프로텍션 지속 회복(heal_protection_regen)이 함께 끝난다."
 heal_oath_recharge,오든 실드 재생 대기,자원,1,0,8,교체,TRUE,보호막이 파괴된 뒤 오든 실드가 재생되기까지의 대기(45초→8턴). 만료되면 오든 실드가 다시 생긴다.
 heal_sprite_boost,스프라이트 강화 준비,자원,1,0,0,교체,TRUE,서먼 루미너스 사용 후 다음 1회의 서먼 스프라이트를 강화하는 표식.
 heal_resurgence,소생,중첩,10,0,2,개별,TRUE,공격이 추가타로 적중할 때마다 +1(최대 중첩은 원본에 없어 10으로 가정). 원문 각 10초→중첩마다 2턴(중첩방식=개별).
 heal_luminous_shard,빛의 결정,중첩,200,0,0,가산,TRUE,루미너스 샤드가 서먼 루미너스(+10)·서먼 스프라이트(+1~3)로 모으는 결정(최대 200). 윙 오브 엔젤 사용 시 모두 소모해 비례 피해를 준다.
 """",
         ["배틀상태효과"] = """"
-ID,이름,효과유형,값,설명,대상스킬ID,중첩자원ID,시너지,지속방식,효과별값,대상자원ID
-break_broken,브레이크,브레이크|받는피해증가,0.25,브레이크 시 다음 행동을 잃고 받는 피해 +25%,,,,,,
-combat_mastery_support_heal,전투 숙련: 지원,회복량증가,0.1,회복량 +10%. 레벨 30 어시스트 해금 문구는 구현 범위에서 제외,,,,,,
-combat_mastery_support_multi,전투 숙련: 지원,멀티히트피해증가,0.03,적에게 주는 멀티히트(다단) 피해 +3%,,,,,,
-heal_life_link,생명의 띠,없음,0,라이프 링크가 적에게 남기는 연결·지속 피해 상태(서먼 스프라이트가 해제할 때까지). 프로텍션은 이 상태의 적에게 쇠약을 남긴다.,,,,,,
-heal_link_self,생명의 띠 연결,턴당자원증가,2,라이프 링크 연결 유지 표식. 보유자 턴 시작마다 빛의 결정체 +2(대상자원ID). 서먼 스프라이트가 해제한다.,,,,,,heal_light_orb
-heal_link_basic,생명의 띠: 기본 공격 강화,기본공격피해증가,0.2,"라이프 링크 연결 중 기본 공격 강화(원본 추가 타격 1,357)를 일반 공격 피해 +20%로 단순화.",,,,,,
-heal_erosion,침식,없음,0,팬텀 페인의 지속 피해.,,,,,,
-heal_phantom_mark,나이트메어 준비,없음,0,팬텀 페인 사용 후 나이트메어로 이어갈 수 있는 자신의 표식(재사용 파생 조건). 상대에게 거는 효과가 아니다.,,,,,,
-heal_fear,두려움,없음,0,나이트메어의 지속 피해.,,,,,,
-heal_weakness,쇠약,주는피해감소|체력비례지속피해증폭,0.1,"프로텍션이 연결된 적에게 남기는 약화. 지속 피해와 [시너지] 공격력 감소 10%(주는 피해 -10%). 지속 피해는 대상의 남은 체력 비율만큼 증폭(가득하면 ×2, 원본 최대 200%).",,,주는피해감소,,0.1|1,
-heal_protection_regen,프로텍션,없음,0,프로텍션 보호막이 유지되는 동안의 지속 회복.,,,,,,
-heal_luminous_summon,서먼 루미너스,없음,0,소환된 빛의 결정체의 지속 피해.,,,,,,
-heal_luminous_regen,서먼 루미너스: 치유,없음,0,소환된 빛의 결정체의 지속 회복.,,,,,,
-heal_sprite_power,강화된 서먼 스프라이트,주는피해증가,0.4,서먼 루미너스 이후 첫 서먼 스프라이트가 주는 [시너지] 대미지 증가 40%. 9초→2턴.,,,주는피해증가,,,
-heal_wing,윙 오브 엔젤,없음,0,윙 오브 엔젤의 지속 피해.,,,,,,
-heal_wing_regen,윙 오브 엔젤: 치유,없음,0,윙 오브 엔젤의 지속 회복.,,,,,,
-heal_vital_boost,바이탈 부스트,주는피해증가,0.1,회복을 받으면 [시너지] 주는 피해 +10%(3초→1턴). 이동 속도 증가는 생략.,,,주는피해증가,,,
-heal_resurgence_power,소생,주는피해증가,0.015,소생 중첩당 주는 피해 +1.5%.,,heal_resurgence,,,,
-heal_resurgence_regen,소생: 치유,없음,0,소생이 보호막을 얻을 때 주는 지속 회복(1초마다 최대 체력 0.03%×10초).,,,,,,
-heal_transference_fear,두려움(전이),없음,0,전이가 기본 공격으로 남기는 지속 피해.,,,,,,
-heal_slowed,감속,쿨다운증가,1,생명의 고통의 감속. 보유 중 쿨다운 감소가 멈춘다(석궁사수 둔화와 같은 단순화).,,,,,,
-heal_transference_power,전이,주는피해증가,0.1,전이의 최종 피해량 +10%(상시).,,,,,,
+ID,이름,효과유형,값,설명,대상스킬ID,중첩자원ID,시너지,지속방식,효과별값,대상자원ID,유지자원ID
+break_broken,브레이크,브레이크|받는피해증가,0.25,브레이크 시 다음 행동을 잃고 받는 피해 +25%,,,,,,,
+combat_mastery_support_heal,전투 숙련: 지원,회복량증가,0.1,회복량 +10%. 레벨 30 어시스트 해금 문구는 구현 범위에서 제외,,,,,,,
+combat_mastery_support_multi,전투 숙련: 지원,멀티히트피해증가,0.03,적에게 주는 멀티히트(다단) 피해 +3%,,,,,,,
+heal_life_link,생명의 띠,없음,0,라이프 링크가 적에게 남기는 연결·지속 피해 상태(서먼 스프라이트가 해제할 때까지). 프로텍션은 이 상태의 적에게 쇠약을 남긴다.,,,,,,,
+heal_link_self,생명의 띠 연결,턴당자원증가,2,라이프 링크 연결 유지 표식. 보유자 턴 시작마다 빛의 결정체 +2(대상자원ID). 서먼 스프라이트가 해제한다.,,,,,,heal_light_orb,
+heal_link_basic,생명의 띠: 기본 공격 강화,기본공격피해증가,0.2,"라이프 링크 연결 중 기본 공격 강화(원본 추가 타격 1,357)를 일반 공격 피해 +20%로 단순화.",,,,,,,
+heal_erosion,침식,없음,0,팬텀 페인의 지속 피해.,,,,,,,
+heal_phantom_mark,나이트메어 준비,없음,0,팬텀 페인 사용 후 나이트메어로 이어갈 수 있는 자신의 표식(재사용 파생 조건). 상대에게 거는 효과가 아니다.,,,,,,,
+heal_fear,두려움,없음,0,나이트메어의 지속 피해.,,,,,,,
+heal_weakness,쇠약,주는피해감소|체력비례지속피해증폭,0.1,"프로텍션이 연결된 적에게 남기는 약화. 지속 피해와 [시너지] 공격력 감소 10%(주는 피해 -10%). 지속 피해는 대상의 남은 체력 비율만큼 증폭(가득하면 ×2, 원본 최대 200%).",,,주는피해감소,,0.1|1,,
+heal_protection_regen,프로텍션,없음,0,프로텍션 보호막이 유지되는 동안의 지속 회복. 유지자원ID(heal_protection_shield)가 0이 되면 해제된다.,,,,,,,heal_protection_shield
+heal_luminous_summon,서먼 루미너스,없음,0,소환된 빛의 결정체의 지속 피해.,,,,,,,
+heal_luminous_regen,서먼 루미너스: 치유,없음,0,소환된 빛의 결정체의 지속 회복.,,,,,,,
+heal_sprite_power,강화된 서먼 스프라이트,주는피해증가,0.4,서먼 루미너스 이후 첫 서먼 스프라이트가 주는 [시너지] 대미지 증가 40%. 9초→2턴.,,,주는피해증가,,,,
+heal_wing,윙 오브 엔젤,없음,0,윙 오브 엔젤의 지속 피해.,,,,,,,
+heal_wing_regen,윙 오브 엔젤: 치유,없음,0,윙 오브 엔젤의 지속 회복.,,,,,,,
+heal_vital_boost,바이탈 부스트,주는피해증가,0.1,회복을 받으면 [시너지] 주는 피해 +10%(3초→1턴). 이동 속도 증가는 생략.,,,주는피해증가,,,,
+heal_resurgence_power,소생,주는피해증가,0.015,소생 중첩당 주는 피해 +1.5%.,,heal_resurgence,,,,,
+heal_resurgence_regen,소생: 치유,없음,0,소생이 보호막을 얻을 때 주는 지속 회복(1초마다 최대 체력 0.03%×10초).,,,,,,,
+heal_transference_fear,두려움(전이),없음,0,전이가 기본 공격으로 남기는 지속 피해.,,,,,,,
+heal_slowed,감속,쿨다운증가,1,생명의 고통의 감속. 보유 중 쿨다운 감소가 멈춘다(석궁사수 둔화와 같은 단순화).,,,,,,,
+heal_transference_power,전이,주는피해증가,0.1,전이의 최종 피해량 +10%(상시).,,,,,,,
 """",
     };
 }

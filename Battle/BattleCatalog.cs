@@ -194,6 +194,9 @@ public sealed class BattleCatalog
             if (status.HasEffectType("턴당자원증가") && (status.TargetResourceId is not { } turnResourceId || !resourceMap.ContainsKey(turnResourceId)))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 턴당자원증가에는 존재하는 대상자원ID가 필요합니다.");
         foreach (var status in statusMap.Values)
+            if (status.SustainResourceId is { } sustainResourceId && !resourceMap.ContainsKey(sustainResourceId))
+                throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 유지자원ID가 존재하지 않는 자원 ID '{sustainResourceId}'를 참조합니다.");
+        foreach (var status in statusMap.Values)
             if (status.StackResourceId is { } stackResourceId && !resourceMap.ContainsKey(stackResourceId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 중첩자원ID가 존재하지 않는 자원 ID '{stackResourceId}'를 참조합니다.");
         var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "스킬적중완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시", "추가타적중시", "기본공격적중시"], StringComparer.Ordinal);
@@ -348,7 +351,8 @@ public sealed class BattleCatalog
             Values = values,
             SynergyTypes = synergy,
             AccumulatesDuration = durationMode == "누적",
-            TargetResourceId = EmptyAsNull(row.GetValueOrDefault("대상자원ID", ""))
+            TargetResourceId = EmptyAsNull(row.GetValueOrDefault("대상자원ID", "")),
+            SustainResourceId = EmptyAsNull(row.GetValueOrDefault("유지자원ID", ""))
         };
     }
 

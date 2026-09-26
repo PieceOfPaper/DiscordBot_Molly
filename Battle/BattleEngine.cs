@@ -145,7 +145,7 @@ public sealed class BattleEngine
             if (scheduled is not null) actor.PendingSkillId = scheduled.Value.Child.Id;
         }
         foreach (var resourceId in actor.ExpireResources(events))
-            FirePassiveTrigger(actor, target, "자원소진시", null, resourceId, random, rules, events);
+            ResourceDepleted(actor, target, resourceId, random, rules, events);
     }
 
     private static double PowerScale(int power, double basePower, Rules rules) => Math.Clamp(Math.Pow(Math.Max(1d, power) / basePower, rules.PowerExponent), rules.PowerMin, rules.PowerMax);
@@ -647,7 +647,8 @@ public sealed class BattleEngine
     private static int AbsorbShield(Fighter target, Fighter attacker, int damage, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
         var remaining = damage;
-        foreach (var shield in target.ResourceDefinitions.Values.Where(x => x.Kind == "보호막").OrderBy(x => x.Id, StringComparer.Ordinal))
+        // 지속시간이 있는 보호막(프로텍션)을 영구 보호막(오든 실드)보다 먼저 쓴다. 같은 종류끼리는 ID 순이다.
+        foreach (var shield in target.ResourceDefinitions.Values.Where(x => x.Kind == "보호막").OrderBy(x => x.Duration > 0 ? 0 : 1).ThenBy(x => x.Id, StringComparer.Ordinal))
         {
             var value = target.Resources.GetValueOrDefault(shield.Id);
             if (remaining <= 0 || value <= 0) continue;
@@ -658,7 +659,7 @@ public sealed class BattleEngine
             var left = absorbed >= capacity ? 0 : Math.Max(0, value - (int)Math.Ceiling(absorbed / rules.FixedDamageScale));
             target.Resources[shield.Id] = left;
             events.Add(new("ShieldAbsorbed", attacker.Name, target.Name, absorbed, shield.Name));
-            if (left == 0) FirePassiveTrigger(target, attacker, "자원소진시", null, shield.Id, random, rules, events);
+            if (left == 0) ResourceDepleted(target, attacker, shield.Id, random, rules, events);
         }
         return remaining;
     }
@@ -716,7 +717,14 @@ public sealed class BattleEngine
         // 상호배타·1개 상한 자원(악상 등)은 이미 보유 중이면 재설정이 무시되므로(위 previous==value 조기 반환) 매 증가마다 발동해도 실질적으로는 최초 획득 때만 발동한다.
         if (value > previous && value > 0) FirePassiveTrigger(fighter, opponent, "자원획득시", null, definition.Id, random, rules, events);
         if (definition.Maximum > 0 && value >= definition.Maximum && previous < definition.Maximum) FirePassiveTrigger(fighter, opponent, "자원최대치도달시", null, definition.Id, random, rules, events);
-        if (previous > 0 && value <= 0) FirePassiveTrigger(fighter, opponent, "자원소진시", null, definition.Id, random, rules, events);
+        if (previous > 0 && value <= 0) ResourceDepleted(fighter, opponent, definition.Id, random, rules, events);
+    }
+
+    /// <summary>자원이 0이 되었을 때: 그 자원을 유지자원ID로 둔 상태(프로텍션 보호막의 지속 회복)를 해제한 뒤 자원소진시 패시브를 발동한다.</summary>
+    private static void ResourceDepleted(Fighter fighter, Fighter opponent, string resourceId, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        fighter.ReleaseSustainedStatuses(resourceId, events);
+        FirePassiveTrigger(fighter, opponent, "자원소진시", null, resourceId, random, rules, events);
     }
 
     private static bool CanPaySkillResource(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
@@ -885,6 +893,15 @@ public sealed class BattleEngine
             var matching = ActiveStatusIds().Select(id => StatusDefinitions.GetValueOrDefault(id)).Where(status => status is not null && status.HasEffectType(effectType)).Cast<BattleStatus>().ToArray();
             var synergy = matching.Where(status => status.IsSynergy(effectType)).Select(status => ScaledValue(status, effectType)).DefaultIfEmpty(0d).Max();
             return matching.Where(status => !status.IsSynergy(effectType)).Sum(status => ScaledValue(status, effectType)) + synergy;
+        }
+        /// <summary>유지자원ID가 이 자원인 보유 상태를 즉시 해제하고 해제 로그를 남긴다. "상태만료 시" 파생은 발동하지 않는다.</summary>
+        public void ReleaseSustainedStatuses(string resourceId, List<BattleEvent> events)
+        {
+            foreach (var id in Statuses.Keys.Where(id => StatusDefinitions.GetValueOrDefault(id)?.SustainResourceId == resourceId).ToArray())
+            {
+                RemoveStatus(id);
+                events.Add(new("StatusExpired", Name, Detail: StatusDefinitions[id].Name));
+            }
         }
         /// <summary>보유 중인 턴당자원증가 상태가 이번 턴에 채울 자원과 양. 값에 중첩자원ID 배율을 적용하고 반올림한다.</summary>
         public IReadOnlyList<(string ResourceId, int Amount)> TurnResourceGains() => ActiveStatusIds().Select(id => StatusDefinitions.GetValueOrDefault(id))

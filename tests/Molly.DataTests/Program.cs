@@ -1394,6 +1394,24 @@ Check(shieldBattle.Events.Where(x => x.Type == "ShieldAbsorbed" && x.Target == "
     && shieldBattle.FighterAHp == 900 && shieldBattle.Events.Any(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "보호막 파괴 +1 (현재 1)"),
     "보호막 100(×0.5=50)은 지속 피해 20을 흡수한 뒤 남은 30으로 일반 공격 130 중 30만 막고, 모두 깎이면 자원소진시 패시브를 발동한다");
 
+// 보호막이 둘이면 지속시간이 있는 보호막(프로텍션)부터 흡수한다. 유지자원ID 상태(프로텍션 지속 회복)는 그 보호막이 깨지면 함께 해제되고, 남아 있으면 계속 회복한다(GitHub Issue #13).
+BattleDataSnapshot FortifySnapshot(double normalAttackMultiplier, int selfHit = 0) => new()
+{
+    Rules = RulesWith(("base_max_hp", "1000"), ("base_attack", "100"), ("base_defense", "0"), ("fixed_damage_scale", "0.5"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "3"), ("normal_attack_multiplier", normalAttackMultiplier.ToString(System.Globalization.CultureInfo.InvariantCulture))),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "보루", ["fortify"]), ["idle"] = idleClass },
+    Skills = new Dictionary<string, BattleSkill> { ["fortify"] = new("fortify", "보루", "일반", null, true, 99, 0, 1, 1, (selfHit > 0 ? [Fx("fortify_0", 1, "피해", "자신", fixedValue: selfHit)] : Array.Empty<BattleEffect>()).Concat([Fx("fortify_1", 2, "자원설정", "자신", fixedValue: 40, status: "timed_shield"), Fx("fortify_2", 3, "지속회복", "자신", fixedValue: 10, duration: 3, status: "fort_regen")]).ToArray()) },
+    Resources = new Dictionary<string, BattleResource> { ["timed_shield"] = new("timed_shield", "시한 보호막", "보호막", 0, 0, 3, "교체"), ["perm_shield"] = new("perm_shield", "영구 보호막", "보호막", 0, 100, 0, "가산") },
+    Statuses = new Dictionary<string, BattleStatus> { ["fort_regen"] = new("fort_regen", "보루 회복", "없음", 0, "") { SustainResourceId = "timed_shield" } }, LoadedAt = DateTimeOffset.UtcNow
+};
+var brokenFort = Duel(FortifySnapshot(1.3)).Events;
+Check(brokenFort.Where(x => x.Type == "ShieldAbsorbed" && x.Target == "A").Select(x => (x.Detail, x.Amount)).SequenceEqual(new (string?, int?)[] { ("시한 보호막", 20), ("영구 보호막", 50) })
+    && brokenFort.Any(x => x.Type == "StatusExpired" && x.Actor == "A" && x.Detail == "보루 회복") && !brokenFort.Any(x => x.Type == "StatusHeal"),
+    "일반 공격 130은 시한 보호막 20을 먼저 깎고 영구 보호막에서 50을 막으며, 시한 보호막이 깨지면 유지자원 상태의 지속 회복도 끝난다");
+var heldFort = Duel(FortifySnapshot(0.1, selfHit: 300)).Events;
+Check(heldFort.Count(x => x.Type == "ShieldAbsorbed" && x.Detail == "시한 보호막") == 1 && !heldFort.Any(x => x.Type == "StatusExpired" && x.Detail == "보루 회복")
+    && heldFort.Any(x => x.Type == "StatusHeal" && x.Target == "A" && x.Detail == "보루 회복" && x.Amount == 5),
+    "시한 보호막이 남아 있으면 유지자원 상태의 지속 회복(10×0.5=5)이 다음 턴에 들어간다(체력을 먼저 깎아 둠)");
+
 // 기본공격적중시는 일반 공격이 피해를 줬을 때만, 추가타적중시는 스킬·일반 공격의 추가타마다 발동한다.
 var hitTriggerRules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "3"), ("additional_hit_chance", "1"));
 var hitTriggerResources = new Dictionary<string, BattleResource> { ["basic_hits"] = new("basic_hits", "기본 공격 적중", "중첩", 0, 0, 0, "가산"), ["extra_hits"] = new("extra_hits", "추가타 적중", "중첩", 0, 0, 0, "가산") };
