@@ -54,6 +54,7 @@ Codex와 Claude Code는 대화가 끝나면 이번 세션의 판단 과정을 �
 
 - `docs/battle/README.md`의 "8.x `{클래스}` 배틀 데이터 기준" 절 패턴을 따라 새 섹션을 추가하고, 뒤따르는 하위 절 번호를 한 칸씩 민다. 상호 참조(예: "8.12 검증을 통과한")도 함께 갱신한다.
 - 새 클래스가 도입한 고유 메커니즘(조건부 대체 파생, 자원 게이팅 등)을 검증하는 합성 테스트를 `tests/Molly.DataTests/Program.cs`에 추가한다. 기존 코드의 `battleRules`, `Check`, `FixedBattleRandom` 패턴을 그대로 재사용한다.
+- 게임에 아예 새로 추가된 클래스라면 클래스 아이콘을 `assets/class_icons/{클래스 ID}.png`로 넣고, `Commons/ClassIcons.cs`의 `ClassIds`와 `scripts/verify.sh`, `ClassIconTests`의 개수를 함께 갱신한다. 원본은 나무위키 `마비노기 모바일/클래스` 문서의 `{계열}{번호} icon` 이미지(클래스 상세 문서 제목 옆 아이콘과 동일)다.
 - `bash scripts/verify.sh`로 빌드·오프라인 테스트·publish·필수 에셋을 모두 확인한다.
 
 ## 7. 원본 대비 gap 정리
