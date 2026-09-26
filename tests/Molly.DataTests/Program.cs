@@ -214,6 +214,24 @@ Check(registeredCommands.Count > 0 && registeredCommands.SequenceEqual(helpComma
 var helpFields = DiscordBot_Molly.Commands.HelpCatalog.Categories.Select(c => (c.Title, Value: DiscordBot_Molly.Commands.HelpCatalog.FormatCommands(c))).ToList();
 Check(helpFields.Count <= 25 && helpFields.All(f => f.Title.Length <= 256 && f.Value.Length <= 1024) && helpFields.Sum(f => f.Title.Length + f.Value.Length) < 5500,
     "도움말 임베드는 Discord 필드 수·길이 제한 안에 들어간다");
+var helpTopics = DiscordBot_Molly.Commands.HelpCatalog.Topics;
+var helpTopicChoices = typeof(DiscordBot_Molly.Commands.HelpCommand).GetMethod(nameof(DiscordBot_Molly.Commands.HelpCommand.ShowAsync))!
+    .GetParameters().Single().GetCustomAttributes(typeof(Discord.Interactions.ChoiceAttribute), false)
+    .Cast<Discord.Interactions.ChoiceAttribute>().Select(c => (string)c.Value).ToList();
+Check(helpTopicChoices.Count is > 0 and <= 25 && helpTopicChoices.SequenceEqual(helpTopics.Select(t => t.Name)),
+    "상세 도움말 주제 선택지는 카탈로그 주제와 같은 순서로 일치한다");
+Check(helpTopics.All(t => t.Commands.Count > 0 && t.Commands.All(registeredCommands.Contains)),
+    "상세 도움말 주제의 관련 명령은 모두 실제 등록된 슬래시 명령이다");
+Check(helpTopics.All(t => t.Fields.Count is > 0 and <= 25 && t.Fields.All(f => f.Name.Length <= 256 && f.Value.Length <= 1024)),
+    "상세 도움말 주제는 Discord 필드 수·길이 제한 안에 들어간다");
+Check(helpTopics.All(t => DiscordBot_Molly.Commands.HelpCommand.BuildTopic(t).Length < 5500)
+      && DiscordBot_Molly.Commands.HelpCommand.BuildOverview().Length < 5500,
+    "도움말 전체·상세 임베드는 Discord 전체 길이 제한 안에 들어간다");
+var overviewHelp = DiscordBot_Molly.Commands.HelpCommand.BuildOverview();
+Check(overviewHelp.Fields.Any(f => f.Value.Contains("/도움말 주제:") && helpTopics.All(t => f.Value.Contains(t.Name))),
+    "주제 없는 도움말은 상세 도움말 사용법과 모든 주제를 안내한다");
+Check(DiscordBot_Molly.Commands.HelpCatalog.FindTopic(null) is null && DiscordBot_Molly.Commands.HelpCatalog.FindTopic("없는주제") is null,
+    "알 수 없는 도움말 주제는 찾지 않는다");
 Check((int)MobiServer.몰리 == 8, "몰리 서버 ID는 공식 랭킹 선택값 8");
 // MobiRankBrowser.cs의 ExtractOverallRankFieldsAsync 안 JS 정규식과 동일한 패턴입니다.
 // 브라우저 DOM을 거치는 실제 파싱은 오프라인 테스트로 실행할 수 없어, 정규식만 별도로 고정합니다.
