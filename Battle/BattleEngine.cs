@@ -26,6 +26,9 @@ public sealed class BattleEngine
             // 지속턴은 보유자의 턴이 돌아올 때 차감하지만, 0이 된 상태·자원도 이번 행동까지는 적용하고 행동이 끝난 뒤 제거한다.
             // 따라서 지속턴 N은 "적용된 행동을 제외한 보유자의 다음 N회 행동"이다. 상대에게 건 디버프는 상대의 턴으로 센다.
             actor.TickResources();
+            // 브레이크로 행동을 잃은 뒤에는 브레이크가 상대의 다음 행동까지 남고, 다음 자기 행동이 시작될 때 풀린다(GitHub Issue #11).
+            // 지속 피해 틱보다 먼저 풀어 회복하는 턴의 지속 피해에는 브레이크의 받는 피해 증가가 붙지 않는다.
+            actor.RecoverFromBreak(events);
             actor.TickStatuses();
             var periodic = actor.TickPeriodicEffects(rules, events, damage => AbsorbShield(actor, target, damage, random, rules, events));
             if (periodic.Damaged && actor.Hp > 0 || periodic.Healed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
@@ -36,6 +39,7 @@ public sealed class BattleEngine
             if (actionBroken)
             {
                 events.Add(new("BreakActionLost", target.Name, actor.Name));
+                actor.MarkBreakActionLost();
                 EndTurn(actor, target, data, random, rules, events);
                 major++;
                 actor = target;
@@ -678,6 +682,13 @@ public sealed class BattleEngine
 
     private static void ApplyBreakDamage(Fighter actor, Fighter target, int amount, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
+        // 브레이크 중에는 게이지를 더 채우지 못하고, 다시 걸어도 지속이 늘거나 갱신되지 않는다(GitHub Issue #11).
+        // 인게임은 브레이크 타입만 바뀌지만 몰리 배틀에는 타입 구분이 없어 아무 변화가 없다.
+        if (target.HasStatusEffect("브레이크"))
+        {
+            events.Add(new("BreakGaugeBlocked", actor.Name, target.Name));
+            return;
+        }
         if (target.HasStatusEffect("브레이크면역"))
         {
             events.Add(new("BreakImmune", actor.Name, target.Name));
@@ -851,6 +862,8 @@ public sealed class BattleEngine
         // 상대가 건 상태(디버프·지속 피해·브레이크). 약초 채집·천옷 제작이 제거하는 "해로운 상태"의 기준이다.
         public HashSet<string> HarmfulStatuses { get; } = new(StringComparer.Ordinal);
         public int BreakGauge;
+        // 브레이크로 잃을 행동을 모두 잃었으면 true. 브레이크 상태는 다음 자기 행동이 시작될 때까지 남는다.
+        private bool breakActionsSpent;
         public string? PendingSkillId;
         public IReadOnlyList<BattlePassive> Passives = Array.Empty<BattlePassive>();
         public Dictionary<string, int> Cooldowns { get; } = new(StringComparer.Ordinal);
@@ -1070,6 +1083,23 @@ public sealed class BattleEngine
             var incoming = Math.Max(.1d, 1d + StatusValue("받는피해증가") - StatusValue("받는피해감소"));
             return Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount * remainingTicks - Defense * rules.DefenseCoefficient) * incoming * (1d + bonus)));
         }
+        private IEnumerable<string> BreakStatusIds() => Statuses.Keys.Where(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType("브레이크")).ToArray();
+        /// <summary>브레이크로 행동을 잃었다. 남은 지속턴이 0이면(잃을 행동을 모두 잃었으면) 브레이크를 다음 자기 행동 시작까지 남긴다.</summary>
+        public void MarkBreakActionLost()
+        {
+            if (BreakStatusIds().All(id => Statuses[id] <= 0)) breakActionsSpent = true;
+        }
+        /// <summary>잃을 행동을 모두 잃은 브레이크를 행동 시작에 해제한다. "상태만료 시" 파생은 발동하지 않는다.</summary>
+        public void RecoverFromBreak(List<BattleEvent> events)
+        {
+            if (!breakActionsSpent) return;
+            breakActionsSpent = false;
+            foreach (var id in BreakStatusIds())
+            {
+                RemoveStatus(id);
+                events.Add(new("StatusExpired", Name, Detail: StatusDefinitions[id].Name));
+            }
+        }
         /// <summary>턴 시작에 상태 지속턴을 1 줄인다. 0이 된 상태도 이번 행동까지 적용하고 <see cref="ExpireStatuses"/>에서 제거한다.</summary>
         public void TickStatuses()
         {
@@ -1081,8 +1111,8 @@ public sealed class BattleEngine
             var announced = new HashSet<string>(StringComparer.Ordinal);
             foreach (var id in Statuses.Keys.ToArray())
             {
-                // 행동 중 다시 부여되어 지속턴이 새로 채워진 상태는 남는다.
-                if (Statuses[id] > 0) continue;
+                // 행동 중 다시 부여되어 지속턴이 새로 채워진 상태는 남는다. 행동을 모두 잃은 브레이크는 다음 자기 행동 시작에 풀린다.
+                if (Statuses[id] > 0 || breakActionsSpent && StatusDefinitions.GetValueOrDefault(id)?.HasEffectType("브레이크") == true) continue;
                 var source = RemoveStatus(id);
                 var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
                 // 천옷 제작처럼 한 생활스킬이 같은 이름의 상태를 여러 개 걸면 해제 로그는 한 번만 남긴다.

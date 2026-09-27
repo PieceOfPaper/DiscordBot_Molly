@@ -580,6 +580,34 @@ Check(gaugeHits.Length >= 3 && gaugeHits[0].Amount == 1 && gaugeHits[1].Amount =
 var multiHitBreakActivatedCount = multiHitBreakBattle.Events.Count(x => x.Type == "BreakActivated" && x.Target == "B");
 var multiHitBreakActionLostCount = multiHitBreakBattle.Events.Count(x => x.Type == "BreakActionLost" && x.Target == "B");
 Check(multiHitBreakActivatedCount >= 1 && multiHitBreakActionLostCount == multiHitBreakActivatedCount, "브레이크 지속 1턴은 발동마다 상대의 행동을 정확히 한 번만 취소한다");
+// GitHub Issue #11: 브레이크로 행동을 한 번 잃은 뒤에도 브레이크가 공격자의 다음 행동까지 남고, 상대의 다음 행동 시작에 풀린다.
+// 브레이크 중에는 게이지가 오르지 않고 다시 걸어도 행동을 더 잃지 않는다.
+// 창 공격: 1) 상대가 브레이크 상태일 때만 주는 피해 50 → 2) 브레이크 대미지 1칸(게이지 1칸이면 바로 브레이크).
+var windowSkill = new BattleSkill("window_strike", "틈새 공격", "일반", null, true, 1, 0, 1, 1, [
+    new BattleEffect("window_hit", 1, "피해", "상대", 50, 1, 1, 0, null, 0, null, "상대", "상태효과보유", "break_broken", null, null, null, null),
+    new BattleEffect("window_break", 2, "브레이크피해", "상대", 1, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null),
+    new BattleEffect("window_rebreak", 3, "상태효과", "상대", 0, 1, 1, 1, "break_broken", 1, null, null, null, null, null, null, null, null)]);
+var windowRules = battleRules.ToDictionary(x => x.Key, x => x.Value);
+windowRules["break_gauge_maximum"] = new("break_gauge_maximum", "브레이크", "integer", "1", "");
+windowRules["max_major_actions"] = new("max_major_actions", "종료", "integer", "6", "");
+windowRules["break_duration_turns"] = new("break_duration_turns", "브레이크", "integer", "1", "");
+windowRules["minimum_skill_cooldown"] = new("minimum_skill_cooldown", "종료", "integer", "1", "");
+windowRules["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100000", "");
+var windowSnapshot = new BattleDataSnapshot { Rules = windowRules, Classes = new Dictionary<string, BattleClass> { ["window"] = new("window", "틈새", ["window_strike"]), ["target"] = new("target", "대상", Array.Empty<string>()) }, Skills = new Dictionary<string, BattleSkill> { ["window_strike"] = windowSkill }, Statuses = breakSnapshot.Statuses, LoadedAt = DateTimeOffset.UtcNow };
+var windowEvents = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "window", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), windowSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100)))).Events;
+var windowTurns = new List<List<BattleEvent>>();
+foreach (var e in windowEvents) { if (e.Type == "TurnStarted") windowTurns.Add([e]); else if (windowTurns.Count > 0) windowTurns[^1].Add(e); }
+// 턴 순서: A(브레이크) → B(행동 상실) → A(브레이크 구간) → B(회복 후 행동) → A(다시 브레이크) → B(행동 상실)
+Check(windowTurns[0].Count(x => x.Type == "DamageDealt" && x.Actor == "A") == 0 && windowTurns[0].Any(x => x.Type == "BreakActivated")
+    && windowTurns[1].Any(x => x.Type == "BreakActionLost" && x.Target == "B") && !windowTurns[1].Any(x => x.Type == "StatusExpired" && x.Detail == "브레이크")
+    && windowTurns[2].Count(x => x.Type == "DamageDealt" && x.Actor == "A") == 1,
+    "브레이크로 행동을 잃은 뒤에도 브레이크가 공격자의 다음 행동까지 남아 '상대가 브레이크 상태일 때' 효과가 발동한다");
+Check(windowTurns[2].Any(x => x.Type == "BreakGaugeBlocked" && x.Target == "B") && !windowTurns[2].Any(x => x.Type is "BreakGaugeChanged" or "BreakActivated"),
+    "브레이크 중에는 브레이크 게이지가 오르지 않는다");
+var recoveryTurn = windowTurns[3];
+Check(recoveryTurn.FindIndex(x => x.Type == "StatusExpired" && x.Actor == "B" && x.Detail == "브레이크") is >= 0 and var recovered && recoveryTurn.FindIndex(x => x.Type == "NormalAttackUsed" && x.Actor == "B") > recovered
+    && windowEvents.Count(x => x.Type == "BreakActionLost") == windowEvents.Count(x => x.Type == "BreakActivated"),
+    "브레이크 중 다시 걸어도 행동을 더 잃지 않고, 상대의 다음 행동 시작에 브레이크가 풀린 뒤 행동한다");
 var wardSkill = new BattleSkill("ward", "브레이크 방어", "일반", null, true, 5, 0, 1, 1, [new BattleEffect("ward", 1, "브레이크면역", "자신", 0, 1, 1, 2, "break_immunity", 1, null, null, null, null, null, null, null, null)]);
 var immunitySnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["breaker"] = new("breaker", "브레이커", ["break_skill"]), ["ward"] = new("ward", "방어", ["ward"]) }, Skills = new Dictionary<string, BattleSkill> { ["break_skill"] = breakSkill, ["ward"] = wardSkill }, Statuses = breakSnapshot.Statuses, LoadedAt = DateTimeOffset.UtcNow };
 var immunityBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "breaker", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "ward", 100, 0, 0), immunitySnapshot, new FixedBattleRandom(new[] { .9d }.Concat(Enumerable.Repeat(.5d, 100))));
