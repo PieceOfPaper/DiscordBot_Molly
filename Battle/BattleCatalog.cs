@@ -152,7 +152,7 @@ public sealed class BattleCatalog
         {
             var id = row.Required("ID", "배틀스킬", index);
             if (!rawSkills.TryGetValue(id, out var sourceSkill)) throw new InvalidDataException($"배틀스킬 시트 {index}행이 존재하지 않는 스킬 ID '{id}'를 참조합니다.");
-            if (!skillMap.TryAdd(id, new BattleSkill(id, sourceSkill["이름"], sourceSkill["스킬구분"], sourceSkill["부모스킬ID"], BattleCsv.Bool(row["활성화"], "배틀스킬", index, "활성화"), BattleCsv.Int(row["기본쿨다운"], "배틀스킬", index, "기본쿨다운"), BattleCsv.Int(row["최초쿨다운"], "배틀스킬", index, "최초쿨다운"), BattleCsv.Int(row["사용우선순위"], "배틀스킬", index, "사용우선순위"), 1d, effectMap.GetValueOrDefault(id, []), EmptyAsNull(row["자원유형"]), EmptyAsNull(row["자원소모"]), EmptyAsNull(row["자원획득"])))) throw new InvalidDataException($"배틀스킬 ID '{id}'가 중복되었습니다.");
+            if (!skillMap.TryAdd(id, new BattleSkill(id, sourceSkill["이름"], sourceSkill["스킬구분"], sourceSkill["부모스킬ID"], BattleCsv.Bool(row["활성화"], "배틀스킬", index, "활성화"), BattleCsv.Int(row["기본쿨다운"], "배틀스킬", index, "기본쿨다운"), BattleCsv.Int(row["최초쿨다운"], "배틀스킬", index, "최초쿨다운"), BattleCsv.Int(row["사용우선순위"], "배틀스킬", index, "사용우선순위"), 1d, effectMap.GetValueOrDefault(id, []), EmptyAsNull(row["자원유형"]), EmptyAsNull(row["자원소모"]), EmptyAsNull(row["자원획득"])) { UltimateQuote = EmptyAsNull(row.GetValueOrDefault("궁극기문구", "")) })) throw new InvalidDataException($"배틀스킬 ID '{id}'가 중복되었습니다.");
         }
         var classMap = new Dictionary<string, BattleClass>(StringComparer.Ordinal);
         foreach (var (row, index) in classes.Select((x, i) => (x, i + 2)))
@@ -210,9 +210,12 @@ public sealed class BattleCatalog
                 throw new InvalidDataException($"{sheet} '{effect.Id}'가 존재하지 않는 상태 효과 ID '{statusId}'를 참조합니다.");
             // 지속피해폭발(포이즌 익스플로전)은 폭발시킬 지속 피해 상태가 없으면 조용히 아무 일도 하지 않으므로 상태 ID를 필수로 검사한다.
             if (effect.Type == "지속피해폭발" && effect.StatusId is null) throw new InvalidDataException($"{sheet} '{effect.Id}'의 지속피해폭발에는 상태효과ID가 필요합니다.");
+            // 브레이크익스텐드(아이시클 섀터)는 브레이크를 바꿔 끼울 익스텐드 상태가 필요하다. 브레이크 효과유형이 없으면 행동 상실이 사라진다.
+            if (effect.Type == "브레이크익스텐드" && (effect.StatusId is null || !statusMap.TryGetValue(effect.StatusId, out var extended) || !extended.HasEffectType("브레이크"))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 브레이크익스텐드에는 효과유형에 브레이크가 있는 상태효과ID가 필요합니다.");
             if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
             if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
             if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
+            if (effect.ConditionType is "상태효과유형보유" or "상태효과유형미보유" && (effect.ConditionId is null || !statusMap.Values.Any(x => x.HasEffectType(effect.ConditionId)))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 효과유형 조건 '{effect.ConditionId}'을(를) 가진 상태가 없습니다.");
             if (effect.NumericReferenceId is { } referenceId && !resourceMap.ContainsKey(referenceId)) throw new InvalidDataException($"{sheet} '{effect.Id}'의 수치 참조 자원이 올바르지 않습니다.");
         }
         foreach (var effect in effectMap.Values.SelectMany(x => x))
@@ -235,7 +238,8 @@ public sealed class BattleCatalog
         var derivationList = Unique(derivations, "배틀스킬파생").Select((x, i) => new BattleDerivation(x["ID"], x["부모스킬ID"], x["파생스킬ID"], x["발동방식"], BattleCsv.Double(x["가중치"], "배틀스킬파생", i + 2, "가중치"), BattleCsv.Double(x["발동확률"], "배틀스킬파생", i + 2, "발동확률", 0, 1), EmptyAsNull(x["조건유형"]), EmptyAsNull(x["조건값"]), string.IsNullOrWhiteSpace(x["중복허용"]) ? false : BattleCsv.Bool(x["중복허용"], "배틀스킬파생", i + 2, "중복허용"), x["실행시점"], string.IsNullOrWhiteSpace(x["우선순위"]) ? 0 : BattleCsv.Int(x["우선순위"], "배틀스킬파생", i + 2, "우선순위"))).ToArray();
         if (derivationList.Any(x => !skillMap.ContainsKey(x.ParentSkillId) || !skillMap.ContainsKey(x.ChildSkillId))) throw new InvalidDataException("배틀스킬파생 시트가 존재하지 않는 배틀 스킬 ID를 참조합니다.");
         // 엔진이 모르는 조건유형은 항상 거짓으로 판정되어 파생이 조용히 사라지므로 로딩 단계에서 거부한다.
-        if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
+        if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "상대상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
+        if (derivationList.FirstOrDefault(x => x.ConditionType == "상대상태효과보유" && (x.ConditionValue is null || !statusMap.ContainsKey(x.ConditionValue))) is { } unknownStatus) throw new InvalidDataException($"배틀스킬파생 '{unknownStatus.Id}'의 상대상태효과보유 조건값이 존재하지 않는 상태 ID입니다.");
         var skillAiRules = ParseSkillAiRules(BattleCsv.Read(tables["배틀스킬AI"], "배틀스킬AI"), skillMap, resourceMap, statusMap);
         return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, SkillAiRules = skillAiRules, LifeSkills = ParseLifeSkills(tables), LoadedAt = loadedAt };
     }

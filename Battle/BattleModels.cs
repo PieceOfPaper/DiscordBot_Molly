@@ -40,7 +40,11 @@ public sealed record BattleClass(string Id, string Name, IReadOnlyList<string> S
 }
 public sealed record BattleSkill(string Id, string Name, string Kind, string? ParentSkillId, bool Enabled,
     int Cooldown, int InitialCooldown, int Priority, double Weight, IReadOnlyList<BattleEffect> Effects,
-    string? ResourceId = null, string? ResourceCost = null, string? ResourceGain = null);
+    string? ResourceId = null, string? ResourceCost = null, string? ResourceGain = null)
+{
+    /// <summary>궁극기 사용 시 제목 아래 작은 글씨로 출력하는 대사(원본 스킬 설명의 『』 문구). <c>배틀스킬.궁극기문구</c> 선택 컬럼.</summary>
+    public string? UltimateQuote { get; init; }
+}
 /// <summary>클래스가 상시로 갖고 있는 패시브입니다. 행동 후보로 선택되지 않고 <see cref="BattleEffect.Trigger"/> 시점마다 자동 발동합니다.</summary>
 public sealed record BattlePassive(string Id, bool Enabled, IReadOnlyList<BattleEffect> Effects);
 public sealed record BattleEffect(

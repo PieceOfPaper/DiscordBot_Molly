@@ -117,6 +117,19 @@ if (args.SequenceEqual(new[] { "--battle-live" }))
     Console.WriteLine($"실제 배틀 시트: 클래스 {snapshot.Classes.Count}개, 스킬 {snapshot.Skills.Count}개, 배틀 가능 클래스 {string.Join(", ", snapshot.BattleReadyClassIds.Select(id => snapshot.Classes[id].Name).Order(StringComparer.Ordinal))}");
     return;
 }
+if (args.Length >= 3 && args[0] == "--battle-log")
+{
+    // 밸런스 조정용: 두 클래스의 한 판을 Discord 중계 문구 그대로 출력한다. 네 번째 인자로 CSV 폴더를 주면 그 파일로 시뮬레이션한다.
+    using var client = new HttpClient();
+    var tables = args.Length >= 4
+        ? GoogleSheetsBattleSource.SheetNames.ToDictionary(x => x, x => File.ReadAllText(Path.Combine(args[3], x + ".csv")))
+        : await new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId).FetchAsync(default);
+    var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow);
+    var result = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", args[1], 1000, 0, 0), new CharacterBattleSnapshot(2, "B", args[2], 1000, 0, 0), data, new SystemBattleRandom());
+    foreach (var message in DiscordBot_Molly.Commands.BattleCommand.Format(result.Events)) Console.WriteLine(message + "\n");
+    Console.WriteLine($"결과: {result.Outcome}, A {result.FighterAHp}/{result.FighterAMaxHp}, B {result.FighterBHp}/{result.FighterBMaxHp}");
+    return;
+}
 if (args.Length >= 1 && args[0] == "--battle-balance")
 {
     // 기획 밸런스 점검 전용: 모든 배틀 준비 클래스를 동일 전투력으로 맞붙여 승률·스킬 사용 빈도·스킬 사용 전투 승률을 뽑는다.
@@ -551,6 +564,7 @@ await KeywordMarketTests.RunAsync();
 CrossbowBattleTests.Run();
 HealerBattleTests.Run();
 ThiefBattleTests.Run();
+IceMageBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
 await ClassIconTests.RunAsync();
@@ -657,6 +671,54 @@ var recoveryTurn = windowTurns[3];
 Check(recoveryTurn.FindIndex(x => x.Type == "StatusExpired" && x.Actor == "B" && x.Detail == "브레이크") is >= 0 and var recovered && recoveryTurn.FindIndex(x => x.Type == "NormalAttackUsed" && x.Actor == "B") > recovered
     && windowEvents.Count(x => x.Type == "BreakActionLost") == windowEvents.Count(x => x.Type == "BreakActivated"),
     "브레이크 중 다시 걸어도 행동을 더 잃지 않고, 상대의 다음 행동 시작에 브레이크가 풀린 뒤 행동한다");
+// 브레이크 익스텐드(빙결술사 아이시클 섀터): 상대가 익스텐드 전 브레이크 상태이면 커터를 다시 눌러 섀터로 바뀌고,
+// 브레이크를 익스텐드 상태(무방비 130%)로 바꿔 행동 상실을 브레이크 지속만큼 한 번 더 준다. 브레이크 한 번에 한 번만 적용된다.
+var extendCutter = new BattleSkill("ext_cutter", "커터", "일반", null, true, 1, 0, 1, 1, [
+    new BattleEffect("ext_cutter_hit", 1, "피해", "상대", 50, 1, 1, 0, null, 0, null, "상대", "상태효과유형보유", "브레이크", null, null, null, null),
+    new BattleEffect("ext_cutter_break", 2, "브레이크피해", "상대", 1, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)]);
+var extendShatter = new BattleSkill("ext_shatter", "섀터", "파생", "ext_cutter", true, 1, 0, 1, 1, [
+    new BattleEffect("ext_shatter_extend", 1, "브레이크익스텐드", "상대", 0, 1, 1, 0, "break_extended", 0, null, null, null, null, null, null, null, null)]);
+var extendStatuses = new Dictionary<string, BattleStatus>
+{
+    ["break_broken"] = new("break_broken", "브레이크", "브레이크|받는피해증가", .2, "행동 불가 및 무방비 대미지 120%"),
+    ["break_extended"] = new("break_extended", "브레이크 익스텐드", "브레이크|받는피해증가", .3, "행동 불가 연장 및 무방비 대미지 130%")
+};
+var extendSnapshot = new BattleDataSnapshot
+{
+    Rules = windowRules, Statuses = extendStatuses, LoadedAt = DateTimeOffset.UtcNow,
+    Classes = new Dictionary<string, BattleClass> { ["ice"] = new("ice", "빙결", ["ext_cutter"]), ["target"] = new("target", "대상", Array.Empty<string>()) },
+    Skills = new Dictionary<string, BattleSkill> { ["ext_cutter"] = extendCutter, ["ext_shatter"] = extendShatter },
+    Derivations = [new BattleDerivation("ext_to_shatter", "ext_cutter", "ext_shatter", "조건", 0, 1, "상대상태효과보유", "break_broken", false, "재사용 시", 100)]
+};
+var extendEvents = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ice", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), extendSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100)))).Events;
+var extendTurns = new List<List<BattleEvent>>();
+foreach (var e in extendEvents) { if (e.Type == "TurnStarted") extendTurns.Add([e]); else if (extendTurns.Count > 0) extendTurns[^1].Add(e); }
+// 턴 순서: A(커터 브레이크) → B(행동 상실) → A(섀터 익스텐드) → B(행동 상실) → A(익스텐드 구간 커터) → B(회복 후 행동)
+Check(extendTurns[0].Any(x => x.Type == "BreakActivated" && x.Detail == "무방비 대미지 120%") && extendTurns[1].Any(x => x.Type == "BreakActionLost" && x.Target == "B")
+    && extendTurns[2].Any(x => x.Type == "SkillUsed" && x.Detail == "섀터") && extendTurns[2].Any(x => x.Type == "BreakExtended" && x.Target == "B" && x.Amount == 1 && x.Detail == "무방비 대미지 130%")
+    && extendTurns[3].Any(x => x.Type == "BreakActionLost" && x.Target == "B"),
+    "브레이크 익스텐드는 상대 브레이크 중 커터를 섀터로 바꾸고 상대가 행동을 한 번 더 잃게 한다");
+Check(extendTurns[4].Any(x => x.Type == "SkillUsed" && x.Detail == "커터") && extendTurns[4].Count(x => x.Type == "DamageDealt" && x.Actor == "A") == 1 && extendTurns[4].Any(x => x.Type == "BreakGaugeBlocked")
+    && extendEvents.Count(x => x.Type == "BreakExtended") == 1,
+    "익스텐드된 브레이크에는 섀터가 다시 나오지 않고, 상태효과유형보유 브레이크 조건은 익스텐드 중에도 참이다");
+Check(extendTurns[5].FindIndex(x => x.Type == "StatusExpired" && x.Actor == "B" && x.Detail == "브레이크 익스텐드") is >= 0 and var extendRecovered && extendTurns[5].FindIndex(x => x.Type == "NormalAttackUsed" && x.Actor == "B") > extendRecovered
+    && extendEvents.Count(x => x.Type == "BreakActionLost") == 2 * extendEvents.Count(x => x.Type == "BreakActivated"),
+    "브레이크 익스텐드는 브레이크 한 번에 행동 상실을 두 배로 만들고 상대의 다음 행동 시작에 풀린다");
+var extendLog = string.Join("\n", DiscordBot_Molly.Commands.BattleCommand.Format(extendEvents));
+Check(extendLog.Contains("　↳ 💢 **브레이크!!**\n　↳ B이(가) **브레이크** 상태에 빠졌습니다!", StringComparison.Ordinal) && extendLog.Contains("　↳ 🧊 **브레이크 익스텐드!!**\n　↳ B의 브레이크가 연장되어 1턴 더 행동하지 못합니다!", StringComparison.Ordinal)
+    && !extendLog.Contains("## ", StringComparison.Ordinal) && !extendLog.Contains("무방비 대미지", StringComparison.Ordinal) && !extendLog.Contains("**브레이크** 상태가 적용", StringComparison.Ordinal),
+    "브레이크와 브레이크 익스텐드는 스킬 사용 아래 굵은 글씨로 강조하고 효과 목록은 생략한다");
+var lostTurn = DiscordBot_Molly.Commands.BattleCommand.Format(extendEvents).First(x => x.Contains("브레이크로 행동하지 못했습니다", StringComparison.Ordinal)).Split('\n');
+var lostIndex = Array.FindIndex(lostTurn, x => x.Contains("브레이크로 행동하지 못했습니다", StringComparison.Ordinal));
+Check(lostTurn[lostIndex] == "💢 B은(는) 브레이크로 행동하지 못했습니다!" && lostTurn.Skip(lostIndex + 1).All(x => x.StartsWith("　↳ ", StringComparison.Ordinal)),
+    "브레이크로 잃은 행동은 행동 제목으로 쓰고, 턴을 마치며 생기는 로그는 그 아래 들여쓰기로 붙는다");
+// 궁극기는 큰 글씨 제목(이모지)과 작은 글씨 대사를 사용 문구 위에 출력하고, 게이지 소모는 사용 문구 아래에 둔다.
+var ultimateGauge = new BattleResource("ultimate_gauge", "궁극기 게이지", "궁극기 게이지", 300, 300, 0, "가산");
+var ultimateSkill = new BattleSkill("test_ultimate", "혹한의 일격", "궁극기", null, true, 0, 0, 1, 1, [new BattleEffect("ult_hit", 1, "피해", "상대", 100, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)], "ultimate_gauge", "300") { UltimateQuote = "『여기 다시 한번』" };
+var ultimateSnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["ult"] = new("ult", "궁극", ["test_ultimate"]), ["target"] = new("target", "대상", Array.Empty<string>()) }, Skills = new Dictionary<string, BattleSkill> { ["test_ultimate"] = ultimateSkill }, Resources = new Dictionary<string, BattleResource> { ["ultimate_gauge"] = ultimateGauge }, LoadedAt = DateTimeOffset.UtcNow };
+var ultimateLog = DiscordBot_Molly.Commands.BattleCommand.Format(new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ult", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), ultimateSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100)))).Events).First();
+Check(ultimateLog.StartsWith("## 🌟 혹한의 일격!!\n-# 『여기 다시 한번』\nA이(가) **혹한의 일격**을(를) 사용합니다!\n　↳ A의 궁극기 게이지 -300 (현재 0)\n", StringComparison.Ordinal),
+    "궁극기는 큰 글씨 제목과 대사를 먼저 출력하고 게이지 소모는 사용 문구 아래에 둔다");
 var wardSkill = new BattleSkill("ward", "브레이크 방어", "일반", null, true, 5, 0, 1, 1, [new BattleEffect("ward", 1, "브레이크면역", "자신", 0, 1, 1, 2, "break_immunity", 1, null, null, null, null, null, null, null, null)]);
 var immunitySnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["breaker"] = new("breaker", "브레이커", ["break_skill"]), ["ward"] = new("ward", "방어", ["ward"]) }, Skills = new Dictionary<string, BattleSkill> { ["break_skill"] = breakSkill, ["ward"] = wardSkill }, Statuses = breakSnapshot.Statuses, LoadedAt = DateTimeOffset.UtcNow };
 var immunityBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "breaker", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "ward", 100, 0, 0), immunitySnapshot, new FixedBattleRandom(new[] { .9d }.Concat(Enumerable.Repeat(.5d, 100))));

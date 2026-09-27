@@ -162,6 +162,13 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
                 hasActionHeader = true;
                 continue;
             }
+            // 브레이크로 잃은 행동은 스킬 사용처럼 행동 제목으로 쓴다. 턴을 마치며 생기는 일(상태·자원 만료, 그에 반응한 패시브)이 그 아래 들여쓰기로 붙는다.
+            if (x.Type == "BreakActionLost")
+            {
+                current.Add("💢 " + x.Target + "은(는) 브레이크로 행동하지 못했습니다!");
+                hasActionHeader = true;
+                continue;
+            }
             if (x.Type == "LifeSkillUsed")
             {
                 var heading = "🌿 " + x.Actor + "의 생활스킬 **" + x.Detail + "**!";
@@ -170,12 +177,24 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
                 continue;
             }
             if (x.Type == "CriticalHit") { pendingCritical = true; continue; }
+            // 궁극기는 인게임 화면 상단 문구처럼 큰 글씨 제목과 작은 글씨 대사를 사용 문구 위에 먼저 보여준다.
+            if (x.Type == "UltimateUsed") { current.Add("## 🌟 " + x.Detail + "!!"); continue; }
+            if (x.Type == "UltimateQuote") { current.Add("-# " + x.Detail); continue; }
+            if (x.Type is "BreakActivated" or "BreakExtended")
+            {
+                // 브레이크·브레이크 익스텐드는 굵은 글씨 한 줄로 강조한다. 큰 글씨는 궁극기에만 써서 스킬 사용 문구가 묻히지 않게 한다.
+                var prefix = hasActionHeader ? "　↳ " : "";
+                current.Add(prefix + (x.Type == "BreakActivated" ? "💢 **브레이크!!**" : "🧊 **브레이크 익스텐드!!**"));
+                current.Add(prefix + (x.Type == "BreakActivated" ? x.Target + "이(가) **브레이크** 상태에 빠졌습니다!" : x.Target + "의 브레이크가 연장되어 " + x.Amount + "턴 더 행동하지 못합니다!"));
+                pendingCritical = false;
+                continue;
+            }
             var text = x.Type switch
             {
-                "LifeSkillNarration" => x.Detail, "LifeSkillEffect" => (pendingCritical ? "💥 **치명타!** " : "") + x.Detail, "StatusCleansed" => "🌿 " + x.Actor + "의 **" + x.Detail + "** 상태가 사라졌습니다.", "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AttackEvaded" => "💨 " + x.Target + "은(는) 상대의 시야에서 벗어나 공격을 흘려냈습니다!", "ShieldAbsorbed" => "🛡️ " + x.Target + "의 **" + x.Detail + "**이(가) " + x.Amount?.ToString("N0") + "의 피해를 흡수했습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "AdditionalDamage" => "✨ " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해를 입혔습니다!", "StatusDetonated" => "💥 **" + x.Detail + " 폭발!** " + x.Target + "에게 남은 지속 피해 " + x.Amount?.ToString("N0") + "을(를) 한꺼번에 입혔습니다!", "StatusDamage" => "🌒 **" + x.Detail + "!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 지속 피해를 입혔습니다!", "BreakGaugeChanged" => x.Target + "의 브레이크 게이지가 " + x.Amount + "/" + x.Detail + "이 되었습니다.", "BreakActivated" => "💢 " + x.Target + "이(가) **브레이크** 상태에 빠졌습니다!", "BreakActionLost" => "💢 " + x.Target + "은(는) 브레이크로 행동하지 못했습니다!", "BreakGaugeBlocked" => x.Target + "은(는) 이미 브레이크 상태라 브레이크 게이지가 오르지 않습니다.", "BreakImmune" => "🛡️ " + x.Target + "은(는) 브레이크를 버텨냈습니다!", "CooldownReduced" => x.Actor + "의 스킬 쿨다운이 " + x.Detail + "턴씩 감소했습니다.", "ResourceChanged" => x.Actor + "의 " + x.Detail, "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "StatusApplied" => x.Actor + "에게 **" + x.Detail + "** 상태가 적용되었습니다!" + (x.Amount is > 0 ? " (" + x.Amount + "턴)" : ""), "StatusExpired" => x.Actor + "의 **" + x.Detail + "** 상태가 풀렸습니다.", "StatusConsumed" => x.Actor + "의 **" + x.Detail + "** 상태가 공격에 소모되었습니다.", "StatusHeal" => "💚 **" + x.Detail + "!** " + x.Target + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
+                "LifeSkillNarration" => x.Detail, "LifeSkillEffect" => (pendingCritical ? "💥 **치명타!** " : "") + x.Detail, "StatusCleansed" => "🌿 " + x.Actor + "의 **" + x.Detail + "** 상태가 사라졌습니다.", "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AttackEvaded" => "💨 " + x.Target + "은(는) 상대의 시야에서 벗어나 공격을 흘려냈습니다!", "ShieldAbsorbed" => "🛡️ " + x.Target + "의 **" + x.Detail + "**이(가) " + x.Amount?.ToString("N0") + "의 피해를 흡수했습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "AdditionalDamage" => "✨ " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해를 입혔습니다!", "StatusDetonated" => "💥 **" + x.Detail + " 폭발!** " + x.Target + "에게 남은 지속 피해 " + x.Amount?.ToString("N0") + "을(를) 한꺼번에 입혔습니다!", "StatusDamage" => "🌒 **" + x.Detail + "!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 지속 피해를 입혔습니다!", "BreakGaugeChanged" => x.Target + "의 브레이크 게이지가 " + x.Amount + "/" + x.Detail + "이 되었습니다.", "BreakGaugeBlocked" => x.Target + "은(는) 이미 브레이크 상태라 브레이크 게이지가 오르지 않습니다.", "BreakImmune" => "🛡️ " + x.Target + "은(는) 브레이크를 버텨냈습니다!", "CooldownReduced" => x.Actor + "의 스킬 쿨다운이 " + x.Detail + "턴씩 감소했습니다.", "ResourceChanged" => x.Actor + "의 " + x.Detail, "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "StatusApplied" => x.Actor + "에게 **" + x.Detail + "** 상태가 적용되었습니다!" + (x.Amount is > 0 ? " (" + x.Amount + "턴)" : ""), "StatusExpired" => x.Actor + "의 **" + x.Detail + "** 상태가 풀렸습니다.", "StatusConsumed" => x.Actor + "의 **" + x.Detail + "** 상태가 공격에 소모되었습니다.", "StatusHeal" => "💚 **" + x.Detail + "!** " + x.Target + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
             };
             pendingCritical = false;
-            var isTurnStatus = !hasActionHeader && (x.Type is "StatusDamage" or "StatusHeal" or "StatusExpired" or "HpStatus" or "BreakActionLost");
+            var isTurnStatus = !hasActionHeader && (x.Type is "StatusDamage" or "StatusHeal" or "StatusExpired" or "HpStatus");
             if (isTurnStatus && !hasTurnStatusHeader) { current.Add("⏳ **" + (turnOwner ?? x.Actor) + "의 상태 효과**"); hasTurnStatusHeader = true; }
             if (text is not null) current.Add((hasActionHeader || isTurnStatus ? "　↳ " : "") + text);
         }

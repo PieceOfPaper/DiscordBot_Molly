@@ -76,11 +76,11 @@ internal static class ThiefBattleTests
             && expiredResult.Events.Any(x => x.Type == "StatusExpired" && x.Actor == "A" && x.Detail == "은신"),
             "쓰로잉 봄은 은신을 소모하지 않고, 은신이 만료되면 스닉 어택이 발동한다");
         // 무방비(브레이크 상태)의 적에게는 스닉 어택의 무방비 피해 +20%가 붙는다. 브레이크 게이지 1칸이면 은신 추가 타격이 바로 브레이크를 걸어,
-        // 이어지는 스크류 대거 2단계 첫 타 = (5,034×0.25 − 100) × 편차 1.08 × (1 + 연타 5% + 무방비 20%) × 브레이크 받는 피해 1.25.
+        // 이어지는 스크류 대거 2단계 첫 타 = (5,034×0.25 − 100) × 편차 1.08 × (1 + 연타 5% + 무방비 20%) × 브레이크 무방비 대미지 1.2.
         var broken = Duel(data, ["screw_dagger", "stealth"], maxActions: 4, rules: [("break_gauge_maximum", "1")]).Events;
         var withoutSneak = Duel(data, ["screw_dagger", "stealth"], maxActions: 4, rules: [("break_gauge_maximum", "1")], withoutPassives: ["sneak_attack"]).Events;
         int ScrewFirstHit(IReadOnlyList<BattleEvent> events) => events.SkipWhile(x => x.Type != "BreakActivated").First(x => x.Type == "DamageDealt" && x.Actor == "A").Amount ?? 0;
-        var baseHit = (5034 * .25 - 200 * .5) * (.9 + .9 * .2) * 1.25;
+        var baseHit = (5034 * .25 - 200 * .5) * (.9 + .9 * .2) * 1.2;
         Assert(ScrewFirstHit(broken) == (int)Math.Round(baseHit * 1.25) && ScrewFirstHit(withoutSneak) == (int)Math.Round(baseHit * 1.05),
             "스닉 어택의 무방비 피해 +20%는 상대가 브레이크 상태일 때 모든 공격에 붙는다");
         // 난수 0.1이면 은신 중 상대 공격이 대상 해제 판정(65%)으로 빗나간다.
@@ -282,7 +282,7 @@ thief_quick_hands,퀵 핸즈,중첩,3,0,0,가산,TRUE,"기본 공격 횟수. 도
 """",
         ["배틀상태효과"] = """"
 ID,이름,효과유형,값,설명,대상스킬ID,중첩자원ID,시너지,지속방식,효과별값,대상자원ID,유지자원ID,로그숨김
-break_broken,브레이크,브레이크|받는피해증가,0.25,브레이크 시 다음 행동을 잃고 받는 피해 +25%,,,,,,,,
+break_broken,브레이크,브레이크|받는피해증가,0.2,브레이크 시 다음 행동을 잃고 무방비 대미지 120%(받는 피해 +20%). 모든 브레이크 타입 공통인 무방비만 반영(강타·연타·속성 대미지 증가는 배틀에 구분이 없어 제외),,,,,,,,
 combat_mastery_swift_guard,전투 숙련: 쾌속,받는기본공격피해감소,0.1,상대 일반 공격으로 받는 피해 -10%. 레벨 30 어시스트 해금 문구는 구현 범위에서 제외,,,,,,,,
 combat_mastery_swift_multi,전투 숙련: 쾌속,멀티히트피해증가,0.05,적에게 주는 연타(다단) 피해 +5%,,,,,,,,
 thief_charge_bomb,오버 차지 충전: 쓰로잉 봄,턴당자원증가,1,전투 시작에 거는 영구 상태. 도적의 턴 시작마다 쓰로잉 봄 오버 차지 +1(행동을 잃는 턴에도).,,,,,,thief_bomb_charge,,TRUE

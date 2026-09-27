@@ -69,29 +69,35 @@ public sealed class BattleEngine
             else
             {
                 var selectedId = skill.Id;
-                if (SelectDerivation(actor, skill.Id, "재사용 시", data, null) is { } reuse)
+                if (SelectDerivation(actor, target, skill.Id, "재사용 시", data, null) is { } reuse)
                 {
                     skill = reuse.Child;
                     // 재사용은 진행 중인 상태를 끝내는 동작이다(죽은 척 중 재사용 → 기상). 조건이 된 상태를 조용히 제거해
                     // 행동이 끝난 뒤 같은 상태의 "상태만료 시" 파생이 한 번 더 발동하지 않게 한다.
                     if (reuse.Rule.ConditionType == "상태효과보유" && reuse.Rule.ConditionValue is { } reusedStatusId) actor.RemoveStatus(reusedStatusId);
                 }
-                SpendSkillResource(actor, target, skill, data, random, rules, events);
+                // 비용 소모 로그(궁극기 게이지·서리)는 스킬 사용 제목 아래에 보이도록 모아 두었다가 제목 뒤에 붙인다.
+                var costEvents = new List<BattleEvent>();
+                SpendSkillResource(actor, target, skill, data, random, rules, costEvents);
                 actor.Cooldowns[selectedId] = Math.Max(skill.Cooldown, rules.MinimumSkillCooldown);
                 actor.LastSkillId = skill.Id;
                 // 효과로 자원을 얻은 뒤에 조건 파생을 판정해야 한다. 다만 효과가 없는 무작위 부모는
                 // 실제로 발동한 자식 스킬만 제목으로 보여주기 위해 미리 한 번 선택한다.
-                var preselectedDerivations = skill.Effects.Count == 0 ? SelectImmediateDerivations(actor, skill, data, random).ToArray() : [];
+                var preselectedDerivations = skill.Effects.Count == 0 ? SelectImmediateDerivations(actor, target, skill, data, random).ToArray() : [];
                 // 부모 효과가 악상을 만든 뒤에 그 악상으로 실제 연주곡을 고르는 스킬이 있다.
                 // 이 경우 부모는 버튼/선택용 가상 스킬이므로, 효과 로그도 실제 연주곡 제목 아래에 둔다.
                 var effectEvents = new List<BattleEvent>();
                 var resolved = ExecuteEffects(actor, target, skill, surpriseMultiplier, random, rules, effectEvents);
-                var derivedSkills = preselectedDerivations.Length > 0 ? preselectedDerivations : SelectImmediateDerivations(actor, skill, data, random).ToArray();
+                var derivedSkills = preselectedDerivations.Length > 0 ? preselectedDerivations : SelectImmediateDerivations(actor, target, skill, data, random).ToArray();
                 var replacement = derivedSkills.Length == 1 && data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.ChildSkillId == derivedSkills[0].Id && x.ActivationMode == "대체");
                 var hiddenRandomParent = preselectedDerivations.Length == 1 && data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.ChildSkillId == preselectedDerivations[0].Id && x.ActivationMode == "무작위");
                 var hideParent = replacement || hiddenRandomParent;
+                // 궁극기는 제목 앞에 큰 글씨 배너와 대사를 먼저 알린다.
+                if (skill.Kind == "궁극기") events.Add(new("UltimateUsed", actor.Name, target.Name, Detail: skill.Name));
+                if (skill.Kind == "궁극기" && skill.UltimateQuote is { } quote) events.Add(new("UltimateQuote", actor.Name, target.Name, Detail: quote));
                 if (!hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: skill.Name));
                 if (hideParent) events.Add(new("SkillUsed", actor.Name, target.Name, Detail: derivedSkills[0].Name));
+                events.AddRange(costEvents);
                 events.AddRange(effectEvents);
                 var performedSkillId = skill.Id;
                 foreach (var derived in derivedSkills)
@@ -145,7 +151,7 @@ public sealed class BattleEngine
     {
         foreach (var expired in actor.ExpireStatuses(events))
         {
-            var scheduled = SelectDerivation(actor, expired.SourceSkillId, "상태만료 시", data, random, expired.Id);
+            var scheduled = SelectDerivation(actor, target, expired.SourceSkillId, "상태만료 시", data, random, expired.Id);
             if (scheduled is not null) actor.PendingSkillId = scheduled.Value.Child.Id;
         }
         foreach (var resourceId in actor.ExpireResources(events))
@@ -351,11 +357,11 @@ public sealed class BattleEngine
 
     private static BattleSkill? ChooseSkill(Fighter actor, Fighter target, BattleDataSnapshot data, IBattleRandom random, List<BattleEvent> events)
     {
-        var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && (actor.Cooldowns.GetValueOrDefault(x.Id) == 0 || ResolveReuse(actor, x, data) is not null) && x.Weight > 0 && CanPaySkillResource(actor, x, data) && (x.Effects.Count > 0 || HasImmediateDerivation(actor, x, data))).Cast<BattleSkill>().ToArray();
+        var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && (actor.Cooldowns.GetValueOrDefault(x.Id) == 0 || ResolveReuse(actor, target, x, data) is not null) && x.Weight > 0 && CanPaySkillResource(actor, x, data) && (x.Effects.Count > 0 || HasImmediateDerivation(actor, target, x, data))).Cast<BattleSkill>().ToArray();
         if (choices.Length == 0) return null;
         // 재사용 파생(같은 버튼을 다시 누르는 동작)도 일반 후보와 함께 추첨한다. 바로 발산할지 더 모을지는 배틀스킬AI 가산이 정한다(GitHub Issue #12).
         // 재사용은 직전 스킬과 다른 동작이므로 직전 사용 스킬 제외 규칙에서 뺀다.
-        var varied = choices.Where(x => x.Id != actor.LastSkillId || ResolveReuse(actor, x, data) is not null).ToArray();
+        var varied = choices.Where(x => x.Id != actor.LastSkillId || ResolveReuse(actor, target, x, data) is not null).ToArray();
         if (varied.Length > 0) choices = varied;
         var applied = new List<string>();
         var weights = choices.Select(x => SkillWeight(actor, target, x, data, applied)).ToArray();
@@ -410,21 +416,21 @@ public sealed class BattleEngine
         return rule.MaxBonus > 0 ? Math.Min(total, rule.MaxBonus) : Math.Max(total, rule.MaxBonus);
     }
 
-    private static BattleSkill? ResolveReuse(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
-        => SelectDerivation(actor, skill.Id, "재사용 시", data, null)?.Child;
+    private static BattleSkill? ResolveReuse(Fighter actor, Fighter target, BattleSkill skill, BattleDataSnapshot data)
+        => SelectDerivation(actor, target, skill.Id, "재사용 시", data, null)?.Child;
 
-    private static bool HasImmediateDerivation(Fighter actor, BattleSkill skill, BattleDataSnapshot data)
-        => data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.Timing == "즉시" && IsDerivationEligible(actor, x));
+    private static bool HasImmediateDerivation(Fighter actor, Fighter target, BattleSkill skill, BattleDataSnapshot data)
+        => data.Derivations.Any(x => x.ParentSkillId == skill.Id && x.Timing == "즉시" && IsDerivationEligible(actor, target, x));
 
-    private static IEnumerable<BattleSkill> SelectImmediateDerivations(Fighter actor, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random)
+    private static IEnumerable<BattleSkill> SelectImmediateDerivations(Fighter actor, Fighter target, BattleSkill skill, BattleDataSnapshot data, IBattleRandom random)
     {
-        var selected = SelectDerivation(actor, skill.Id, "즉시", data, random);
+        var selected = SelectDerivation(actor, target, skill.Id, "즉시", data, random);
         return selected is null ? [] : [selected.Value.Child];
     }
 
-    private static (BattleDerivation Rule, BattleSkill Child)? SelectDerivation(Fighter actor, string parentSkillId, string timing, BattleDataSnapshot data, IBattleRandom? random, string? expiringStatusId = null)
+    private static (BattleDerivation Rule, BattleSkill Child)? SelectDerivation(Fighter actor, Fighter target, string parentSkillId, string timing, BattleDataSnapshot data, IBattleRandom? random, string? expiringStatusId = null)
     {
-        foreach (var group in data.Derivations.Where(x => x.ParentSkillId == parentSkillId && x.Timing == timing && IsDerivationEligible(actor, x, expiringStatusId)).GroupBy(x => x.Priority).OrderByDescending(x => x.Key))
+        foreach (var group in data.Derivations.Where(x => x.ParentSkillId == parentSkillId && x.Timing == timing && IsDerivationEligible(actor, target, x, expiringStatusId)).GroupBy(x => x.Priority).OrderByDescending(x => x.Key))
         {
             var available = group.Where(x => x.ActivationMode != "확률" || random is null || random.NextDouble() < x.Chance).ToArray();
             if (available.Length == 0) continue;
@@ -445,12 +451,14 @@ public sealed class BattleEngine
         return rules[^1];
     }
 
-    private static bool IsDerivationEligible(Fighter actor, BattleDerivation rule, string? expiringStatusId = null)
+    private static bool IsDerivationEligible(Fighter actor, Fighter target, BattleDerivation rule, string? expiringStatusId = null)
         => rule.ConditionType switch
         {
             null or "" => true,
             "자원보유" => ResourceCondition(actor, rule.ConditionValue),
             "상태효과보유" => rule.ConditionValue is { } id && (actor.Statuses.ContainsKey(id) || expiringStatusId == id),
+            // 빙결술사 아이시클 섀터처럼 상대 상태로 버튼이 바뀌는 파생(상대가 익스텐드 전 브레이크 상태일 때 글래시어 커터 재사용).
+            "상대상태효과보유" => rule.ConditionValue is { } targetStatusId && target.Statuses.ContainsKey(targetStatusId),
             // 현재 악상 데이터는 바즈 테일이 세 곡 중 하나를 고르는 선택 표식이다.
             // 실제 보유 자원을 조건으로 쓰는 파생은 자원보유 형식으로 명시한다.
             "악상" when rule.ActivationMode == "무작위" => true,
@@ -631,6 +639,12 @@ public sealed class BattleEngine
             case "쿨다운감소":
                 receiver.ReduceCooldowns(Math.Max(1, ResolveFixedAmount(receiver, effect)), events);
                 break;
+            case "브레이크익스텐드" when effect.StatusId is { } extendedStatusId:
+                // 빙결술사 아이시클 섀터: 브레이크 중인 대상의 브레이크를 익스텐드 상태로 바꾸고 잃을 행동을 브레이크 지속만큼 더한다(전체 2배).
+                // 브레이크 한 번에 한 번만 적용하며, 브레이크가 아니거나 이미 익스텐드된 대상에게는 아무 일도 없다.
+                if (receiver.ExtendBreak(extendedStatusId, rules.BreakDuration))
+                    events.Add(new("BreakExtended", actor.Name, receiver.Name, rules.BreakDuration, BreakBanner(receiver.StatusDefinitions[extendedStatusId])));
+                break;
             case "상태해제" when effect.StatusId is { } releasedStatusId:
                 // 연결을 끊는 효과(서먼 스프라이트가 라이프 링크 해제). 보유 중일 때만 제거하고 해제 로그를 남긴다. "상태만료 시" 파생은 발동하지 않는다.
                 if (receiver.Statuses.ContainsKey(releasedStatusId))
@@ -670,6 +684,9 @@ public sealed class BattleEngine
             // 배틀스킬파생의 상태효과보유 판정과 동일한 의미다. 조건대상=상대로 상대의 상태를 검사할 수 있다.
             "상태효과보유" when effect.ConditionId is { } statusId => conditionOwner.Statuses.ContainsKey(statusId),
             "상태효과미보유" when effect.ConditionId is { } statusId => !conditionOwner.Statuses.ContainsKey(statusId),
+            // 조건ID에 효과유형을 적는다. "상대가 브레이크 상태일 때"는 브레이크·브레이크 익스텐드를 모두 포함하도록 효과유형 브레이크로 판정한다.
+            "상태효과유형보유" when effect.ConditionId is { } effectType => conditionOwner.HasStatusEffect(effectType),
+            "상태효과유형미보유" when effect.ConditionId is { } effectType => !conditionOwner.HasStatusEffect(effectType),
             // 패시브의 "회복적용시"처럼 HP 비율을 조건으로 거는 효과(예: 활력의 40% 미만)에 사용한다.
             "HP비율" => CompareRatio(ReferenceEquals(conditionOwner, actor) && actorHpRatioOverride is { } ratio ? ratio : (double)conditionOwner.Hp / conditionOwner.MaxHp, effect.ConditionOperator, effect.ConditionValue),
             _ => false
@@ -747,12 +764,17 @@ public sealed class BattleEngine
         events.Add(new("BreakGaugeChanged", actor.Name, target.Name, target.BreakGauge, rules.BreakGaugeMaximum.ToString()));
         if (target.BreakGauge < rules.BreakGaugeMaximum) return;
         target.BreakGauge = 0;
-        target.ApplyStatus("break_broken", rules.BreakDuration, "break", events, harmful: true);
-        events.Add(new("BreakActivated", actor.Name, target.Name));
+        // 브레이크 적용은 아래 BreakActivated 배너로 알린다.
+        target.ApplyStatus("break_broken", rules.BreakDuration, "break", events, harmful: true, announce: false);
+        events.Add(new("BreakActivated", actor.Name, target.Name, Detail: target.StatusDefinitions.TryGetValue("break_broken", out var broken) ? BreakBanner(broken) : null));
         // 자신 또는 상대가 브레이크되었을 때 반응하는 패시브를 양쪽 관점에서 모두 검사한다.
         FirePassiveTrigger(target, actor, "브레이크발생시", null, null, random, rules, events);
         if (actor.Hp > 0) FirePassiveTrigger(actor, target, "브레이크발생시", null, null, random, rules, events);
     }
+
+    /// <summary>브레이크 상태의 효과 요약(이벤트 Detail, 전투 로그에는 출력하지 않는다). 몰리 배틀은 브레이크 타입이 없어 모든 타입 공통인 무방비 대미지(받는피해증가)만 적는다.</summary>
+    private static string? BreakBanner(BattleStatus status)
+        => status.HasEffectType("받는피해증가") ? "무방비 대미지 " + (100 + status.ValueOf("받는피해증가") * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "%" : null;
 
     private static void SetResource(Fighter fighter, Fighter opponent, string id, int value, IBattleRandom random, Rules rules, List<BattleEvent> events)
     {
@@ -1137,6 +1159,22 @@ public sealed class BattleEngine
         public void MarkBreakActionLost()
         {
             if (BreakStatusIds().All(id => Statuses[id] <= 0)) breakActionsSpent = true;
+        }
+        /// <summary>
+        /// 브레이크를 익스텐드 상태로 바꾸고 남은 행동 상실에 <paramref name="extraTurns"/>를 더한다. 이미 행동을 모두 잃고 회복을 기다리던
+        /// 브레이크도 다시 행동을 잃는다. 브레이크가 아니거나 이미 익스텐드되었으면 false.
+        /// </summary>
+        public bool ExtendBreak(string extendedStatusId, int extraTurns)
+        {
+            var breaks = BreakStatusIds().ToArray();
+            if (breaks.Length == 0 || breaks.Contains(extendedStatusId)) return false;
+            var remaining = breaks.Max(id => Statuses[id]);
+            foreach (var id in breaks) RemoveStatus(id);
+            Statuses[extendedStatusId] = remaining + extraTurns;
+            StatusSources[extendedStatusId] = "break";
+            HarmfulStatuses.Add(extendedStatusId);
+            breakActionsSpent = false;
+            return true;
         }
         /// <summary>잃을 행동을 모두 잃은 브레이크를 행동 시작에 해제한다. "상태만료 시" 파생은 발동하지 않는다.</summary>
         public void RecoverFromBreak(List<BattleEvent> events)
