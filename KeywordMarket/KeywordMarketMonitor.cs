@@ -11,11 +11,11 @@ public interface IKeywordAlertSender
     Task SendAsync(KeywordMonitorChannel channel, IReadOnlyList<Embed> embeds, CancellationToken ct);
 }
 
-public sealed record KeywordRunResult(bool Success, string Message, KeywordEvaluation? Evaluation = null);
+public sealed record KeywordRunResult(bool Success, string Message);
 
 /// <summary>
 /// 검색어로 찾은 거래소 아이템 전체의 시세를 매 정각 수집해 저장하고, 시세 변동·신규 아이템·사라진 아이템을 등록된 채널에 알립니다.
-/// 알림을 보낸 뒤 과거시세 상태를 갱신합니다. 일정은 /해연시세모니터링과 같습니다(MarketSchedule).
+/// 시세 변동은 길드별 등락률·과거시세로 판정하며, 알림을 보낸 뒤 과거시세 상태를 갱신합니다. 일정은 /해연시세모니터링과 같습니다(MarketSchedule).
 /// </summary>
 public sealed class KeywordMarketMonitor
 {
@@ -104,29 +104,32 @@ public sealed class KeywordMarketMonitor
             m_Log($"검색 결과가 페이지 제한에 걸려 잘렸을 수 있어 이번 회차는 사라진 아이템을 판단하지 않습니다({prices.Count}건).");
 
         var isFirstRun = await Store.GetLatestCollectedAtAsync(ct).ConfigureAwait(false) is null;
-        var evaluation = KeywordMarketEvaluator.Evaluate(prices, previous, isFirstRun, canDetectRemoval: !search.IsTruncated, collectedAt);
+        var items = KeywordMarketEvaluator.EvaluateItems(prices, previous, isFirstRun, canDetectRemoval: !search.IsTruncated, collectedAt);
 
-        var sent = 0;
-        if (evaluation.HasAlerts)
+        var previousByGuild = await Store.LoadAllBaselinesAsync(ct).ConfigureAwait(false);
+        var guildBaselines = new Dictionary<ulong, IReadOnlyDictionary<long, KeywordBaseline>>();
+        int sent = 0, priceAlerts = 0;
+        foreach (var channel in await Store.GetChannelsAsync(ct).ConfigureAwait(false))
         {
-            var embeds = KeywordMarketMessages.BuildAlertEmbeds(Definition, evaluation, collectedAt, m_Source.Attribution);
-            foreach (var channel in await Store.GetChannelsAsync(ct).ConfigureAwait(false))
+            var baselines = previousByGuild.GetValueOrDefault(channel.GuildId) ?? new Dictionary<long, KeywordBaseline>();
+            var priceResult = KeywordMarketEvaluator.EvaluatePrices(prices, baselines, previous, items.States, channel.Threshold, collectedAt);
+            guildBaselines[channel.GuildId] = priceResult.Baselines;
+            priceAlerts += priceResult.Alerts.Count;
+            var evaluation = new KeywordEvaluation(priceResult.Alerts, items.NewItems, items.RemovedItems);
+            if (!evaluation.HasAlerts) continue;
+            try
             {
-                try
-                {
-                    await m_Sender.SendAsync(channel, embeds, ct).ConfigureAwait(false);
-                    sent++;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex) { m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}"); }
+                await m_Sender.SendAsync(channel, KeywordMarketMessages.BuildAlertEmbeds(Definition, evaluation, collectedAt, m_Source.Attribution), ct).ConfigureAwait(false);
+                sent++;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}"); }
         }
 
-        await Store.SaveRunAsync(collectedAt, prices, evaluation.States.Values, ct).ConfigureAwait(false);
+        await Store.SaveRunAsync(collectedAt, prices, items.States.Values, guildBaselines, ct).ConfigureAwait(false);
         return new KeywordRunResult(true,
-            $"수집 완료: 시세 {prices.Count}개{(isFirstRun ? "(첫 수집, 기준으로 저장)" : "")}, 변동 알림 {evaluation.PriceAlerts.Count}건, " +
-            $"신규 {evaluation.NewItems.Count}건, 사라짐 {evaluation.RemovedItems.Count}건, 전송 채널 {sent}곳",
-            evaluation);
+            $"수집 완료: 시세 {prices.Count}개{(isFirstRun ? "(첫 수집, 기준으로 저장)" : "")}, 변동 알림 {priceAlerts}건(길드 합계), " +
+            $"신규 {items.NewItems.Count}건, 사라짐 {items.RemovedItems.Count}건, 전송 채널 {sent}곳");
     }
 }
 
@@ -210,9 +213,9 @@ public static class KeywordMarketMessages
 
     /// <summary>
     /// 알림 테스트용 가상 판정. 마지막 저장 시세에서 아이템을 골라 신규 1개, 사라짐 1개, 시세 변동 1~2개를 서로 겹치지 않게 만듭니다.
-    /// 신규·사라짐은 실제로 일어난 일이 아니라 형식 예시이며, 시세 변동의 현재시세는 실제 값·과거시세는 기준을 넘도록 만든 가상 값입니다.
+    /// 신규·사라짐은 실제로 일어난 일이 아니라 형식 예시이며, 시세 변동의 현재시세는 실제 값·과거시세는 기준(threshold, 없으면 기본값)을 넘도록 만든 가상 값입니다.
     /// </summary>
-    public static KeywordEvaluation? BuildTestEvaluation(IReadOnlyList<MarketPrice> prices, Random random)
+    public static KeywordEvaluation? BuildTestEvaluation(IReadOnlyList<MarketPrice> prices, Random random, decimal? threshold = null)
     {
         if (prices.Count == 0) return null;
         var shuffled = prices.DistinctBy(x => x.KindId).OrderBy(_ => random.Next()).ToList();
@@ -225,11 +228,9 @@ public static class KeywordMarketMessages
         foreach (var price in shuffled.Where(x => !x.IsSoldOut && x.MinPrice > 0).Take(random.Next(1, 3)))
         {
             // 기준값보다 0~10%p 더 큰 가상 변동률로 과거시세를 역산합니다.
-            var rate = ((double)KeywordMarketRules.ChangeThreshold + random.NextDouble() * 0.10) * (random.Next(2) == 0 ? 1 : -1);
-            priceAlerts.Add(new KeywordPriceChangeAlert(price.Name, Math.Max(1, (long)Math.Round(price.MinPrice / (1 + rate))), price.MinPrice));
+            priceAlerts.Add(new KeywordPriceChangeAlert(price.Name, TestBaseline.Create(price.MinPrice, threshold ?? KeywordMarketRules.ChangeThreshold, random), price.MinPrice));
         }
         return new KeywordEvaluation(priceAlerts, [new KeywordNewItemAlert(newItem)],
-            removedItem is null ? [] : [new KeywordRemovedItemAlert(removedItem.Name, removedItem.IsSoldOut ? 0 : removedItem.MinPrice)],
-            new Dictionary<long, KeywordItemState>());
+            removedItem is null ? [] : [new KeywordRemovedItemAlert(removedItem.Name, removedItem.IsSoldOut ? 0 : removedItem.MinPrice)]);
     }
 }

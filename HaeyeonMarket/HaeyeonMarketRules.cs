@@ -14,9 +14,13 @@ public static class HaeyeonMarketRules
     // 시세를 조회하지 않고 0으로 계산하는 무가치한 재료.
     public static readonly IReadOnlySet<string> WorthlessMaterials = new HashSet<string>(StringComparer.Ordinal) { "세공된 페리도트ZZ" };
 
-    // 과거시세 대비 이 비율 이상 변동하면 알립니다(0.10 = 10%).
+    // 과거시세 대비 이 비율 이상 변동하면 알립니다(0.10 = 10%). 서버가 /해연시세모니터링에서 등락률을 정하지 않으면 이 기본값을 씁니다.
     public const decimal ProductChangeThreshold = 0.10m;
     public const decimal MaterialChangeThreshold = 0.20m;
+
+    // /해연시세모니터링 등락률 옵션 범위(%).
+    public const int MinChangePercent = 1;
+    public const int MaxChangePercent = 100;
 
     // 제작비와 완제품 구매가가 거의 같을 때 알림이 반복되지 않도록, 이 비율 이상 벌어져야 유불리가 바뀐 것으로 봅니다(0.03 = 3%, 0이면 여유 없음).
     public const decimal CraftSwitchMargin = 0.03m;
@@ -30,5 +34,13 @@ public static class HaeyeonMarketRules
     public static IReadOnlyList<CraftingRecipe> SelectRecipes(CraftingTable table) =>
         table.Items.Where(x => x.Name.StartsWith(ProductPrefix, StringComparison.Ordinal)).ToArray();
 
-    public static decimal ChangeThreshold(bool isProduct) => isProduct ? ProductChangeThreshold : MaterialChangeThreshold;
+    public static decimal ChangeThreshold(bool isProduct) => HaeyeonThresholds.Default.For(isProduct);
+}
+
+/// <summary>서버별 시세 변동 알림 기준 비율(0.10 = 10%).</summary>
+public sealed record HaeyeonThresholds(decimal Product, decimal Material)
+{
+    public static readonly HaeyeonThresholds Default = new(HaeyeonMarketRules.ProductChangeThreshold, HaeyeonMarketRules.MaterialChangeThreshold);
+
+    public decimal For(bool isProduct) => isProduct ? Product : Material;
 }

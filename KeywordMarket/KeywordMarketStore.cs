@@ -4,14 +4,18 @@ using Molly.Market;
 
 namespace Molly.KeywordMarket;
 
-public sealed record KeywordMonitorChannel(ulong GuildId, ulong ChannelId, DateTimeOffset RegisteredAtUtc);
+// 등락률(%)이 null이면 저장된 값이 없는 것이라 기본값(KeywordMarketRules.ChangeThreshold)을 씁니다.
+public sealed record KeywordMonitorChannel(ulong GuildId, ulong ChannelId, DateTimeOffset RegisteredAtUtc, int? ChangePercent = null)
+{
+    public decimal Threshold => ChangePercent is { } percent ? percent / 100m : KeywordMarketRules.ChangeThreshold;
+}
 
 // 마지막 정각 수집에서 저장한 시세 전체(매진·매물 부족 포함).
 public sealed record KeywordLatestPrices(DateTimeOffset CollectedAtUtc, IReadOnlyList<MarketPrice> Prices);
 
 /// <summary>
-/// 검색어 시세 모니터링 SQLite 저장소. 모니터링 하나(상자·패키지 등)의 길드별 알림 채널(길드당 1개),
-/// 시간별 시세 이력, 아이템별 과거시세·현재시세를 보관합니다. 여러 모니터링이 같은 테이블을 monitor 열로 나눠 씁니다.
+/// 검색어 시세 모니터링 SQLite 저장소. 모니터링 하나(상자·패키지 등)의 길드별 알림 채널(길드당 1개)과 등락률,
+/// 시간별 시세 이력, 아이템별 공용 상태(현재시세·누락 횟수), 길드·아이템별 과거시세를 보관합니다. 여러 모니터링이 같은 테이블을 monitor 열로 나눠 씁니다.
 /// </summary>
 public sealed class KeywordMarketStore
 {
@@ -33,8 +37,9 @@ public sealed class KeywordMarketStore
         {
             Directory.CreateDirectory(Path.GetDirectoryName(m_DatabasePath)!);
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+            var hasGuildBaseline = await MollySqliteSchema.TableExistsAsync(connection, transaction, "keyword_market_guild_baseline", ct).ConfigureAwait(false);
+            await ExecuteAsync(connection, transaction, """
                 CREATE TABLE IF NOT EXISTS keyword_market_channels (
                     monitor TEXT NOT NULL,
                     guild_id INTEGER NOT NULL,
@@ -66,14 +71,34 @@ public sealed class KeywordMarketStore
                     missing_runs INTEGER NOT NULL,
                     PRIMARY KEY (monitor, kind_id)
                 );
-                """;
-            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                CREATE TABLE IF NOT EXISTS keyword_market_guild_baseline (
+                    monitor TEXT NOT NULL,
+                    guild_id INTEGER NOT NULL,
+                    kind_id INTEGER NOT NULL,
+                    baseline_price INTEGER NOT NULL,
+                    baseline_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (monitor, guild_id, kind_id)
+                );
+                """, ct).ConfigureAwait(false);
+            // 등락률 열은 나중에 추가되어 이전 DB에는 없습니다. 값이 없으면(NULL) 기본값을 씁니다.
+            await MollySqliteSchema.AddColumnIfMissingAsync(connection, transaction, "keyword_market_channels", "change_percent", "INTEGER", ct).ConfigureAwait(false);
+            // 이전에는 과거시세를 모든 길드가 함께 썼습니다(keyword_market_item_state.baseline_price).
+            // 길드별 표를 처음 만들 때 모든 모니터링의 등록 길드마다 복사해 이어갑니다.
+            if (!hasGuildBaseline)
+                await ExecuteAsync(connection, transaction, """
+                    INSERT OR IGNORE INTO keyword_market_guild_baseline (monitor, guild_id, kind_id, baseline_price, baseline_at_utc)
+                    SELECT c.monitor, c.guild_id, s.kind_id, s.baseline_price, s.baseline_at_utc
+                    FROM keyword_market_channels c JOIN keyword_market_item_state s ON s.monitor = c.monitor
+                    WHERE s.baseline_price > 0;
+                    """, ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
         finally { m_Gate.Release(); }
     }
 
     // 이전에 등록된 채널을 돌려줍니다(없으면 null). 길드당 하나만 유지하므로 다른 채널에서 등록하면 옮겨집니다.
-    public async Task<KeywordMonitorChannel?> SetChannelAsync(ulong guildId, ulong channelId, DateTimeOffset nowUtc, CancellationToken ct = default)
+    // 등락률(%)은 null이면 저장하지 않고(NULL) 기본값을 따르게 합니다.
+    public async Task<KeywordMonitorChannel?> SetChannelAsync(ulong guildId, ulong channelId, DateTimeOffset nowUtc, int? changePercent = null, CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -82,10 +107,12 @@ public sealed class KeywordMarketStore
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
             var previous = await ReadChannelAsync(connection, transaction, guildId, ct).ConfigureAwait(false);
             await ExecuteAsync(connection, transaction, """
-                INSERT INTO keyword_market_channels (monitor, guild_id, channel_id, registered_at_utc) VALUES ($monitor, $guildId, $channelId, $at)
-                ON CONFLICT(monitor, guild_id) DO UPDATE SET channel_id = excluded.channel_id, registered_at_utc = excluded.registered_at_utc;
+                INSERT INTO keyword_market_channels (monitor, guild_id, channel_id, registered_at_utc, change_percent) VALUES ($monitor, $guildId, $channelId, $at, $percent)
+                ON CONFLICT(monitor, guild_id) DO UPDATE SET channel_id = excluded.channel_id, registered_at_utc = excluded.registered_at_utc,
+                    change_percent = excluded.change_percent;
                 """, ct,
-                ("$guildId", checked((long)guildId)), ("$channelId", checked((long)channelId)), ("$at", Format(nowUtc))).ConfigureAwait(false);
+                ("$guildId", checked((long)guildId)), ("$channelId", checked((long)channelId)), ("$at", Format(nowUtc)),
+                ("$percent", (object?)changePercent ?? DBNull.Value)).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return previous;
         }
@@ -100,8 +127,11 @@ public sealed class KeywordMarketStore
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
             var previous = await ReadChannelAsync(connection, transaction, guildId, ct).ConfigureAwait(false);
-            await ExecuteAsync(connection, transaction, "DELETE FROM keyword_market_channels WHERE monitor = $monitor AND guild_id = $guildId;", ct,
-                ("$guildId", checked((long)guildId))).ConfigureAwait(false);
+            // 다시 등록하면 과거시세를 새로 시작하도록 길드별 과거시세도 지웁니다.
+            await ExecuteAsync(connection, transaction, """
+                DELETE FROM keyword_market_channels WHERE monitor = $monitor AND guild_id = $guildId;
+                DELETE FROM keyword_market_guild_baseline WHERE monitor = $monitor AND guild_id = $guildId;
+                """, ct, ("$guildId", checked((long)guildId))).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return previous;
         }
@@ -115,12 +145,24 @@ public sealed class KeywordMarketStore
         {
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var command = CreateCommand(connection,
-                "SELECT guild_id, channel_id, registered_at_utc FROM keyword_market_channels WHERE monitor = $monitor ORDER BY guild_id;");
+                $"SELECT {ChannelColumns} FROM keyword_market_channels WHERE monitor = $monitor ORDER BY guild_id;");
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             var result = new List<KeywordMonitorChannel>();
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                result.Add(new KeywordMonitorChannel(checked((ulong)reader.GetInt64(0)), checked((ulong)reader.GetInt64(1)), Parse(reader.GetString(2))));
+                result.Add(ReadChannel(reader));
             return result;
+        }
+        finally { m_Gate.Release(); }
+    }
+
+    public async Task<KeywordMonitorChannel?> GetChannelAsync(ulong guildId, CancellationToken ct = default)
+    {
+        await m_Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+            return await ReadChannelAsync(connection, transaction, guildId, ct).ConfigureAwait(false);
         }
         finally { m_Gate.Release(); }
     }
@@ -171,24 +213,50 @@ public sealed class KeywordMarketStore
         {
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var command = CreateCommand(connection, """
-                SELECT kind_id, item_name, baseline_price, baseline_at_utc, current_price, current_at_utc, first_seen_at_utc, missing_runs
+                SELECT kind_id, item_name, current_price, current_at_utc, first_seen_at_utc, missing_runs
                 FROM keyword_market_item_state WHERE monitor = $monitor;
                 """);
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             var result = new Dictionary<long, KeywordItemState>();
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                result[reader.GetInt64(0)] = new KeywordItemState(reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2), Parse(reader.GetString(3)),
-                    reader.GetInt64(4), Parse(reader.GetString(5)), Parse(reader.GetString(6)), reader.GetInt32(7));
+                result[reader.GetInt64(0)] = new KeywordItemState(reader.GetInt64(0), reader.GetString(1),
+                    reader.GetInt64(2), Parse(reader.GetString(3)), Parse(reader.GetString(4)), reader.GetInt32(5));
             return result;
+        }
+        finally { m_Gate.Release(); }
+    }
+
+    public async Task<IReadOnlyDictionary<long, KeywordBaseline>> LoadBaselinesAsync(ulong guildId, CancellationToken ct = default) =>
+        (await LoadAllBaselinesAsync(ct).ConfigureAwait(false)).GetValueOrDefault(guildId) ?? new Dictionary<long, KeywordBaseline>();
+
+    // 길드별 과거시세.
+    public async Task<IReadOnlyDictionary<ulong, IReadOnlyDictionary<long, KeywordBaseline>>> LoadAllBaselinesAsync(CancellationToken ct = default)
+    {
+        await m_Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+            await using var command = CreateCommand(connection,
+                "SELECT guild_id, kind_id, baseline_price, baseline_at_utc FROM keyword_market_guild_baseline WHERE monitor = $monitor;");
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            var result = new Dictionary<ulong, Dictionary<long, KeywordBaseline>>();
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var guildId = checked((ulong)reader.GetInt64(0));
+                if (!result.TryGetValue(guildId, out var baselines)) result[guildId] = baselines = new Dictionary<long, KeywordBaseline>();
+                baselines[reader.GetInt64(1)] = new KeywordBaseline(reader.GetInt64(1), reader.GetInt64(2), Parse(reader.GetString(3)));
+            }
+            return result.ToDictionary(x => x.Key, x => (IReadOnlyDictionary<long, KeywordBaseline>)x.Value);
         }
         finally { m_Gate.Release(); }
     }
 
     /// <summary>
     /// 한 회차의 원본 시세 이력과 새 상태를 한 트랜잭션으로 저장합니다. states에 없는 아이템(사라짐)은 상태에서 지우고,
-    /// 보관 기간이 지난 이력을 정리합니다.
+    /// 보관 기간이 지난 이력을 정리합니다. 길드별 과거시세는 넘겨받은 길드만 통째로 바꾸며, 판정 중 등록이 해제된 길드는 저장하지 않습니다.
     /// </summary>
-    public async Task SaveRunAsync(DateTimeOffset collectedAtUtc, IEnumerable<MarketPrice> prices, IEnumerable<KeywordItemState> states, CancellationToken ct = default)
+    public async Task SaveRunAsync(DateTimeOffset collectedAtUtc, IEnumerable<MarketPrice> prices, IEnumerable<KeywordItemState> states,
+        IReadOnlyDictionary<ulong, IReadOnlyDictionary<long, KeywordBaseline>> guildBaselines, CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -210,14 +278,28 @@ public sealed class KeywordMarketStore
             await ExecuteAsync(connection, transaction, "DELETE FROM keyword_market_item_state WHERE monitor = $monitor;", ct).ConfigureAwait(false);
             foreach (var state in states)
             {
+                // baseline_* 열은 과거시세를 길드별로 나누기 전의 열이라 현재시세를 같이 넣어 둡니다(읽지 않음).
                 await ExecuteAsync(connection, transaction, """
                     INSERT INTO keyword_market_item_state
                         (monitor, kind_id, item_name, baseline_price, baseline_at_utc, current_price, current_at_utc, first_seen_at_utc, missing_runs)
-                    VALUES ($monitor, $kindId, $name, $baseline, $baselineAt, $current, $currentAt, $firstSeen, $missing);
+                    VALUES ($monitor, $kindId, $name, $current, $currentAt, $current, $currentAt, $firstSeen, $missing);
                     """, ct,
-                    ("$kindId", state.KindId), ("$name", state.Name), ("$baseline", state.BaselinePrice), ("$baselineAt", Format(state.BaselineAtUtc)),
-                    ("$current", state.CurrentPrice), ("$currentAt", Format(state.CurrentAtUtc)), ("$firstSeen", Format(state.FirstSeenAtUtc)),
-                    ("$missing", state.MissingRuns)).ConfigureAwait(false);
+                    ("$kindId", state.KindId), ("$name", state.Name), ("$current", state.CurrentPrice), ("$currentAt", Format(state.CurrentAtUtc)),
+                    ("$firstSeen", Format(state.FirstSeenAtUtc)), ("$missing", state.MissingRuns)).ConfigureAwait(false);
+            }
+            foreach (var (guildId, baselines) in guildBaselines)
+            {
+                await ExecuteAsync(connection, transaction, "DELETE FROM keyword_market_guild_baseline WHERE monitor = $monitor AND guild_id = $guildId;", ct,
+                    ("$guildId", checked((long)guildId))).ConfigureAwait(false);
+                foreach (var baseline in baselines.Values)
+                {
+                    await ExecuteAsync(connection, transaction, """
+                        INSERT INTO keyword_market_guild_baseline (monitor, guild_id, kind_id, baseline_price, baseline_at_utc)
+                        SELECT $monitor, $guildId, $kindId, $price, $at
+                        WHERE EXISTS (SELECT 1 FROM keyword_market_channels WHERE monitor = $monitor AND guild_id = $guildId);
+                        """, ct,
+                        ("$guildId", checked((long)guildId)), ("$kindId", baseline.KindId), ("$price", baseline.Price), ("$at", Format(baseline.AtUtc))).ConfigureAwait(false);
+                }
             }
             await ExecuteAsync(connection, transaction, "DELETE FROM keyword_market_price_history WHERE monitor = $monitor AND collected_at_utc < $cutoff;", ct,
                 ("$cutoff", Format(collectedAtUtc - KeywordMarketRules.HistoryRetention))).ConfigureAwait(false);
@@ -258,12 +340,16 @@ public sealed class KeywordMarketStore
     private async Task<KeywordMonitorChannel?> ReadChannelAsync(SqliteConnection connection, SqliteTransaction transaction, ulong guildId, CancellationToken ct)
     {
         await using var command = CreateCommand(connection,
-            "SELECT channel_id, registered_at_utc FROM keyword_market_channels WHERE monitor = $monitor AND guild_id = $guildId;", transaction);
+            $"SELECT {ChannelColumns} FROM keyword_market_channels WHERE monitor = $monitor AND guild_id = $guildId;", transaction);
         command.Parameters.AddWithValue("$guildId", checked((long)guildId));
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
-        return new KeywordMonitorChannel(guildId, checked((ulong)reader.GetInt64(0)), Parse(reader.GetString(1)));
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? ReadChannel(reader) : null;
     }
+
+    private const string ChannelColumns = "guild_id, channel_id, registered_at_utc, change_percent";
+
+    private static KeywordMonitorChannel ReadChannel(SqliteDataReader reader) => new(
+        checked((ulong)reader.GetInt64(0)), checked((ulong)reader.GetInt64(1)), Parse(reader.GetString(2)), reader.IsDBNull(3) ? null : reader.GetInt32(3));
 
     private async Task ExecuteAsync(SqliteConnection connection, SqliteTransaction transaction, string sql, CancellationToken ct, params (string Name, object Value)[] parameters)
     {

@@ -4,7 +4,13 @@ using Molly.Market;
 
 namespace Molly.HaeyeonMarket;
 
-public sealed record HaeyeonMonitorChannel(ulong GuildId, ulong ChannelId, DateTimeOffset RegisteredAtUtc);
+// 등락률(%)이 null이면 저장된 값이 없는 것이라 기본값(HaeyeonMarketRules)을 씁니다.
+public sealed record HaeyeonMonitorChannel(ulong GuildId, ulong ChannelId, DateTimeOffset RegisteredAtUtc, int? ProductChangePercent = null, int? MaterialChangePercent = null)
+{
+    public HaeyeonThresholds Thresholds => new(
+        ProductChangePercent is { } product ? product / 100m : HaeyeonMarketRules.ProductChangeThreshold,
+        MaterialChangePercent is { } material ? material / 100m : HaeyeonMarketRules.MaterialChangeThreshold);
+}
 
 // 한 번의 정각 수집에서 저장할 원본 시세. IsProduct는 제작 아이템 여부입니다.
 public sealed record HaeyeonPriceSnapshot(MarketPrice Price, bool IsProduct);
@@ -13,8 +19,8 @@ public sealed record HaeyeonPriceSnapshot(MarketPrice Price, bool IsProduct);
 public sealed record HaeyeonLatestPrices(DateTimeOffset CollectedAtUtc, IReadOnlyDictionary<string, MarketPrice> Prices);
 
 /// <summary>
-/// /해연시세모니터링 SQLite 저장소. 길드별 알림 채널(길드당 1개), 시간별 시세 이력,
-/// 아이템별 과거시세·현재시세, 제작 아이템별 유불리 상태를 보관합니다.
+/// /해연시세모니터링 SQLite 저장소. 길드별 알림 채널(길드당 1개)과 등락률, 시간별 시세 이력,
+/// 길드·아이템별 과거시세·현재시세, 제작 아이템별 유불리 상태를 보관합니다.
 /// </summary>
 public sealed class HaeyeonMarketStore
 {
@@ -34,8 +40,9 @@ public sealed class HaeyeonMarketStore
         {
             Directory.CreateDirectory(Path.GetDirectoryName(m_DatabasePath)!);
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+            var hasGuildPriceState = await MollySqliteSchema.TableExistsAsync(connection, transaction, "haeyeon_guild_price_state", ct).ConfigureAwait(false);
+            await ExecuteAsync(connection, transaction, """
                 CREATE TABLE IF NOT EXISTS haeyeon_monitor_channels (
                     guild_id INTEGER PRIMARY KEY,
                     channel_id INTEGER NOT NULL,
@@ -52,13 +59,15 @@ public sealed class HaeyeonMarketStore
                     priced_at_utc TEXT NOT NULL,
                     PRIMARY KEY (collected_at_utc, item_name)
                 );
-                CREATE TABLE IF NOT EXISTS haeyeon_price_state (
-                    item_name TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS haeyeon_guild_price_state (
+                    guild_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
                     is_product INTEGER NOT NULL,
                     baseline_price INTEGER NOT NULL,
                     baseline_at_utc TEXT NOT NULL,
                     current_price INTEGER NOT NULL,
-                    current_at_utc TEXT NOT NULL
+                    current_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (guild_id, item_name)
                 );
                 CREATE TABLE IF NOT EXISTS haeyeon_craft_state (
                     product_name TEXT PRIMARY KEY,
@@ -67,14 +76,27 @@ public sealed class HaeyeonMarketStore
                     material_cost INTEGER NOT NULL,
                     updated_at_utc TEXT NOT NULL
                 );
-                """;
-            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                """, ct).ConfigureAwait(false);
+            // 등락률 열은 나중에 추가되어 이전 DB에는 없습니다. 값이 없으면(NULL) 기본값을 씁니다.
+            await MollySqliteSchema.AddColumnIfMissingAsync(connection, transaction, "haeyeon_monitor_channels", "product_change_percent", "INTEGER", ct).ConfigureAwait(false);
+            await MollySqliteSchema.AddColumnIfMissingAsync(connection, transaction, "haeyeon_monitor_channels", "material_change_percent", "INTEGER", ct).ConfigureAwait(false);
+            // 이전에는 과거시세를 모든 길드가 함께 썼습니다(haeyeon_price_state). 길드별 표를 처음 만들 때 등록된 길드마다 복사해 이어갑니다.
+            if (!hasGuildPriceState && await MollySqliteSchema.TableExistsAsync(connection, transaction, "haeyeon_price_state", ct).ConfigureAwait(false))
+                await ExecuteAsync(connection, transaction, """
+                    INSERT OR IGNORE INTO haeyeon_guild_price_state
+                        (guild_id, item_name, is_product, baseline_price, baseline_at_utc, current_price, current_at_utc)
+                    SELECT c.guild_id, s.item_name, s.is_product, s.baseline_price, s.baseline_at_utc, s.current_price, s.current_at_utc
+                    FROM haeyeon_monitor_channels c CROSS JOIN haeyeon_price_state s;
+                    """, ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
         finally { m_Gate.Release(); }
     }
 
     // 이전에 등록된 채널을 돌려줍니다(없으면 null). 길드당 하나만 유지하므로 다른 채널에서 등록하면 옮겨집니다.
-    public async Task<HaeyeonMonitorChannel?> SetChannelAsync(ulong guildId, ulong channelId, DateTimeOffset nowUtc, CancellationToken ct = default)
+    // 등락률(%)은 null이면 저장하지 않고(NULL) 기본값을 따르게 합니다.
+    public async Task<HaeyeonMonitorChannel?> SetChannelAsync(ulong guildId, ulong channelId, DateTimeOffset nowUtc,
+        int? productChangePercent = null, int? materialChangePercent = null, CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -85,12 +107,16 @@ public sealed class HaeyeonMarketStore
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO haeyeon_monitor_channels (guild_id, channel_id, registered_at_utc) VALUES ($guildId, $channelId, $at)
-                ON CONFLICT(guild_id) DO UPDATE SET channel_id = excluded.channel_id, registered_at_utc = excluded.registered_at_utc;
+                INSERT INTO haeyeon_monitor_channels (guild_id, channel_id, registered_at_utc, product_change_percent, material_change_percent)
+                VALUES ($guildId, $channelId, $at, $product, $material)
+                ON CONFLICT(guild_id) DO UPDATE SET channel_id = excluded.channel_id, registered_at_utc = excluded.registered_at_utc,
+                    product_change_percent = excluded.product_change_percent, material_change_percent = excluded.material_change_percent;
                 """;
             command.Parameters.AddWithValue("$guildId", checked((long)guildId));
             command.Parameters.AddWithValue("$channelId", checked((long)channelId));
             command.Parameters.AddWithValue("$at", Format(nowUtc));
+            command.Parameters.AddWithValue("$product", (object?)productChangePercent ?? DBNull.Value);
+            command.Parameters.AddWithValue("$material", (object?)materialChangePercent ?? DBNull.Value);
             await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return previous;
@@ -108,7 +134,8 @@ public sealed class HaeyeonMarketStore
             var previous = await ReadChannelAsync(connection, transaction, guildId, ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "DELETE FROM haeyeon_monitor_channels WHERE guild_id = $guildId;";
+            // 다시 등록하면 과거시세를 새로 시작하도록 길드별 과거시세도 지웁니다.
+            command.CommandText = "DELETE FROM haeyeon_monitor_channels WHERE guild_id = $guildId; DELETE FROM haeyeon_guild_price_state WHERE guild_id = $guildId;";
             command.Parameters.AddWithValue("$guildId", checked((long)guildId));
             await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
@@ -124,12 +151,24 @@ public sealed class HaeyeonMarketStore
         {
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT guild_id, channel_id, registered_at_utc FROM haeyeon_monitor_channels ORDER BY guild_id;";
+            command.CommandText = $"SELECT {ChannelColumns} FROM haeyeon_monitor_channels ORDER BY guild_id;";
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             var result = new List<HaeyeonMonitorChannel>();
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                result.Add(new HaeyeonMonitorChannel(checked((ulong)reader.GetInt64(0)), checked((ulong)reader.GetInt64(1)), Parse(reader.GetString(2))));
+                result.Add(ReadChannel(reader));
             return result;
+        }
+        finally { m_Gate.Release(); }
+    }
+
+    public async Task<HaeyeonMonitorChannel?> GetChannelAsync(ulong guildId, CancellationToken ct = default)
+    {
+        await m_Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+            await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+            return await ReadChannelAsync(connection, transaction, guildId, ct).ConfigureAwait(false);
         }
         finally { m_Gate.Release(); }
     }
@@ -174,20 +213,28 @@ public sealed class HaeyeonMarketStore
         finally { m_Gate.Release(); }
     }
 
-    public async Task<IReadOnlyDictionary<string, ItemPriceState>> LoadPriceStatesAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyDictionary<string, ItemPriceState>> LoadPriceStatesAsync(ulong guildId, CancellationToken ct = default) =>
+        (await LoadAllPriceStatesAsync(ct).ConfigureAwait(false)).GetValueOrDefault(guildId) ?? new Dictionary<string, ItemPriceState>(StringComparer.Ordinal);
+
+    // 길드별 과거시세·현재시세.
+    public async Task<IReadOnlyDictionary<ulong, IReadOnlyDictionary<string, ItemPriceState>>> LoadAllPriceStatesAsync(CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT item_name, is_product, baseline_price, baseline_at_utc, current_price, current_at_utc FROM haeyeon_price_state;";
+            command.CommandText = "SELECT guild_id, item_name, is_product, baseline_price, baseline_at_utc, current_price, current_at_utc FROM haeyeon_guild_price_state;";
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            var result = new Dictionary<string, ItemPriceState>(StringComparer.Ordinal);
+            var result = new Dictionary<ulong, Dictionary<string, ItemPriceState>>();
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                result[reader.GetString(0)] = new ItemPriceState(reader.GetString(0), reader.GetInt64(1) != 0,
-                    reader.GetInt64(2), Parse(reader.GetString(3)), reader.GetInt64(4), Parse(reader.GetString(5)));
-            return result;
+            {
+                var guildId = checked((ulong)reader.GetInt64(0));
+                if (!result.TryGetValue(guildId, out var states)) result[guildId] = states = new Dictionary<string, ItemPriceState>(StringComparer.Ordinal);
+                states[reader.GetString(1)] = new ItemPriceState(reader.GetString(1), reader.GetInt64(2) != 0,
+                    reader.GetInt64(3), Parse(reader.GetString(4)), reader.GetInt64(5), Parse(reader.GetString(6)));
+            }
+            return result.ToDictionary(x => x.Key, x => (IReadOnlyDictionary<string, ItemPriceState>)x.Value);
         }
         finally { m_Gate.Release(); }
     }
@@ -212,11 +259,14 @@ public sealed class HaeyeonMarketStore
         finally { m_Gate.Release(); }
     }
 
-    /// <summary>한 회차의 원본 시세 이력과 새 판정 상태를 한 트랜잭션으로 저장하고, 보관 기간이 지난 이력을 지웁니다.</summary>
+    /// <summary>
+    /// 한 회차의 원본 시세 이력과 새 판정 상태를 한 트랜잭션으로 저장하고, 보관 기간이 지난 이력을 지웁니다.
+    /// 길드별 과거시세는 판정 중 등록이 해제된 길드면 저장하지 않습니다.
+    /// </summary>
     public async Task SaveRunAsync(
         DateTimeOffset collectedAtUtc,
         IEnumerable<HaeyeonPriceSnapshot> snapshots,
-        IEnumerable<ItemPriceState> priceStates,
+        IReadOnlyDictionary<ulong, IReadOnlyDictionary<string, ItemPriceState>> guildPriceStates,
         IEnumerable<CraftState> craftStates,
         CancellationToken ct = default)
     {
@@ -238,14 +288,19 @@ public sealed class HaeyeonMarketStore
                     ("$minPrice", price.MinPrice), ("$totalCount", price.TotalCount), ("$isSoldOut", price.IsSoldOut ? 1 : 0),
                     ("$pricedAt", Format(price.PricedAtUtc))).ConfigureAwait(false);
             }
-            foreach (var state in priceStates)
+            foreach (var (guildId, states) in guildPriceStates)
             {
-                await ExecuteAsync(connection, transaction, """
-                    INSERT OR REPLACE INTO haeyeon_price_state (item_name, is_product, baseline_price, baseline_at_utc, current_price, current_at_utc)
-                    VALUES ($name, $isProduct, $baseline, $baselineAt, $current, $currentAt);
-                    """, ct,
-                    ("$name", state.Name), ("$isProduct", state.IsProduct ? 1 : 0), ("$baseline", state.BaselinePrice),
-                    ("$baselineAt", Format(state.BaselineAtUtc)), ("$current", state.CurrentPrice), ("$currentAt", Format(state.CurrentAtUtc))).ConfigureAwait(false);
+                foreach (var state in states.Values)
+                {
+                    await ExecuteAsync(connection, transaction, """
+                        INSERT OR REPLACE INTO haeyeon_guild_price_state
+                            (guild_id, item_name, is_product, baseline_price, baseline_at_utc, current_price, current_at_utc)
+                        SELECT $guildId, $name, $isProduct, $baseline, $baselineAt, $current, $currentAt
+                        WHERE EXISTS (SELECT 1 FROM haeyeon_monitor_channels WHERE guild_id = $guildId);
+                        """, ct,
+                        ("$guildId", checked((long)guildId)), ("$name", state.Name), ("$isProduct", state.IsProduct ? 1 : 0), ("$baseline", state.BaselinePrice),
+                        ("$baselineAt", Format(state.BaselineAtUtc)), ("$current", state.CurrentPrice), ("$currentAt", Format(state.CurrentAtUtc))).ConfigureAwait(false);
+                }
             }
             foreach (var state in craftStates)
             {
@@ -287,12 +342,17 @@ public sealed class HaeyeonMarketStore
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT channel_id, registered_at_utc FROM haeyeon_monitor_channels WHERE guild_id = $guildId;";
+        command.CommandText = $"SELECT {ChannelColumns} FROM haeyeon_monitor_channels WHERE guild_id = $guildId;";
         command.Parameters.AddWithValue("$guildId", checked((long)guildId));
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
-        return new HaeyeonMonitorChannel(guildId, checked((ulong)reader.GetInt64(0)), Parse(reader.GetString(1)));
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? ReadChannel(reader) : null;
     }
+
+    private const string ChannelColumns = "guild_id, channel_id, registered_at_utc, product_change_percent, material_change_percent";
+
+    private static HaeyeonMonitorChannel ReadChannel(SqliteDataReader reader) => new(
+        checked((ulong)reader.GetInt64(0)), checked((ulong)reader.GetInt64(1)), Parse(reader.GetString(2)),
+        reader.IsDBNull(3) ? null : reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetInt32(4));
 
     private static async Task ExecuteAsync(SqliteConnection connection, SqliteTransaction transaction, string sql, CancellationToken ct, params (string Name, object Value)[] parameters)
     {

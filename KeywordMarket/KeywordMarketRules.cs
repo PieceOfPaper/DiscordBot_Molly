@@ -16,8 +16,12 @@ public static class KeywordMarketRules
     public static readonly KeywordMarketDefinition Box = new("box", "상자", "📦", "상자", "아이템");
     public static readonly KeywordMarketDefinition Package = new("package", "패키지", "🎁", "패키지", null);
 
-    // 과거시세 대비 이 비율 이상 변동하면 알립니다(0.10 = 10%).
+    // 과거시세 대비 이 비율 이상 변동하면 알립니다(0.10 = 10%). 서버가 등록 명령에서 등락률을 정하지 않으면 이 기본값을 씁니다.
     public const decimal ChangeThreshold = 0.10m;
+
+    // 등록 명령 등락률 옵션 범위(%).
+    public const int MinChangePercent = 1;
+    public const int MaxChangePercent = 100;
 
     // 매물이 이 수보다 적으면 최저가를 믿기 어려워 해당 회차의 변동 판정에서 뺍니다(시세 저장은 합니다).
     public const long MinListingCount = 3;

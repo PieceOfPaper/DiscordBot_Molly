@@ -129,10 +129,12 @@ public static class HaeyeonMarketReport
 
     /// <summary>
     /// 알림 테스트용 가상 판정. 두 알림 중 하나를 무작위로 고르고(데이터가 없으면 다른 쪽), 저장된 시세에서 아이템을 1~3개 뽑습니다.
-    /// 시세 변동은 현재시세는 실제 값, 과거시세는 기준을 넘도록 만든 가상 값이며, 유불리는 실제 시세로 계산한 현재 상태입니다.
+    /// 시세 변동은 현재시세는 실제 값, 과거시세는 기준(thresholds, 없으면 기본값)을 넘도록 만든 가상 값이며, 유불리는 실제 시세로 계산한 현재 상태입니다.
     /// </summary>
-    public static HaeyeonEvaluation? BuildTestEvaluation(IReadOnlyList<CraftingRecipe> recipes, IReadOnlyDictionary<string, MarketPrice> prices, Random random)
+    public static HaeyeonEvaluation? BuildTestEvaluation(IReadOnlyList<CraftingRecipe> recipes, IReadOnlyDictionary<string, MarketPrice> prices, Random random,
+        HaeyeonThresholds? thresholds = null)
     {
+        thresholds ??= HaeyeonThresholds.Default;
         var tracked = HaeyeonMarketEvaluator.TrackedNames(recipes);
         var priceCandidates = tracked
             .Where(x => prices.TryGetValue(x.Key, out var price) && !price.IsSoldOut && price.MinPrice > 0)
@@ -153,10 +155,7 @@ public static class HaeyeonMarketReport
             foreach (var (name, isProduct, current) in Pick(priceCandidates, random))
             {
                 // 기준값보다 0~10%p 더 큰 가상 변동률로 과거시세를 역산합니다.
-                var threshold = (double)HaeyeonMarketRules.ChangeThreshold(isProduct);
-                var rate = (threshold + random.NextDouble() * 0.10) * (random.Next(2) == 0 ? 1 : -1);
-                var baseline = Math.Max(1, (long)Math.Round(current / (1 + rate)));
-                priceAlerts.Add(new PriceChangeAlert(name, isProduct, baseline, current));
+                priceAlerts.Add(new PriceChangeAlert(name, isProduct, TestBaseline.Create(current, thresholds.For(isProduct), random), current));
             }
         }
         else

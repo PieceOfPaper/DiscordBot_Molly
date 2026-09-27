@@ -8,7 +8,9 @@ namespace DiscordBot_Molly.Commands;
 public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionContext>
 {
     [SlashCommand("상자시세모니터링", "이 채널로 거래소 '상자' 아이템 시세·신규·사라짐 알림을 받도록 등록합니다. (길드당 1채널)")]
-    public Task Command_BoxRegister() => RegisterAsync(Program.instance.BoxMarket);
+    public Task Command_BoxRegister(
+        [Summary("등락률", "아이템 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)")]
+        [MinValue(KeywordMarketRules.MinChangePercent), MaxValue(KeywordMarketRules.MaxChangePercent)] int? percent = null) => RegisterAsync(Program.instance.BoxMarket, percent);
 
     [SlashCommand("상자시세모니터링해제", "이 서버의 상자 시세 알림 등록을 해제합니다.")]
     public Task Command_BoxUnregister() => UnregisterAsync(Program.instance.BoxMarket);
@@ -17,7 +19,9 @@ public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionConte
     public Task Command_BoxTest() => TestAsync(Program.instance.BoxMarket);
 
     [SlashCommand("패키지시세모니터링", "이 채널로 거래소 '패키지' 아이템 시세·신규·사라짐 알림을 받도록 등록합니다. (길드당 1채널)")]
-    public Task Command_PackageRegister() => RegisterAsync(Program.instance.PackageMarket);
+    public Task Command_PackageRegister(
+        [Summary("등락률", "아이템 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)")]
+        [MinValue(KeywordMarketRules.MinChangePercent), MaxValue(KeywordMarketRules.MaxChangePercent)] int? percent = null) => RegisterAsync(Program.instance.PackageMarket, percent);
 
     [SlashCommand("패키지시세모니터링해제", "이 서버의 패키지 시세 알림 등록을 해제합니다.")]
     public Task Command_PackageUnregister() => UnregisterAsync(Program.instance.PackageMarket);
@@ -31,7 +35,7 @@ public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionConte
     [SlashCommand("패키지시세", "마지막으로 저장한 거래소 '패키지' 아이템 시세를 보여줍니다.")]
     public Task Command_PackagePrices() => PricesAsync(Program.instance.PackageMarket);
 
-    private async Task RegisterAsync(KeywordMarketMonitor monitor)
+    private async Task RegisterAsync(KeywordMarketMonitor monitor, int? percent)
     {
         if (Context.Interaction.GuildId is not { } guildId || Context.Interaction.ChannelId is not { } channelId)
         {
@@ -46,7 +50,8 @@ public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionConte
 
         await DeferAsync();
         var definition = monitor.Definition;
-        var previous = await monitor.Store.SetChannelAsync(guildId, channelId, DateTimeOffset.UtcNow);
+        var previous = await monitor.Store.SetChannelAsync(guildId, channelId, DateTimeOffset.UtcNow, percent);
+        var threshold = new KeywordMonitorChannel(guildId, channelId, DateTimeOffset.UtcNow, percent).Threshold;
         var latest = await monitor.Store.LoadLatestPricesAsync();
 
         var description = new System.Text.StringBuilder();
@@ -57,7 +62,7 @@ public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionConte
         description.AppendLine($"매 정각 거래소에서 {definition.SearchDescription}(으)로 검색되는 아이템 시세를 모두 저장하고, 다음 경우 알려드려요.");
         description.AppendLine("- 새로운 아이템이 거래소에 올라옴");
         description.AppendLine($"- 추적하던 아이템이 {KeywordMarketRules.RemovalMissingRuns}회 연속 검색되지 않아 사라짐(판매 기간 종료 등)");
-        description.AppendLine($"- 아이템 시세가 과거시세보다 {KeywordMarketRules.ChangeThreshold * 100:0.#}% 이상 변동");
+        description.AppendLine($"- 아이템 시세가 과거시세보다 {threshold * 100:0.#}%{(percent is null ? "(기본값)" : "")} 이상 변동");
         description.AppendLine();
         description.AppendLine(latest is null
             ? "아직 저장된 시세가 없어요. 첫 수집 시세를 기준으로 삼고, 그다음 수집부터 알려드려요."
@@ -95,7 +100,9 @@ public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionConte
         await DeferAsync();
         var definition = monitor.Definition;
         var latest = await monitor.Store.LoadLatestPricesAsync();
-        var evaluation = latest is null ? null : KeywordMarketMessages.BuildTestEvaluation(latest.Prices, Random.Shared);
+        // 등록된 서버면 그 서버의 등락률, 아니면 기본값으로 가상 과거시세를 만듭니다.
+        var registered = Context.Interaction.GuildId is { } guildId ? await monitor.Store.GetChannelAsync(guildId) : null;
+        var evaluation = latest is null ? null : KeywordMarketMessages.BuildTestEvaluation(latest.Prices, Random.Shared, registered?.Threshold);
         if (latest is null || evaluation is null)
         {
             await FollowupAsync($"아직 저장된 {definition.DisplayName} 시세가 없어 테스트 알림을 만들 수 없어요. 첫 수집 이후에 다시 시도해 주세요.");

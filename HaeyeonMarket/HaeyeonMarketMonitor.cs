@@ -12,11 +12,11 @@ public interface IHaeyeonAlertSender
     Task SendAsync(HaeyeonMonitorChannel channel, IReadOnlyList<Embed> embeds, CancellationToken ct);
 }
 
-public sealed record HaeyeonRunResult(bool Success, string Message, HaeyeonEvaluation? Evaluation = null);
+public sealed record HaeyeonRunResult(bool Success, string Message);
 
 /// <summary>
 /// 해연 제작 아이템·재료 시세를 매 정각 수집해 저장하고, 변동·유불리 전환 시 등록된 채널에 알립니다.
-/// 알림을 보낸 뒤 과거시세·유불리 상태를 갱신합니다.
+/// 시세 변동은 길드별 등락률·과거시세로 판정하며, 알림을 보낸 뒤 과거시세·유불리 상태를 갱신합니다.
 /// </summary>
 public sealed class HaeyeonMarketMonitor
 {
@@ -111,35 +111,38 @@ public sealed class HaeyeonMarketMonitor
                 if (tracked.ContainsKey(price.Name)) prices.TryAdd(price.Name, price);
         }
 
-        var evaluation = HaeyeonMarketEvaluator.Evaluate(recipes, prices,
-            await Store.LoadPriceStatesAsync(ct).ConfigureAwait(false),
-            await Store.LoadCraftStatesAsync(ct).ConfigureAwait(false),
-            collectedAt);
-        if (evaluation.MissingNames.Count > 0)
-            m_Log($"시세 검색 결과에 없는 이름 {evaluation.MissingNames.Count}개(시트 이름 또는 검색어 확인): {string.Join(", ", evaluation.MissingNames)}");
+        // 유불리는 모든 길드가 같이 쓰고, 시세 변동은 길드별 등락률·과거시세로 따로 판정합니다.
+        var crafts = HaeyeonMarketEvaluator.EvaluateCrafts(recipes, prices, await Store.LoadCraftStatesAsync(ct).ConfigureAwait(false), collectedAt);
+        var missing = tracked.Keys.Where(x => !prices.ContainsKey(x)).ToArray();
+        if (missing.Length > 0)
+            m_Log($"시세 검색 결과에 없는 이름 {missing.Length}개(시트 이름 또는 검색어 확인): {string.Join(", ", missing)}");
 
-        var sent = 0;
-        if (evaluation.HasAlerts)
+        var lastPrices = (await Store.LoadLatestPricesAsync(ct).ConfigureAwait(false))?.Prices;
+        var previousByGuild = await Store.LoadAllPriceStatesAsync(ct).ConfigureAwait(false);
+        var guildStates = new Dictionary<ulong, IReadOnlyDictionary<string, ItemPriceState>>();
+        int sent = 0, priceAlerts = 0;
+        foreach (var channel in await Store.GetChannelsAsync(ct).ConfigureAwait(false))
         {
-            var embeds = HaeyeonMarketMessages.BuildAlertEmbeds(evaluation, collectedAt, m_Source.Attribution);
-            foreach (var channel in await Store.GetChannelsAsync(ct).ConfigureAwait(false))
+            var previous = previousByGuild.GetValueOrDefault(channel.GuildId) ?? new Dictionary<string, ItemPriceState>(StringComparer.Ordinal);
+            var priceResult = HaeyeonMarketEvaluator.EvaluatePrices(recipes, prices, previous, channel.Thresholds, collectedAt, lastPrices);
+            guildStates[channel.GuildId] = priceResult.States;
+            priceAlerts += priceResult.Alerts.Count;
+            var evaluation = new HaeyeonEvaluation(priceResult.Alerts, crafts.Alerts, priceResult.States, crafts.States, priceResult.MissingNames, priceResult.UnreliableNames);
+            if (!evaluation.HasAlerts) continue;
+            try
             {
-                try
-                {
-                    await m_Sender.SendAsync(channel, embeds, ct).ConfigureAwait(false);
-                    sent++;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex) { m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}"); }
+                await m_Sender.SendAsync(channel, HaeyeonMarketMessages.BuildAlertEmbeds(evaluation, collectedAt, m_Source.Attribution), ct).ConfigureAwait(false);
+                sent++;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}"); }
         }
 
         await Store.SaveRunAsync(collectedAt,
             prices.Values.Select(x => new HaeyeonPriceSnapshot(x, tracked[x.Name])),
-            evaluation.PriceStates.Values, evaluation.CraftStates.Values, ct).ConfigureAwait(false);
+            guildStates, crafts.States.Values, ct).ConfigureAwait(false);
         return new HaeyeonRunResult(true,
-            $"수집 완료: 시세 {prices.Count}/{tracked.Count}개, 변동 알림 {evaluation.PriceAlerts.Count}건, 유불리 전환 {evaluation.CraftAlerts.Count}건, 전송 채널 {sent}곳",
-            evaluation);
+            $"수집 완료: 시세 {prices.Count}/{tracked.Count}개, 변동 알림 {priceAlerts}건(길드 합계), 유불리 전환 {crafts.Alerts.Count}건, 전송 채널 {sent}곳");
     }
 }
 

@@ -7,7 +7,11 @@ namespace DiscordBot_Molly.Commands;
 public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionContext>
 {
     [SlashCommand("해연시세모니터링", "이 채널로 해연 제작 아이템·재료 시세 알림을 받도록 등록합니다. (길드당 1채널)")]
-    public async Task Command_Register()
+    public async Task Command_Register(
+        [Summary("장비등락률", "해연 장비 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)")]
+        [MinValue(HaeyeonMarketRules.MinChangePercent), MaxValue(HaeyeonMarketRules.MaxChangePercent)] int? productPercent = null,
+        [Summary("재료등락률", "재료 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 20, 1~100)")]
+        [MinValue(HaeyeonMarketRules.MinChangePercent), MaxValue(HaeyeonMarketRules.MaxChangePercent)] int? materialPercent = null)
     {
         if (Context.Interaction.GuildId is not { } guildId || Context.Interaction.ChannelId is not { } channelId)
         {
@@ -22,7 +26,8 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
 
         await DeferAsync();
         var monitor = Program.instance.HaeyeonMarket;
-        var previous = await monitor.Store.SetChannelAsync(guildId, channelId, DateTimeOffset.UtcNow);
+        var previous = await monitor.Store.SetChannelAsync(guildId, channelId, DateTimeOffset.UtcNow, productPercent, materialPercent);
+        var thresholds = new HaeyeonMonitorChannel(guildId, channelId, DateTimeOffset.UtcNow, productPercent, materialPercent).Thresholds;
         var latest = await monitor.Store.GetLatestCollectedAtAsync();
         var crafts = await monitor.Store.LoadCraftStatesAsync();
 
@@ -32,7 +37,7 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
             : $"알림 채널을 <#{previous.ChannelId}>에서 이 채널(<#{channelId}>)로 옮겼어요. 서버당 한 채널만 받을 수 있어요.");
         description.AppendLine();
         description.AppendLine("매 정각 제작 시트의 해연 제작 아이템과 재료 시세를 저장하고, 다음 경우 알려드려요.");
-        description.AppendLine($"- 제작 아이템 시세가 과거시세보다 {HaeyeonMarketRules.ProductChangeThreshold * 100:0.#}% 이상, 재료 시세가 {HaeyeonMarketRules.MaterialChangeThreshold * 100:0.#}% 이상 변동");
+        description.AppendLine($"- 제작 아이템 시세가 과거시세보다 {Percent(thresholds.Product, productPercent)} 이상, 재료 시세가 {Percent(thresholds.Material, materialPercent)} 이상 변동");
         description.AppendLine("- 완제품 구매가와 재료 구매 합계 중 더 저렴한 쪽이 바뀜");
         if (latest is { } collectedAt)
         {
@@ -57,6 +62,8 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
         await FollowupAsync(embed: embed);
     }
 
+    private static string Percent(decimal rate, int? chosen) => $"{rate * 100:0.#}%" + (chosen is null ? "(기본값)" : "");
+
     [SlashCommand("해연시세모니터링해제", "이 서버의 해연 시세 알림 등록을 해제합니다.")]
     public async Task Command_Unregister()
     {
@@ -80,7 +87,10 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
         var monitor = Program.instance.HaeyeonMarket;
         var latest = await monitor.Store.LoadLatestPricesAsync();
         var recipes = HaeyeonMarketRules.SelectRecipes(Program.instance.Crafting.Current);
-        var evaluation = latest is null ? null : HaeyeonMarketReport.BuildTestEvaluation(recipes, latest.Prices, Random.Shared);
+        // 등록된 서버면 그 서버의 등락률, 아니면 기본값으로 가상 과거시세를 만듭니다.
+        var registered = Context.Interaction.GuildId is { } guildId ? await monitor.Store.GetChannelAsync(guildId) : null;
+        var thresholds = registered?.Thresholds ?? HaeyeonThresholds.Default;
+        var evaluation = latest is null ? null : HaeyeonMarketReport.BuildTestEvaluation(recipes, latest.Prices, Random.Shared, thresholds);
         if (latest is null || evaluation is null)
         {
             await FollowupAsync("아직 저장된 해연 시세가 없어 테스트 알림을 만들 수 없어요. 첫 수집 이후에 다시 시도해 주세요.");

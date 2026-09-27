@@ -21,6 +21,7 @@ internal static class HaeyeonMarketTests
         EvaluatorTests();
         ReportTests();
         await MonitorTestsAsync();
+        await GuildThresholdTestsAsync();
         await MobiLifeSourceTestsAsync();
     }
 
@@ -94,6 +95,20 @@ internal static class HaeyeonMarketTests
                big.PriceAlerts.Single(x => !x.IsProduct) is { Name: "백금강괴", BaselinePrice: 100, CurrentPrice: 120 } &&
                big.PriceStates["해연의 숏소드ZZ"].BaselinePrice == 3600 && big.PriceStates["백금강괴"].BaselinePrice == 120,
             "제작품 10%·재료 20% 이상 변동 시 알리고 과거시세 갱신");
+
+        var custom = HaeyeonMarketEvaluator.Evaluate(recipes,
+            Prices(P("해연의 숏소드ZZ", 3600), P("해연의 페리도트 링ZZ", 1000), P("백금강괴", 110), P("특급 목재", 100), P("포식의 마력석", 100), P("망령의 영혼석", 10)),
+            small.PriceStates, small.CraftStates, later, new HaeyeonThresholds(0.15m, 0.05m));
+        Assert(custom.PriceAlerts.Single() is { Name: "백금강괴", IsProduct: false } && custom.PriceStates["해연의 숏소드ZZ"].BaselinePrice == 4000,
+            "등락률을 장비 15%·재료 5%로 정하면 장비 -10%는 알리지 않고 재료 +10%는 알림");
+
+        var joined = HaeyeonMarketEvaluator.EvaluatePrices(recipes,
+            Prices(P("해연의 숏소드ZZ", 3600), P("해연의 페리도트 링ZZ", 1000), P("백금강괴", 100)),
+            new Dictionary<string, ItemPriceState>(), HaeyeonThresholds.Default, later,
+            Prices(P("해연의 숏소드ZZ", 4000), P("해연의 페리도트 링ZZ", 1000, count: 2)));
+        Assert(joined.Alerts.Single() is { Name: "해연의 숏소드ZZ", BaselinePrice: 4000, CurrentPrice: 3600 } &&
+               joined.States["해연의 페리도트 링ZZ"].BaselinePrice == 1000 && joined.States["백금강괴"].BaselinePrice == 100,
+            "과거시세가 없는 길드는 직전 수집 시세(믿을 만할 때)를 과거시세로 삼아 비교하고, 없으면 현재시세로 시작");
 
         // 숏소드 재료 합계 3,400 대비 완제품 3,350(-1.5%)은 여유 폭 안이라 유불리를 바꾸지 않음
         var band = HaeyeonMarketEvaluator.Evaluate(recipes,
@@ -181,6 +196,10 @@ internal static class HaeyeonMarketTests
             kinds.Add(test.PriceAlerts.Count > 0 ? "price" : "craft");
         }
         Assert(kinds.SetEquals(["price", "craft"]), "알림 테스트는 저장 시세로 두 알림 중 하나를 무작위로 1~3개 만들고, 가상 변동은 기준 이상");
+        var strict = new HaeyeonThresholds(0.40m, 0.50m);
+        Assert(Enumerable.Range(0, 100).All(seed => HaeyeonMarketReport.BuildTestEvaluation(recipes, prices, new Random(seed), strict)!
+                .PriceAlerts.All(x => Math.Abs(x.ChangeRate) >= strict.For(x.IsProduct) - 0.001m)),
+            "알림 테스트의 가상 변동은 길드 등락률 이상");
         Assert(HaeyeonMarketReport.BuildTestEvaluation(recipes, new Dictionary<string, MarketPrice>(), new Random(1)) is null,
             "저장 시세가 없으면 테스트 알림을 만들지 않음");
         var testEmbeds = HaeyeonMarketMessages.BuildAlertEmbeds(HaeyeonMarketReport.BuildTestEvaluation(recipes, prices, new Random(3))!, s_Now, "모비라이프 제공", "[테스트] ");
@@ -220,7 +239,7 @@ internal static class HaeyeonMarketTests
             sender.FailChannel = 99;
             await store.SetChannelAsync(3, 99, now);
             var second = await monitor.CollectAsync(default);
-            var states = await store.LoadPriceStatesAsync();
+            var states = await store.LoadPriceStatesAsync(1);
             var crafts = await store.LoadCraftStatesAsync();
             Assert(second.Success && sender.Sent.Count == 1 && sender.Sent[0].Channel.ChannelId == 11 &&
                    sender.Sent[0].Embeds[0].Description.Contains("해연의 숏소드ZZ 4,000 → 3,000 (-25.0%)") &&
@@ -237,7 +256,7 @@ internal static class HaeyeonMarketTests
             source.FailKeyword = "영혼석";
             source.Set(("해연의 숏소드ZZ", 9000));
             var failed = await monitor.CollectAsync(default);
-            Assert(!failed.Success && sender.Sent.Count == 1 && (await store.LoadPriceStatesAsync())["해연의 숏소드ZZ"].BaselinePrice == 3000 &&
+            Assert(!failed.Success && sender.Sent.Count == 1 && (await store.LoadPriceStatesAsync(1))["해연의 숏소드ZZ"].BaselinePrice == 3000 &&
                    await store.GetLatestCollectedAtAsync() == now.AddHours(-1), "검색어 하나라도 실패하면 알림·저장 없이 이번 회차를 건너뜀");
 
             var restarted = new HaeyeonMarketStore(Path.Combine(directory, "database", "molly.sqlite"));
@@ -282,6 +301,76 @@ internal static class HaeyeonMarketTests
         var embeds = HaeyeonMarketMessages.BuildAlertEmbeds(many, s_Now, "모비라이프 제공");
         Assert(embeds.Count > 1 && embeds.All(x => x.Description.Length <= HaeyeonMarketMessages.MaxDescriptionLength && x.Title.Contains("12:00 기준")),
             "알림이 많으면 Discord 글자 수 제한 안으로 Embed를 나누고 KST 기준 시각 표시");
+    }
+
+    private static async Task GuildThresholdTestsAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "molly-haeyeon-threshold-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new HaeyeonMarketStore(Path.Combine(directory, "database", "molly.sqlite"));
+            await store.InitializeAsync();
+            await store.SetChannelAsync(1, 10, s_Now);
+            await store.SetChannelAsync(2, 20, s_Now, productChangePercent: 30, materialChangePercent: 5);
+            Assert(await store.GetChannelAsync(1) is { ProductChangePercent: null, MaterialChangePercent: null } first &&
+                   first.Thresholds == HaeyeonThresholds.Default &&
+                   (await store.GetChannelAsync(2))!.Thresholds == new HaeyeonThresholds(0.30m, 0.05m),
+                "등록 시 장비·재료 등락률을 길드별로 저장하고, 정하지 않으면 기본값(10%·20%) 사용");
+
+            var now = s_Now;
+            var recipes = HaeyeonMarketRules.SelectRecipes(CraftingCsvReader.Parse(CraftCsv, s_Now));
+            var source = new FakeSource();
+            var sender = new FakeSender();
+            var monitor = new HaeyeonMarketMonitor(_ => Task.FromResult(recipes), source, store, sender, () => now, _ => { });
+            source.Set(("해연의 숏소드ZZ", 4000), ("해연의 페리도트 링ZZ", 1000), ("백금강괴", 100), ("특급 목재", 100), ("포식의 마력석", 100), ("망령의 영혼석", 10));
+            await monitor.CollectAsync(default);
+
+            // 숏소드 -15%(재료 합계 3,330 대비 +2.1%라 유불리 유지), 백금강괴 +6%
+            now = now.AddHours(1);
+            await store.SetChannelAsync(3, 30, now, productChangePercent: 50);
+            source.Set(("해연의 숏소드ZZ", 3400), ("해연의 페리도트 링ZZ", 1000), ("백금강괴", 106), ("특급 목재", 100), ("포식의 마력석", 100), ("망령의 영혼석", 10));
+            await monitor.CollectAsync(default);
+            var byGuild = sender.Sent.ToDictionary(x => x.Channel.GuildId, x => x.Embeds[0].Description);
+            Assert(byGuild.Count == 2 && byGuild[1].Contains("해연의 숏소드ZZ 4,000 → 3,400") && !byGuild[1].Contains("백금강괴") &&
+                   byGuild[2].Contains("백금강괴 100 → 106") && !byGuild[2].Contains("숏소드") &&
+                   (await store.LoadPriceStatesAsync(1))["해연의 숏소드ZZ"].BaselinePrice == 3400 &&
+                   (await store.LoadPriceStatesAsync(2))["해연의 숏소드ZZ"].BaselinePrice == 4000 &&
+                   (await store.LoadPriceStatesAsync(3))["해연의 숏소드ZZ"].BaselinePrice == 4000,
+                "길드마다 자기 등락률·과거시세로 판정하고, 새로 등록한 길드는 직전 수집 시세부터 비교");
+
+            await store.RemoveChannelAsync(2);
+            Assert((await store.LoadPriceStatesAsync(2)).Count == 0 && (await store.LoadPriceStatesAsync(1)).Count > 0, "해제하면 해당 길드의 과거시세만 삭제");
+
+            // 등락률 열·길드별 과거시세 표가 없던 이전 DB: 공용 과거시세를 등록 길드마다 이어받고 등락률은 기본값
+            var legacyPath = Path.Combine(directory, "legacy", "molly.sqlite");
+            Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+            await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={legacyPath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TABLE haeyeon_monitor_channels (guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, registered_at_utc TEXT NOT NULL);
+                    CREATE TABLE haeyeon_price_state (item_name TEXT PRIMARY KEY, is_product INTEGER NOT NULL, baseline_price INTEGER NOT NULL,
+                        baseline_at_utc TEXT NOT NULL, current_price INTEGER NOT NULL, current_at_utc TEXT NOT NULL);
+                    INSERT INTO haeyeon_monitor_channels VALUES (5, 50, '2026-09-24T03:00:00.0000000Z'), (6, 60, '2026-09-24T03:00:00.0000000Z');
+                    INSERT INTO haeyeon_price_state VALUES ('해연의 숏소드ZZ', 1, 4321, '2026-09-24T03:00:00.0000000Z', 4400, '2026-09-24T04:00:00.0000000Z');
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            var legacy = new HaeyeonMarketStore(legacyPath);
+            await legacy.InitializeAsync();
+            await legacy.InitializeAsync();
+            Assert((await legacy.LoadPriceStatesAsync(5))["해연의 숏소드ZZ"] is { BaselinePrice: 4321, CurrentPrice: 4400, IsProduct: true } &&
+                   (await legacy.LoadPriceStatesAsync(6)).Count == 1 &&
+                   (await legacy.GetChannelsAsync()).All(x => x.ProductChangePercent is null && x.Thresholds == HaeyeonThresholds.Default),
+                "이전 DB의 공용 과거시세를 등록 길드마다 옮기고, 저장된 등락률이 없으면 기본값 사용(재시작해도 다시 옮기지 않음)");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static async Task MobiLifeSourceTestsAsync()
