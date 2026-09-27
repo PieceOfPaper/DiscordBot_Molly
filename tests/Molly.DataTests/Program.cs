@@ -126,7 +126,7 @@ if (args.Length >= 3 && args[0] == "--battle-log")
         : await new GoogleSheetsBattleSource(client, GoogleSheetsRuneSource.DefaultSpreadsheetId).FetchAsync(default);
     var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow);
     var result = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", args[1], 1000, 0, 0), new CharacterBattleSnapshot(2, "B", args[2], 1000, 0, 0), data, new SystemBattleRandom());
-    foreach (var message in DiscordBot_Molly.Commands.BattleCommand.Format(result.Events)) Console.WriteLine(message + "\n");
+    foreach (var message in DiscordBot_Molly.Commands.BattleLog.Format(result.Events, "A")) Console.WriteLine(message.ToText() + "\n");
     Console.WriteLine($"결과: {result.Outcome}, A {result.FighterAHp}/{result.FighterAMaxHp}, B {result.FighterBHp}/{result.FighterBMaxHp}");
     return;
 }
@@ -704,14 +704,13 @@ Check(extendTurns[4].Any(x => x.Type == "SkillUsed" && x.Detail == "커터") && 
 Check(extendTurns[5].FindIndex(x => x.Type == "StatusExpired" && x.Actor == "B" && x.Detail == "브레이크 익스텐드") is >= 0 and var extendRecovered && extendTurns[5].FindIndex(x => x.Type == "NormalAttackUsed" && x.Actor == "B") > extendRecovered
     && extendEvents.Count(x => x.Type == "BreakActionLost") == 2 * extendEvents.Count(x => x.Type == "BreakActivated"),
     "브레이크 익스텐드는 브레이크 한 번에 행동 상실을 두 배로 만들고 상대의 다음 행동 시작에 풀린다");
-var extendLog = string.Join("\n", DiscordBot_Molly.Commands.BattleCommand.Format(extendEvents));
-Check(extendLog.Contains("　↳ 💢 **브레이크!!**\n　↳ B이(가) **브레이크** 상태에 빠졌습니다!", StringComparison.Ordinal) && extendLog.Contains("　↳ 🧊 **브레이크 익스텐드!!**\n　↳ B의 브레이크가 연장되어 1턴 더 행동하지 못합니다!", StringComparison.Ordinal)
+var extendLog = string.Join("\n", DiscordBot_Molly.Commands.BattleLog.Format(extendEvents).Select(x => x.ToText()));
+Check(extendLog.Contains("💢 **브레이크!!**\nB이(가) **브레이크** 상태에 빠졌습니다!", StringComparison.Ordinal) && extendLog.Contains("🧊 **브레이크 익스텐드!!**\nB의 브레이크가 연장되어 1턴 더 행동하지 못합니다!", StringComparison.Ordinal)
     && !extendLog.Contains("## ", StringComparison.Ordinal) && !extendLog.Contains("무방비 대미지", StringComparison.Ordinal) && !extendLog.Contains("**브레이크** 상태가 적용", StringComparison.Ordinal),
-    "브레이크와 브레이크 익스텐드는 스킬 사용 아래 굵은 글씨로 강조하고 효과 목록은 생략한다");
-var lostTurn = DiscordBot_Molly.Commands.BattleCommand.Format(extendEvents).First(x => x.Contains("브레이크로 행동하지 못했습니다", StringComparison.Ordinal)).Split('\n');
-var lostIndex = Array.FindIndex(lostTurn, x => x.Contains("브레이크로 행동하지 못했습니다", StringComparison.Ordinal));
-Check(lostTurn[lostIndex] == "💢 B은(는) 브레이크로 행동하지 못했습니다!" && lostTurn.Skip(lostIndex + 1).All(x => x.StartsWith("　↳ ", StringComparison.Ordinal)),
-    "브레이크로 잃은 행동은 행동 제목으로 쓰고, 턴을 마치며 생기는 로그는 그 아래 들여쓰기로 붙는다");
+    "브레이크와 브레이크 익스텐드는 스킬 사용 본문에 굵은 글씨로 강조하고 효과 목록은 생략한다");
+var lostBlock = DiscordBot_Molly.Commands.BattleLog.Format(extendEvents).SelectMany(x => x.Blocks).First(x => x.Title?.Contains("브레이크로 행동하지 못했습니다", StringComparison.Ordinal) == true);
+Check(lostBlock.Title == "💢 B은(는) 브레이크로 행동하지 못했습니다!" && lostBlock.Tone == DiscordBot_Molly.Commands.BattleLogTone.FighterB,
+    "브레이크로 잃은 행동은 행동하지 못한 쪽 색의 임베드 제목으로 쓴다");
 // 모의배틀: 허수아비는 신청자와 전투력·생활력·매력이 같고 클래스만 고른 클래스다. 클래스 옵션은 ID·이름을 받고 배틀 미지원 클래스는 거부한다.
 var practiceData = BattleCatalog.Parse(ThiefBattleTests.Sheets, DateTimeOffset.UtcNow);
 var challenger = new CharacterBattleSnapshot(42, "종잇장", "thief", 12345, 23456, 34567);
@@ -726,9 +725,10 @@ Check(practiceEvents.Any(x => x.Actor == "허수아비") && practiceEvents.Any(x
 var ultimateGauge = new BattleResource("ultimate_gauge", "궁극기 게이지", "궁극기 게이지", 300, 300, 0, "가산");
 var ultimateSkill = new BattleSkill("test_ultimate", "혹한의 일격", "궁극기", null, true, 0, 0, 1, 1, [new BattleEffect("ult_hit", 1, "피해", "상대", 100, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)], "ultimate_gauge", "300") { UltimateQuote = "『여기 다시 한번』" };
 var ultimateSnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["ult"] = new("ult", "궁극", ["test_ultimate"]), ["target"] = new("target", "대상", Array.Empty<string>()) }, Skills = new Dictionary<string, BattleSkill> { ["test_ultimate"] = ultimateSkill }, Resources = new Dictionary<string, BattleResource> { ["ultimate_gauge"] = ultimateGauge }, LoadedAt = DateTimeOffset.UtcNow };
-var ultimateLog = DiscordBot_Molly.Commands.BattleCommand.Format(new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ult", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), ultimateSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100)))).Events).First();
-Check(ultimateLog.StartsWith("## 🌟 혹한의 일격!!\n-# 『여기 다시 한번』\nA이(가) **혹한의 일격**을(를) 사용합니다!\n　↳ A의 궁극기 게이지 -300 (현재 0)\n", StringComparison.Ordinal),
-    "궁극기는 큰 글씨 제목과 대사를 먼저 출력하고 게이지 소모는 사용 문구 아래에 둔다");
+var ultimateBlock = DiscordBot_Molly.Commands.BattleLog.Format(new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "ult", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "target", 100, 0, 0), ultimateSnapshot, new FixedBattleRandom(new[] { 0d }.Concat(Enumerable.Repeat(.5d, 100)))).Events).First().Blocks[0];
+Check(ultimateBlock.Title == "A이(가) 혹한의 일격을(를) 사용합니다!" && ultimateBlock.Body.StartsWith("## 🌟 혹한의 일격!!\n-# 『여기 다시 한번』\n", StringComparison.Ordinal)
+    && ultimateBlock.Body.EndsWith("\n-# 📊 A · 궁극기 게이지 0 (-300)", StringComparison.Ordinal),
+    "궁극기는 사용 문구 임베드 본문 맨 위에 큰 글씨 제목과 대사를 출력하고 게이지 소모는 본문 끝 자원 요약에 둔다");
 var wardSkill = new BattleSkill("ward", "브레이크 방어", "일반", null, true, 5, 0, 1, 1, [new BattleEffect("ward", 1, "브레이크면역", "자신", 0, 1, 1, 2, "break_immunity", 1, null, null, null, null, null, null, null, null)]);
 var immunitySnapshot = new BattleDataSnapshot { Rules = battleRules, Classes = new Dictionary<string, BattleClass> { ["breaker"] = new("breaker", "브레이커", ["break_skill"]), ["ward"] = new("ward", "방어", ["ward"]) }, Skills = new Dictionary<string, BattleSkill> { ["break_skill"] = breakSkill, ["ward"] = wardSkill }, Statuses = breakSnapshot.Statuses, LoadedAt = DateTimeOffset.UtcNow };
 var immunityBattle = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "breaker", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "ward", 100, 0, 0), immunitySnapshot, new FixedBattleRandom(new[] { .9d }.Concat(Enumerable.Repeat(.5d, 100))));
@@ -1624,9 +1624,39 @@ Check(Duel(weakenSnapshot).Events.Where(x => x.Type == "StatusDamage" && x.Targe
     "쇠약 100은 체력이 가득할 때 200, 일반 공격 52까지 받아 74.8%일 때 175가 된다");
 
 // 턴 시작 상태 효과 묶음의 제목은 그 턴의 주인이다. A가 건 지속 피해가 B의 턴에 들어가도 "B의 상태 효과"로 보여야 한다(힐러 공포 로그 오해 사례).
-var dotLog = DiscordBot_Molly.Commands.BattleCommand.Format(Duel(weakenSnapshot).Events).ToArray();
-Check(dotLog.Any(x => x.StartsWith("⏳ **B의 상태 효과**") && x.Contains("쇠약!")) && !dotLog.Any(x => x.StartsWith("⏳ **A의 상태 효과**") && x.Contains("쇠약!")),
+var dotLog = DiscordBot_Molly.Commands.BattleLog.Format(Duel(weakenSnapshot).Events).SelectMany(x => x.Blocks).ToArray();
+Check(dotLog.Any(x => x.Title == "⏳ B의 상태 효과" && x.Tone == DiscordBot_Molly.Commands.BattleLogTone.TurnStatus && x.Body.Contains("쇠약!")) && !dotLog.Any(x => x.Title == "⏳ A의 상태 효과" && x.Body.Contains("쇠약!")),
     "A가 건 지속 피해는 B의 턴에 '⏳ B의 상태 효과' 제목 아래 표시된다");
+
+// 전투 로그 임베드: 행동마다 블록 하나, 같은 대상의 연속된 상태 적용·해제는 한 줄, 자원 증감은 본문 끝 작은 글씨 한 줄로 모은다.
+var groupedLog = DiscordBot_Molly.Commands.BattleLog.Format(
+[
+    new("TurnStarted", "A", "B"), new("SkillUsed", "A", "B", Detail: "프로즌 오브"), new("DamageDealt", "A", "B", 100),
+    new("ResourceChanged", "A", Detail: "서리 +38 (현재 38)"), new("ResourceChanged", "A", Detail: "궁극기 게이지 +150 (현재 150)"),
+    new("StatusApplied", "B", Detail: "마크 오브 아이시클", Amount: 2), new("ResourceChanged", "A", Detail: "동결 +5 (현재 5)"), new("StatusApplied", "B", Detail: "빙결", Amount: 2),
+    new("ResourceChanged", "A", Detail: "오버 차지 단계 +1 (현재 1)"), new("ResourceChanged", "A", Detail: "오버 차지 단계 -1 (현재 0)"), new("ResourceChanged", "A", Detail: "임시 집중이(가) 사라졌습니다."),
+    new("StatusApplied", "A", Detail: "아드레날린", Amount: 1), new("StatusApplied", "A", Detail: "스닉 어택", Amount: 2),
+    new("DerivedSkillUsed", "A", "B", Detail: "섀터"), new("DamageDealt", "A", "B", 50),
+    new("TurnStarted", "B", "A"), new("StatusDamage", "A", "B", 30, "빙결"), new("StatusExpired", "B", Detail: "마크 오브 아이시클"), new("StatusExpired", "B", Detail: "빙결"),
+    new("NormalAttackUsed", "B", "A"), new("DamageDealt", "B", "A", 10)
+], "A").ToArray();
+var skillBlock = groupedLog[0].Blocks.Single();
+var skillLines = skillBlock.Body.Split('\n');
+Check(groupedLog.Length == 2 && skillBlock.Title == "A이(가) 프로즌 오브을(를) 사용합니다!" && skillBlock.Tone == DiscordBot_Molly.Commands.BattleLogTone.FighterA
+    && skillLines.SequenceEqual(new[]
+    {
+        "B에게 100의 피해를 입혔습니다!", "B에게 **마크 오브 아이시클**·**빙결** 상태가 적용되었습니다! (2턴)", "A에게 **아드레날린**(1턴)·**스닉 어택**(2턴) 상태가 적용되었습니다!",
+        "**↳ A이(가) 섀터을(를) 사용합니다!**", "B에게 50의 피해를 입혔습니다!", "-# 📊 A · 서리 38 (+38) · 궁극기 게이지 150 (+150) · 동결 5 (+5) · 오버 차지 단계 0 · 임시 집중 사라짐"
+    }),
+    "스킬 사용은 임베드 제목, 파생은 본문 소제목이 되고 상태 적용은 대상별로 묶으며 자원 증감은 순변화량으로 본문 끝에 모은다");
+var turnBlocks = groupedLog[1].Blocks;
+Check(turnBlocks.Count == 2 && turnBlocks[0] is { Title: "⏳ B의 상태 효과", Tone: DiscordBot_Molly.Commands.BattleLogTone.TurnStatus } && turnBlocks[0].Body.EndsWith("B의 **마크 오브 아이시클**·**빙결** 상태가 풀렸습니다.", StringComparison.Ordinal)
+    && turnBlocks[1] is { Title: "B의 일반 공격!", Tone: DiscordBot_Molly.Commands.BattleLogTone.FighterB },
+    "턴 시작 상태 효과는 회색 블록으로 행동 블록과 나누고 연속된 상태 해제를 한 줄로 묶는다");
+var manyBlocks = new DiscordBot_Molly.Commands.BattleLogMessage(Enumerable.Range(0, 12).Select(i => new DiscordBot_Molly.Commands.BattleLogBlock("t" + i, new string('x', 1500), DiscordBot_Molly.Commands.BattleLogTone.FighterA)).ToArray());
+var split = DiscordBot_Molly.Commands.BattleLog.SplitForDiscord(manyBlocks).ToArray();
+Check(split.Sum(x => x.Count) == 12 && split.All(x => x.Count <= DiscordBot_Molly.Commands.BattleLog.MaxEmbedsPerMessage && x.Sum(b => b.Body.Length + (b.Title?.Length ?? 0)) <= DiscordBot_Molly.Commands.BattleLog.MaxMessageLength),
+    "한 턴의 임베드가 Discord 제한(메시지당 10개·6000자)을 넘으면 여러 메시지로 나눈다");
 
 // 회복의 수치참조(루미너스 샤드): 소모중첩배율이면 고정값 × 참조 자원을 1회 회복량으로 쓰고, 참조가 0이면 회복하지 않는다.
 var shardHealResources = new Dictionary<string, BattleResource> { ["shards"] = new("shards", "결정", "중첩", 0, 0, 0, "가산"), ["no_shards"] = new("no_shards", "빈 결정", "중첩", 0, 0, 0, "가산") };
