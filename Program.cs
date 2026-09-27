@@ -29,6 +29,7 @@ class Program
     public LiarGameService LiarGames { get; } = new();
     public LotteryService Lotteries { get; } = new();
     public RegisteredCharacterStore RegisteredCharacters { get; private set; } = null!;
+    public BattleRecordStore BattleRecords { get; private set; } = null!;
     public BattleCatalog Battles { get; private set; } = null!;
     public BattleSessions BattleSessions { get; } = new();
     // 모비라이프 OpenAPI. 키가 없거나 API가 중단돼도 봇은 정상 시작하며, 연동 기능만 안내 메시지를 표시합니다.
@@ -168,6 +169,8 @@ class Program
         await MobiEventExpireAlert.InitializeStorageAsync(appCts.Token);
         RegisteredCharacters = new RegisteredCharacterStore();
         await RegisteredCharacters.InitializeAsync(appCts.Token);
+        BattleRecords = new BattleRecordStore();
+        await BattleRecords.InitializeAsync(appCts.Token);
 
         using var runeHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;

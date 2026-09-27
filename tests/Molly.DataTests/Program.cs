@@ -486,6 +486,35 @@ try
     await characterStore.SaveAsync(new RegisteredCharacter(100, MobiServer.칼릭스, "바꾼캐릭터", DateTimeOffset.UnixEpoch.AddDays(1)));
     var registeredCharacter = await characterStore.LoadAsync(100);
     Check(registeredCharacter is { Server: MobiServer.칼릭스, CharacterName: "바꾼캐릭터" }, "캐릭터 등록은 길드와 무관하게 Discord 사용자별로 저장·갱신");
+    var recordStore = new BattleRecordStore(databasePath: Path.Combine(storageDir, "database", "molly.sqlite"));
+    await recordStore.InitializeAsync();
+    await recordStore.RecordAsync(100, "thief", BattleRecordStore.Result.Win);
+    await recordStore.RecordAsync(100, "thief", BattleRecordStore.Result.Win);
+    await recordStore.RecordAsync(100, "thief", BattleRecordStore.Result.Loss);
+    await recordStore.RecordAsync(100, "healer", BattleRecordStore.Result.Draw);
+    await recordStore.RecordAsync(200, "thief", BattleRecordStore.Result.Loss);
+    var records100 = await recordStore.LoadAsync(100);
+    Check(records100.SequenceEqual(new[] { new BattleClassRecord("thief", 2, 1, 0), new BattleClassRecord("healer", 0, 0, 1) })
+        && (await recordStore.LoadAsync(200)).SequenceEqual(new[] { new BattleClassRecord("thief", 0, 1, 0) }),
+        "배틀 전적은 사용자·클래스별로 누적되고 판수가 많은 클래스부터 불러온다");
+    await recordStore.InitializeAsync();
+    Check((await recordStore.DeleteAllAsync(100)) == 2 && (await recordStore.LoadAsync(100)).Count == 0 && (await recordStore.LoadAsync(200)).Count == 1,
+        "캐릭터를 바꿀 때 지우는 전적은 그 사용자의 모든 클래스뿐이고 다른 사용자 전적은 남는다");
+    var recordText = DiscordBot_Molly.Commands.BattleRecordCommand.Format("@종잇장",
+        new RegisteredCharacter(100, MobiServer.칼릭스, "종잇장", DateTimeOffset.UnixEpoch, "thief", 12345, 23456, 3456, DateTimeOffset.FromUnixTimeSeconds(1_800_000_000)),
+        records100, id => id == "thief" ? "도적" : "힐러");
+    var recordLines = recordText.Split('\n');
+    Check(recordLines[0] == "📜 **@종잇장의 배틀 전적**" && recordLines[1] == "[칼릭스] 종잇장 · 도적"
+        && recordLines[2] == "⚔️ 전투력 12,345 · 🌱 생활력 23,456 · 💕 매력 3,456 (랭킹 기준 <t:1800000000:R>)"
+        && recordLines[4] == "📊 **전적**"
+        && recordText.Contains("도적 2승 1패 · 승률 66.7%") && recordText.Contains("힐러 0승 0패 1무 · 승률 0.0%") && recordText.EndsWith("**합계** 2승 1패 1무 · 승률 50.0%"),
+        "전적은 맨 위에 현재 클래스와 전투력·생활력·매력, 아래에 클래스별 전적과 합계를 보여준다");
+    Check(DiscordBot_Molly.Commands.BattleRecordCommand.Format("@새내기", new RegisteredCharacter(300, MobiServer.몰리, "새내기", DateTimeOffset.UnixEpoch), [], id => id).EndsWith("아직 배틀 전적이 없어요.")
+        && DiscordBot_Molly.Commands.BattleRecordCommand.Format("@새내기", new RegisteredCharacter(300, MobiServer.몰리, "새내기", DateTimeOffset.UnixEpoch), [], id => id).Contains("클래스 확인 전"),
+        "전적이 없거나 클래스를 아직 모르면 그대로 안내한다");
+    Check(DiscordBot_Molly.Commands.CharacterRegistrationCommand.ConfirmMessage(new RegisteredCharacter(100, MobiServer.몰리, "첫캐릭터", DateTimeOffset.UnixEpoch), "칼릭스", "바꾼캐릭터", records100)
+        .Contains("[몰리] `첫캐릭터`") && DiscordBot_Molly.Commands.CharacterRegistrationCommand.ConfirmMessage(new RegisteredCharacter(100, MobiServer.몰리, "첫캐릭터", DateTimeOffset.UnixEpoch), "칼릭스", "바꾼캐릭터", records100).Contains("클래스 2개, 4전)이 **모두 삭제**"),
+        "다른 캐릭터로 바꿀 때 이전 캐릭터와 지워질 전적 수를 알려주고 확인을 받는다");
     await File.WriteAllTextAsync(Path.Combine(legacyDir, "999.json"), "{broken");
     await settingsStore.InitializeAsync();
     Check(File.Exists(Path.Combine(legacyDir, "999.json")), "손상된 기존 JSON은 삭제하지 않고 다음 이전을 위해 유지");

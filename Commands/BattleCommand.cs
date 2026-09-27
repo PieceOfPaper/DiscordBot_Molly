@@ -43,6 +43,8 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
             foreach (var line in Format(result.Events)) { await Task.Delay(TimeSpan.FromSeconds(TurnIntervalSeconds), session.CancellationToken); await SendAsync(thread, line); }
             var winner = result.Outcome == BattleOutcome.FighterAWin ? aLabel : result.Outcome == BattleOutcome.FighterBWin ? bLabel : "무승부";
             await SendAsync(thread, string.Format("🏁 전투 종료: **{0}**\n{1} {2:N0}/{3:N0} HP · {4} {5:N0}/{6:N0} HP", winner, aLabel, result.FighterAHp, result.FighterAMaxHp, bLabel, result.FighterBHp, result.FighterBMaxHp));
+            // 끝까지 중계한 배틀만 전적에 남긴다. 강제 종료된 배틀은 여기까지 오지 않는다. 저장 실패는 이미 끝난 배틀 결과를 바꾸지 않는다.
+            await RecordAsync(a, b, result.Outcome);
         }
         catch (OperationCanceledException) when (session.IsStopRequested)
         {
@@ -67,6 +69,22 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
             }
             Program.instance.BattleSessions.Leave(Context.Guild.Id, session);
         }
+    }
+
+    private static async Task RecordAsync(CharacterBattleSnapshot a, CharacterBattleSnapshot b, BattleOutcome outcome)
+    {
+        var (aResult, bResult) = outcome switch
+        {
+            BattleOutcome.FighterAWin => (BattleRecordStore.Result.Win, BattleRecordStore.Result.Loss),
+            BattleOutcome.FighterBWin => (BattleRecordStore.Result.Loss, BattleRecordStore.Result.Win),
+            _ => (BattleRecordStore.Result.Draw, BattleRecordStore.Result.Draw)
+        };
+        try
+        {
+            await Program.instance.BattleRecords.RecordAsync(a.DiscordUserId, a.ClassId, aResult);
+            await Program.instance.BattleRecords.RecordAsync(b.DiscordUserId, b.ClassId, bResult);
+        }
+        catch (Exception ex) { Console.WriteLine("[배틀] 전적 저장 실패: " + ex.GetType().Name); }
     }
 
     [SlashCommand("배틀종료", "현재 서버에서 진행 중인 배틀을 강제로 종료합니다.")]
