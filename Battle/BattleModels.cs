@@ -13,6 +13,8 @@ public sealed class BattleDataSnapshot
     public IReadOnlyDictionary<string, BattleResource> Resources { get; init; } = new ReadOnlyDictionary<string, BattleResource>(new Dictionary<string, BattleResource>());
     public IReadOnlyDictionary<string, BattleStatus> Statuses { get; init; } = new ReadOnlyDictionary<string, BattleStatus>(new Dictionary<string, BattleStatus>());
     public IReadOnlyList<BattleDerivation> Derivations { get; init; } = Array.Empty<BattleDerivation>();
+    /// <summary>스킬 ID별 자동 행동 선택 가중치 조건(<c>배틀스킬AI</c>). 비어 있으면 기본 가중치만으로 추첨한다.</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<BattleSkillAiRule>> SkillAiRules { get; init; } = new ReadOnlyDictionary<string, IReadOnlyList<BattleSkillAiRule>>(new Dictionary<string, IReadOnlyList<BattleSkillAiRule>>());
     /// <summary>생활력으로 드물게 주요 행동을 대신하는 배틀생활스킬. 비어 있으면 생활스킬 판정을 하지 않고 난수도 소비하지 않는다.</summary>
     public IReadOnlyList<BattleLifeSkill> LifeSkills { get; init; } = Array.Empty<BattleLifeSkill>();
     public DateTimeOffset LoadedAt { get; init; }
@@ -78,6 +80,12 @@ public sealed record BattleStatus(string Id, string Name, string EffectType, dou
     }
     public bool IsSynergy(string effectType) => SynergyTypes.Contains(effectType);
 }
+/// <summary>
+/// <c>배틀스킬AI</c> 한 행. 조건이 맞으면 스킬의 추첨 가중치에 <see cref="Bonus"/>를 더한다(음수면 뺀다).
+/// <see cref="StepBonus"/>가 0이 아니면 조건값에서 <see cref="StepSize"/>만큼 멀어질 때마다 더 더하고, 행 전체 가산은 <see cref="MaxBonus"/>에서 멈춘다.
+/// </summary>
+public sealed record BattleSkillAiRule(string Id, string SkillId, string ConditionTarget, string ConditionType, string? ConditionId,
+    string? ConditionOperator, double ConditionValue, double Bonus, double StepSize, double StepBonus, double MaxBonus);
 public sealed record BattleDerivation(string Id, string ParentSkillId, string ChildSkillId, string ActivationMode,
     double Weight, double Chance, string? ConditionType, string? ConditionValue, bool AllowDuplicate, string Timing, int Priority);
 

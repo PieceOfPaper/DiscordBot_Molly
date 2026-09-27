@@ -51,7 +51,7 @@ public sealed class BattleEngine
             // 예약된 다음 행동(파생)은 생활스킬보다 우선한다. 생활스킬은 일반 공격·클래스 스킬 대신 주요 행동을 소비한다.
             var pendingSkill = actor.TakePendingSkill(data);
             var lifeSkill = pendingSkill is null ? ChooseLifeSkill(actor, target, data, random, rules) : null;
-            var skill = lifeSkill is not null ? null : pendingSkill ?? ChooseSkill(actor, data, random);
+            var skill = lifeSkill is not null ? null : pendingSkill ?? ChooseSkill(actor, target, data, random, events);
             if (lifeSkill is not null)
             {
                 var resolved = ExecuteLifeSkill(actor, target, lifeSkill, surpriseMultiplier, random, rules, events);
@@ -346,19 +346,68 @@ public sealed class BattleEngine
         return (last - '가') % 28 != 0 ? withFinal : withoutFinal;
     }
 
-    private static BattleSkill? ChooseSkill(Fighter actor, BattleDataSnapshot data, IBattleRandom random)
+    /// <summary>AI 가산으로 가중치가 0 이하가 되어도 이 값은 남긴다. 조건이 나빠도 드물게 "왜 지금 이게 나와" 하는 선택이 나올 수 있다.</summary>
+    private const double MinimumSkillWeight = 0.1;
+
+    private static BattleSkill? ChooseSkill(Fighter actor, Fighter target, BattleDataSnapshot data, IBattleRandom random, List<BattleEvent> events)
     {
         var choices = actor.SkillIds.Select(id => data.Skills.GetValueOrDefault(id)).Where(x => x is { Enabled: true, Kind: not "파생" } && (actor.Cooldowns.GetValueOrDefault(x.Id) == 0 || ResolveReuse(actor, x, data) is not null) && x.Weight > 0 && CanPaySkillResource(actor, x, data) && (x.Effects.Count > 0 || HasImmediateDerivation(actor, x, data))).Cast<BattleSkill>().ToArray();
         if (choices.Length == 0) return null;
-        // 재사용 파생은 플레이어가 같은 버튼을 다시 누른 동작을 자동전투에서 표현하는 경로다.
-        // 진행 중인 상태를 끝내는 재사용 후보가 있으면 일반 후보보다 먼저 선택한다.
-        var reusable = choices.Where(x => ResolveReuse(actor, x, data) is not null).ToArray();
-        if (reusable.Length > 0) choices = reusable;
-        var varied = choices.Where(x => x.Id != actor.LastSkillId).ToArray();
+        // 재사용 파생(같은 버튼을 다시 누르는 동작)도 일반 후보와 함께 추첨한다. 바로 발산할지 더 모을지는 배틀스킬AI 가산이 정한다(GitHub Issue #12).
+        // 재사용은 직전 스킬과 다른 동작이므로 직전 사용 스킬 제외 규칙에서 뺀다.
+        var varied = choices.Where(x => x.Id != actor.LastSkillId || ResolveReuse(actor, x, data) is not null).ToArray();
         if (varied.Length > 0) choices = varied;
-        var point = random.NextDouble() * choices.Sum(x => x.Weight * (1d + x.Priority / 100d));
-        foreach (var skill in choices) { point -= skill.Weight * (1d + skill.Priority / 100d); if (point <= 0) return skill; }
-        return choices[^1];
+        var applied = new List<string>();
+        var weights = choices.Select(x => SkillWeight(actor, target, x, data, applied)).ToArray();
+        var point = random.NextDouble() * weights.Sum();
+        var chosen = choices[^1];
+        for (var i = 0; i < choices.Length; i++) { point -= weights[i]; if (point <= 0) { chosen = choices[i]; break; } }
+        // 밸런스 점검용 기록이다. 전투 중계에는 나오지 않고, AI 조건이 하나라도 맞은 선택에만 남긴다.
+        if (applied.Count > 0) events.Add(new("SkillAiWeighted", actor.Name, target.Name, Detail: chosen.Id + "|" + string.Join(",", applied)));
+        return chosen;
+    }
+
+    /// <summary>기본 가중치(가중치 × (1 + 사용우선순위/100))에 조건이 맞은 배틀스킬AI 가산을 더한다.</summary>
+    private static double SkillWeight(Fighter actor, Fighter target, BattleSkill skill, BattleDataSnapshot data, List<string> applied)
+    {
+        var weight = skill.Weight * (1d + skill.Priority / 100d);
+        if (!data.SkillAiRules.TryGetValue(skill.Id, out var rules)) return weight;
+        foreach (var rule in rules)
+        {
+            if (AiRuleBonus(actor, target, rule) is not { } bonus) continue;
+            weight += bonus;
+            applied.Add(rule.Id);
+        }
+        return Math.Max(MinimumSkillWeight, weight);
+    }
+
+    /// <summary>
+    /// 조건이 맞지 않으면 null. 비례 가산은 조건값에서 단계크기만큼 멀어질 때마다 단계당가산을 더한다.
+    /// 예: HP비율 &lt; 0.5, 단계크기 0.01이면 HP 49.5%는 0단계, 20%는 30단계다.
+    /// </summary>
+    private static double? AiRuleBonus(Fighter actor, Fighter target, BattleSkillAiRule rule)
+    {
+        var owner = rule.ConditionTarget == "상대" ? target : actor;
+        double actual;
+        switch (rule.ConditionType)
+        {
+            case "상태효과보유": return owner.Statuses.ContainsKey(rule.ConditionId!) ? rule.Bonus : null;
+            case "상태효과미보유": return owner.Statuses.ContainsKey(rule.ConditionId!) ? null : rule.Bonus;
+            case "상태효과유형보유": return owner.HasStatusEffect(rule.ConditionId!) ? rule.Bonus : null;
+            case "상태효과유형미보유": return owner.HasStatusEffect(rule.ConditionId!) ? null : rule.Bonus;
+            case "HP비율": actual = (double)owner.Hp / owner.MaxHp; break;
+            case "자원보유": actual = owner.Resources.GetValueOrDefault(rule.ConditionId!); break;
+            case "브레이크게이지": actual = owner.BreakGauge; break;
+            case "해로운상태개수": actual = owner.HarmfulStatusCount; break;
+            default: return null;
+        }
+        if (!Compare(actual, rule.ConditionOperator, rule.ConditionValue)) return null;
+        if (rule.StepBonus == 0) return rule.Bonus;
+        var distance = rule.ConditionOperator is "<" or "<=" ? rule.ConditionValue - actual : actual - rule.ConditionValue;
+        // 0.5 - 0.2 = 0.29999…처럼 비율 계산 오차로 단계가 하나 모자라지 않게 아주 작은 값을 더한다.
+        var steps = Math.Floor(distance / rule.StepSize + 1e-9);
+        var total = rule.Bonus + steps * rule.StepBonus;
+        return rule.MaxBonus > 0 ? Math.Min(total, rule.MaxBonus) : Math.Max(total, rule.MaxBonus);
     }
 
     private static BattleSkill? ResolveReuse(Fighter actor, BattleSkill skill, BattleDataSnapshot data)

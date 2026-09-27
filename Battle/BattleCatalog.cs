@@ -14,7 +14,7 @@ public interface IBattleDataSource
 /// <summary>전투용 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
 public sealed class GoogleSheetsBattleSource(HttpClient client, string spreadsheetId) : IBattleDataSource
 {
-    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"];
+    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"];
     public string CacheKey => spreadsheetId;
 
     public async Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct)
@@ -112,7 +112,7 @@ public sealed class BattleCatalog
         var statuses = BattleCsv.Read(tables["배틀상태효과"], "배틀상태효과");
         var rules = BattleCsv.Read(tables["배틀규칙"], "배틀규칙");
         // 나머지 표도 누락/깨진 CSV를 허용하지 않습니다. 상세 효과는 이후 엔진 단계에서 공통 모델로 확장합니다.
-        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"])) BattleCsv.Read(tables[name], name);
+        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"])) BattleCsv.Read(tables[name], name);
         BattleCsv.Headers(classes, "클래스", "ID", "이름", "스킬1", "스킬2", "스킬3", "스킬4", "스킬5", "궁극기", "패시브1", "패시브2", "패시브3", "패시브4", "패시브5", "패시브6");
         BattleCsv.Headers(skills, "스킬", "ID", "이름", "스킬구분", "부모스킬ID");
         BattleCsv.Headers(passiveSkills, "패시브스킬", "ID", "이름");
@@ -236,7 +236,73 @@ public sealed class BattleCatalog
         if (derivationList.Any(x => !skillMap.ContainsKey(x.ParentSkillId) || !skillMap.ContainsKey(x.ChildSkillId))) throw new InvalidDataException("배틀스킬파생 시트가 존재하지 않는 배틀 스킬 ID를 참조합니다.");
         // 엔진이 모르는 조건유형은 항상 거짓으로 판정되어 파생이 조용히 사라지므로 로딩 단계에서 거부한다.
         if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
-        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, LifeSkills = ParseLifeSkills(tables), LoadedAt = loadedAt };
+        var skillAiRules = ParseSkillAiRules(BattleCsv.Read(tables["배틀스킬AI"], "배틀스킬AI"), skillMap, resourceMap, statusMap);
+        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, SkillAiRules = skillAiRules, LifeSkills = ParseLifeSkills(tables), LoadedAt = loadedAt };
+    }
+
+    /// <summary>수치를 비교하는 AI 조건. 비례 가산(단계당가산)은 이 조건에서만 쓸 수 있다.</summary>
+    private static readonly HashSet<string> AiNumericConditionTypes = new(["HP비율", "자원보유", "브레이크게이지", "해로운상태개수"], StringComparer.Ordinal);
+    /// <summary>보유 여부만 보는 AI 조건. 조건ID에 상태 ID(상태효과보유) 또는 효과유형(상태효과유형보유, 예: 브레이크)을 적는다.</summary>
+    private static readonly HashSet<string> AiPresenceConditionTypes = new(["상태효과보유", "상태효과미보유", "상태효과유형보유", "상태효과유형미보유"], StringComparer.Ordinal);
+
+    /// <summary>
+    /// <c>배틀스킬AI</c>를 스킬 ID별 조건 목록으로 만든다. 엔진이 모르는 조건은 조용히 거짓이 되어 가중치가 사라지므로 로딩 단계에서 거부한다.
+    /// 활성화=FALSE 행도 검증한 뒤 제외한다.
+    /// </summary>
+    private static IReadOnlyDictionary<string, IReadOnlyList<BattleSkillAiRule>> ParseSkillAiRules(IReadOnlyList<Dictionary<string, string>> rows,
+        IReadOnlyDictionary<string, BattleSkill> skills, IReadOnlyDictionary<string, BattleResource> resources, IReadOnlyDictionary<string, BattleStatus> statuses)
+    {
+        const string sheet = "배틀스킬AI";
+        // 헤더만 있는 시트는 AI 조건이 없다는 뜻이다. BattleCsv.Headers는 첫 행에서 헤더를 읽으므로 행이 없으면 검사를 건너뛴다.
+        if (rows.Count > 0) BattleCsv.Headers(rows, sheet, "ID", "스킬ID", "활성화", "조건대상", "조건유형", "조건ID", "조건연산자", "조건값", "가산가중치", "단계크기", "단계당가산", "최대가산");
+        var effectTypes = statuses.Values.SelectMany(x => x.EffectTypes).ToHashSet(StringComparer.Ordinal);
+        var result = new Dictionary<string, List<BattleSkillAiRule>>(StringComparer.Ordinal);
+        foreach (var (row, index) in Unique(rows, sheet).Select((x, i) => (x, i + 2)))
+        {
+            var id = row["ID"];
+            var skillId = row.Required("스킬ID", sheet, index);
+            if (!skills.TryGetValue(skillId, out var skill)) throw new InvalidDataException($"{sheet} '{id}'가 존재하지 않는 배틀 스킬 ID '{skillId}'를 참조합니다.");
+            if (skill.Kind == "파생") throw new InvalidDataException($"{sheet} '{id}'의 스킬 '{skillId}'은(는) 파생 전용이라 행동 후보로 추첨되지 않습니다.");
+            var target = row.Required("조건대상", sheet, index);
+            if (target is not ("자신" or "상대")) throw new InvalidDataException($"{sheet} '{id}'의 조건대상은 자신 또는 상대여야 합니다.");
+            var type = row.Required("조건유형", sheet, index);
+            var conditionId = EmptyAsNull(row["조건ID"]);
+            var op = EmptyAsNull(row["조건연산자"]);
+            var bonus = BattleCsv.Double(row.Required("가산가중치", sheet, index), sheet, index, "가산가중치", double.MinValue);
+            var stepBonus = EmptyAsNull(row["단계당가산"]) is { } rawStepBonus ? BattleCsv.Double(rawStepBonus, sheet, index, "단계당가산", double.MinValue) : 0d;
+            var stepSize = 0d;
+            var maxBonus = 0d;
+            var conditionValue = 0d;
+            if (AiNumericConditionTypes.Contains(type))
+            {
+                if (op is null || !ConditionOperators.Contains(op)) throw new InvalidDataException($"{sheet} '{id}'의 조건연산자 '{op}'을(를) 지원하지 않습니다.");
+                conditionValue = BattleCsv.Double(row.Required("조건값", sheet, index), sheet, index, "조건값");
+                if (type == "HP비율" && conditionValue > 1) throw new InvalidDataException($"{sheet} '{id}'의 HP비율 조건값은 0~1 비율로 적습니다(50% = 0.5).");
+                if (type == "자원보유" && (conditionId is null || !resources.ContainsKey(conditionId))) throw new InvalidDataException($"{sheet} '{id}'의 자원 조건 ID가 올바르지 않습니다.");
+                if (type != "자원보유" && conditionId is not null) throw new InvalidDataException($"{sheet} '{id}'의 {type} 조건은 조건ID를 비워 둡니다.");
+            }
+            else if (AiPresenceConditionTypes.Contains(type))
+            {
+                var known = conditionId is not null && (type.StartsWith("상태효과유형", StringComparison.Ordinal) ? effectTypes.Contains(conditionId) : statuses.ContainsKey(conditionId));
+                if (!known) throw new InvalidDataException($"{sheet} '{id}'의 {type} 조건ID '{conditionId}'가 올바르지 않습니다.");
+                if (op is not null || EmptyAsNull(row["조건값"]) is not null) throw new InvalidDataException($"{sheet} '{id}'의 {type} 조건은 조건연산자·조건값을 비워 둡니다.");
+            }
+            else throw new InvalidDataException($"{sheet} '{id}'의 조건유형 '{type}'을(를) 지원하지 않습니다.");
+            if (stepBonus != 0)
+            {
+                // 비례 가산은 조건값에서 얼마나 멀어졌는지를 센다. 같다(=) 조건과 보유 여부 조건에는 거리가 없다.
+                if (!AiNumericConditionTypes.Contains(type) || op is "=" or "==") throw new InvalidDataException($"{sheet} '{id}'의 단계당가산은 수치 조건의 <, <=, >, >= 에서만 쓸 수 있습니다.");
+                stepSize = BattleCsv.Double(row.Required("단계크기", sheet, index), sheet, index, "단계크기", double.Epsilon);
+                maxBonus = BattleCsv.Double(row.Required("최대가산", sheet, index), sheet, index, "최대가산", double.MinValue);
+                if (Math.Sign(maxBonus) != Math.Sign(stepBonus) || Math.Abs(maxBonus) < Math.Abs(bonus)) throw new InvalidDataException($"{sheet} '{id}'의 최대가산은 단계당가산과 부호가 같고 절댓값이 가산가중치 이상이어야 합니다.");
+            }
+            else if (EmptyAsNull(row["단계크기"]) is not null || EmptyAsNull(row["최대가산"]) is not null) throw new InvalidDataException($"{sheet} '{id}'는 단계당가산이 없으면 단계크기·최대가산을 비워 둡니다.");
+            if (bonus == 0 && stepBonus == 0) throw new InvalidDataException($"{sheet} '{id}'의 가산가중치와 단계당가산이 모두 0입니다.");
+            if (!BattleCsv.Bool(row["활성화"], sheet, index, "활성화")) continue;
+            if (!result.TryGetValue(skillId, out var list)) result[skillId] = list = [];
+            list.Add(new BattleSkillAiRule(id, skillId, target, type, conditionId, op, conditionValue, bonus, stepSize, stepBonus, maxBonus));
+        }
+        return new ReadOnlyDictionary<string, IReadOnlyList<BattleSkillAiRule>>(result.ToDictionary(x => x.Key, x => (IReadOnlyList<BattleSkillAiRule>)x.Value.ToArray(), StringComparer.Ordinal));
     }
 
     /// <summary>생활력 성장과 무관해 배틀생활스킬을 만들지 않는 원본 생활스킬.</summary>

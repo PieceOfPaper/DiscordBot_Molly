@@ -138,6 +138,9 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
     var matches = classes.ToDictionary(x => x.Id, _ => 0);
     var skillUses = classes.ToDictionary(x => x.Id, _ => new Dictionary<string, int>(StringComparer.Ordinal));
     var skillBattles = classes.ToDictionary(x => x.Id, _ => new Dictionary<string, (int Used, int Won)>(StringComparer.Ordinal));
+    // 배틀스킬AI 행별로 조건이 맞은 선택 횟수와 그때 그 스킬이 실제로 뽑힌 횟수(GitHub Issue #12 가중치 가이드라인 점검용).
+    var aiMet = new Dictionary<string, (int Met, int Chosen)>(StringComparer.Ordinal);
+    var aiRuleSkill = data.SkillAiRules.Values.SelectMany(x => x).ToDictionary(x => x.Id, x => x.SkillId, StringComparer.Ordinal);
     long totalActions = 0;
     var totalBattles = 0;
     for (var i = 0; i < classes.Length; i++)
@@ -156,6 +159,12 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
                 var usedInBattle = new Dictionary<string, HashSet<string>> { [ca.Id] = new(StringComparer.Ordinal), [cb.Id] = new(StringComparer.Ordinal) };
                 foreach (var e in result.Events)
                 {
+                    if (e.Type == "SkillAiWeighted" && e.Detail?.Split('|') is [var chosenId, var ruleIds])
+                        foreach (var ruleId in ruleIds.Split(','))
+                        {
+                            var (met, chosen) = aiMet.GetValueOrDefault(ruleId);
+                            aiMet[ruleId] = (met + 1, chosen + (aiRuleSkill[ruleId] == chosenId ? 1 : 0));
+                        }
                     var skillName = e.Type switch { "SkillUsed" or "DerivedSkillUsed" => e.Detail, "NormalAttackUsed" => "(일반 공격)", _ => null };
                     if (skillName is null) continue;
                     var actorId = e.Actor == ca.Name ? ca.Id : cb.Id;
@@ -194,6 +203,16 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
         {
             var (usedBattles, wonBattles) = skillBattles[c.Id][skill];
             Console.WriteLine($"  {skill,-16} {count,6}회 ({(double)count / total:P1})  사용 전투 {usedBattles,5}/{matches[c.Id],-5} 승률 {(double)wonBattles / usedBattles:P1}");
+        }
+    }
+    if (aiRuleSkill.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine("=== 배틀스킬AI 조건 충족 시 선택률 (후보일 때 조건이 맞은 선택 중 그 스킬을 고른 비율) ===");
+        foreach (var rule in data.SkillAiRules.Values.SelectMany(x => x).OrderBy(x => x.SkillId, StringComparer.Ordinal))
+        {
+            var (met, chosen) = aiMet.GetValueOrDefault(rule.Id);
+            Console.WriteLine($"  {rule.Id,-28} {data.Skills[rule.SkillId].Name,-12} 충족 {met,6}회  선택 {(met == 0 ? "-" : ((double)chosen / met).ToString("P1"))}");
         }
     }
     Console.WriteLine();
@@ -533,6 +552,7 @@ CrossbowBattleTests.Run();
 HealerBattleTests.Run();
 ThiefBattleTests.Run();
 LifeSkillBattleTests.Run();
+SkillAiBattleTests.Run();
 await ClassIconTests.RunAsync();
 var battleRules = new Dictionary<string, BattleRule>
 {
