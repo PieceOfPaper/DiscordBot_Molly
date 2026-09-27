@@ -565,6 +565,7 @@ CrossbowBattleTests.Run();
 HealerBattleTests.Run();
 ThiefBattleTests.Run();
 IceMageBattleTests.Run();
+FireMageBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
 await ClassIconTests.RunAsync();

@@ -483,8 +483,8 @@ public sealed class BattleEngine
     {
         var resolution = new EffectResolution();
         // 조건부피해증가(멜로디 쇼크의 "현기증 보유 시 150%")는 스킬이 효과를 실행하기 전 상태로 판정해 같은 스킬의 모든 피해에 곱한다.
-        // 고정값은 증가 퍼센트다(50 = ×1.5).
-        var conditionalDamage = skill.Effects.Where(x => x.Type == "조건부피해증가" && CanApplyEffect(actor, target, x)).Aggregate(1d, (product, x) => product * (1d + x.FixedValue / 100d));
+        // 고정값은 증가 퍼센트다(50 = ×1.5). 수치참조가 있으면 참조 결과가 퍼센트다(화염술사 익스플로전: 열기 1당 +1% = 고정값 1 × 열기, 소모중첩배율).
+        var conditionalDamage = skill.Effects.Where(x => x.Type == "조건부피해증가" && CanApplyEffect(actor, target, x)).Aggregate(1d, (product, x) => product * (1d + ResolveFixedAmount(actor, x) / 100d));
         foreach (var effect in skill.Effects)
         {
             if (actor.Hp <= 0 || target.Hp <= 0) break;
@@ -650,7 +650,9 @@ public sealed class BattleEngine
                 if (receiver.Statuses.ContainsKey(releasedStatusId))
                 {
                     receiver.RemoveStatus(releasedStatusId);
-                    events.Add(new("StatusExpired", receiver.Name, Detail: receiver.StatusDefinitions.GetValueOrDefault(releasedStatusId)?.Name ?? releasedStatusId));
+                    // 로그숨김 상태(화염술사 불길: 열기)는 해제도 알리지 않는다.
+                    if (receiver.StatusDefinitions.GetValueOrDefault(releasedStatusId)?.HideLog != true)
+                        events.Add(new("StatusExpired", receiver.Name, Detail: receiver.StatusDefinitions.GetValueOrDefault(releasedStatusId)?.Name ?? releasedStatusId));
                 }
                 break;
             case "다음행동지정" when effect.StatusId is { } scheduledSkillId:
