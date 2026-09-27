@@ -48,7 +48,11 @@ public sealed record BattleEffect(
     string? ConditionOperator, string? ConditionValue, string? NumericReferenceId,
     string? NumericReferenceMode, double CriticalChanceMultiplierPerHit = 1d,
     string? Trigger = null, string? TriggerSkillId = null, string? TriggerResourceId = null, int ReactivationCooldown = 0);
-public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking);
+public sealed record BattleResource(string Id, string Name, string Kind, int Maximum, int InitialValue, int Duration, string Stacking)
+{
+    /// <summary>true이면 자원 변화를 전투 로그에 남기지 않는다. 판정용 내부 표식(도적 오버 차지 충전·스닉 어택 준비 등)이 로그를 채우지 않게 한다.</summary>
+    public bool HideLog { get; init; }
+}
 public sealed record BattleStatus(string Id, string Name, string EffectType, double Value, string Description, string? TargetSkillId = null, string? StackResourceId = null)
 {
     /// <summary>복합 상태의 효과별 값. 시트의 <c>효과별값</c>에 <c>1|0.1</c>처럼 효과유형 순서대로 적으면 효과마다 다른 값을 쓴다. 비어 있으면 모든 효과가 <see cref="Value"/>를 쓴다.</summary>
@@ -61,6 +65,8 @@ public sealed record BattleStatus(string Id, string Name, string EffectType, dou
     public string? TargetResourceId { get; init; }
     /// <summary>이 자원이 0이 되면 상태를 함께 해제한다(프로텍션 보호막이 깨지거나 만료되면 지속 회복 종료).</summary>
     public string? SustainResourceId { get; init; }
+    /// <summary>true이면 적용·해제를 전투 로그에 남기지 않는다. 같은 효과를 여러 상태로 나눠 표현할 때 대표 상태만 보이게 한다(도적 아드레날린).</summary>
+    public bool HideLog { get; init; }
     public IReadOnlyList<string> EffectTypes => EffectType.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
     /// <summary>복합 상태는 시트에서 <c>효과A|효과B</c>로 선언한다.</summary>
     public bool HasEffectType(string effectType) => EffectTypes.Contains(effectType, StringComparer.Ordinal);

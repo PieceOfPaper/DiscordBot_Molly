@@ -502,6 +502,7 @@ await HaeyeonMarketTests.RunAsync();
 await KeywordMarketTests.RunAsync();
 CrossbowBattleTests.Run();
 HealerBattleTests.Run();
+ThiefBattleTests.Run();
 LifeSkillBattleTests.Run();
 await ClassIconTests.RunAsync();
 var battleRules = new Dictionary<string, BattleRule>

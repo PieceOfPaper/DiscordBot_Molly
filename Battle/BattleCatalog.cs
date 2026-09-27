@@ -179,7 +179,7 @@ public sealed class BattleCatalog
             if (passive.Enabled && passive.Effects.Count == 0) throw new InvalidDataException($"배틀패시브 '{id}'가 활성화되어 있지만 효과가 하나도 없습니다.");
             if (!passiveMap.TryAdd(id, passive)) throw new InvalidDataException($"배틀패시브 ID '{id}'가 중복되었습니다.");
         }
-        var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]), StringComparer.Ordinal);
+        var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]) { HideLog = OptionalBool(x, "로그숨김", "배틀자원") }, StringComparer.Ordinal);
         if (resourceMap.Values.FirstOrDefault(x => x.Stacking == "개별" && x.Duration <= 0) is { } untimedStack) throw new InvalidDataException($"배틀자원 '{untimedStack.Id}'의 중첩방식=개별은 지속턴이 1 이상이어야 합니다.");
         var statusMap = Unique(statuses, "배틀상태효과").Select((x, i) => ParseStatus(x, i + 2)).ToDictionary(x => x.Id, StringComparer.Ordinal);
         foreach (var status in statusMap.Values)
@@ -206,8 +206,10 @@ public sealed class BattleCatalog
             {
                 if (effect.StatusId is null || !resourceMap.ContainsKey(effect.StatusId)) throw new InvalidDataException($"{sheet} '{effect.Id}'가 존재하지 않는 자원을 참조합니다.");
             }
-            else if ((effect.Duration > 0 || effect.Type == "상태해제") && effect.StatusId is { } statusId && !statusMap.ContainsKey(statusId))
+            else if ((effect.Duration > 0 || effect.Type is "상태해제" or "지속피해폭발") && effect.StatusId is { } statusId && !statusMap.ContainsKey(statusId))
                 throw new InvalidDataException($"{sheet} '{effect.Id}'가 존재하지 않는 상태 효과 ID '{statusId}'를 참조합니다.");
+            // 지속피해폭발(포이즌 익스플로전)은 폭발시킬 지속 피해 상태가 없으면 조용히 아무 일도 하지 않으므로 상태 ID를 필수로 검사한다.
+            if (effect.Type == "지속피해폭발" && effect.StatusId is null) throw new InvalidDataException($"{sheet} '{effect.Id}'의 지속피해폭발에는 상태효과ID가 필요합니다.");
             if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
             if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
             if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
@@ -352,9 +354,13 @@ public sealed class BattleCatalog
             SynergyTypes = synergy,
             AccumulatesDuration = durationMode == "누적",
             TargetResourceId = EmptyAsNull(row.GetValueOrDefault("대상자원ID", "")),
-            SustainResourceId = EmptyAsNull(row.GetValueOrDefault("유지자원ID", ""))
+            SustainResourceId = EmptyAsNull(row.GetValueOrDefault("유지자원ID", "")),
+            HideLog = OptionalBool(row, "로그숨김", "배틀상태효과", index)
         };
     }
 
     private static string? EmptyAsNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
+    /// <summary>선택 불리언 컬럼. 컬럼이 없거나 비어 있으면 false다.</summary>
+    private static bool OptionalBool(Dictionary<string, string> row, string header, string sheet, int index = 0)
+        => EmptyAsNull(row.GetValueOrDefault(header, "")) is { } value && BattleCsv.Bool(value, sheet, index, header);
 }

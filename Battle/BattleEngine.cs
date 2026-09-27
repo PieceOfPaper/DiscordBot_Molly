@@ -502,6 +502,18 @@ public sealed class BattleEngine
             case "조건부피해증가":
                 // ExecuteEffects가 스킬 실행 전에 판정해 피해 배율로 반영한다. 행 자체는 아무것도 하지 않는다.
                 break;
+            case "지속피해폭발" when effect.StatusId is { } detonatedStatusId:
+            {
+                // 도적 포이즌 익스플로전: 대상이 가진 지속 피해 상태의 남은 틱 피해를 한 번에 주고 상태를 없앤다. 고정값은 폭발 피해 증가 퍼센트다(5 = ×1.05).
+                // 한 번의 타격이므로 방어력은 한 번만 뺀다. 치명타·추가타는 없고 보호막은 먼저 흡수한다.
+                var detonated = receiver.DetonatePeriodicDamage(detonatedStatusId, effect.FixedValue / 100d, rules);
+                if (detonated <= 0) break;
+                events.Add(new("StatusDetonated", actor.Name, receiver.Name, detonated, receiver.StatusDefinitions.GetValueOrDefault(detonatedStatusId)?.Name ?? detonatedStatusId));
+                receiver.Hp = Math.Max(0, receiver.Hp - AbsorbShield(receiver, actor, detonated, random, rules, events));
+                if (receiver.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, receiver.Name));
+                resolution.TargetDamaged = true;
+                break;
+            }
             case "추가피해":
                 if (random.NextDouble() < effect.Chance)
                 {
@@ -712,7 +724,7 @@ public sealed class BattleEngine
         }
         fighter.Resources[definition.Id] = value;
         if (definition.Duration > 0 && definition.Stacking != "개별") fighter.ResourceTurns[definition.Id] = definition.Duration;
-        events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + (value > previous ? "+" : "") + (value - previous) + " (현재 " + value + ")"));
+        if (!definition.HideLog) events.Add(new("ResourceChanged", fighter.Name, Detail: definition.Name + " " + (value > previous ? "+" : "") + (value - previous) + " (현재 " + value + ")"));
         // 자원 변화 자체를 구독하는 패시브(악상 획득 시, 리듬이 임계값에 도달했을 때, 템포가 소진됐을 때 등)를 발동한다.
         // 상호배타·1개 상한 자원(악상 등)은 이미 보유 중이면 재설정이 무시되므로(위 previous==value 조기 반환) 매 증가마다 발동해도 실질적으로는 최초 획득 때만 발동한다.
         if (value > previous && value > 0) FirePassiveTrigger(fighter, opponent, "자원획득시", null, definition.Id, random, rules, events);
@@ -775,8 +787,9 @@ public sealed class BattleEngine
         var damaged = false;
         for (var i = 0; i < count && target.Hp > 0; i++)
         {
+            // 무방비피해증가(도적 스닉 어택)는 상대가 브레이크 상태일 때만 더한다. 공식 가이드의 무방비는 여러 경우가 있지만 배틀에서는 브레이크만 무방비로 본다.
             var outgoing = Math.Max(.1d, 1d + actor.StatusValue("주는피해증가") - actor.StatusValue("주는피해감소") + actor.MelodySkillDamageBonus(sourceSkill) + actor.SkillDamageBonus(sourceSkill) + extraDamageMultiplier
-                + (classSkillAttack ? actor.StatusValue("다음스킬피해증가") : 0d));
+                + (classSkillAttack ? actor.StatusValue("다음스킬피해증가") : 0d) + (target.HasStatusEffect("브레이크") ? actor.StatusValue("무방비피해증가") : 0d));
             var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (normalAttack ? target.StatusValue("받는기본공격피해감소") : 0d));
             // 약점 노출의 "방어도 무시 50%"는 이 타격에 반영되는 상대 방어력만 줄인다.
             var defenseIgnore = Math.Clamp(target.StatusValue("받는방어무시"), 0d, 1d);
@@ -900,7 +913,7 @@ public sealed class BattleEngine
             foreach (var id in Statuses.Keys.Where(id => StatusDefinitions.GetValueOrDefault(id)?.SustainResourceId == resourceId).ToArray())
             {
                 RemoveStatus(id);
-                events.Add(new("StatusExpired", Name, Detail: StatusDefinitions[id].Name));
+                if (!StatusDefinitions[id].HideLog) events.Add(new("StatusExpired", Name, Detail: StatusDefinitions[id].Name));
             }
         }
         /// <summary>보유 중인 턴당자원증가 상태가 이번 턴에 채울 자원과 양. 값에 중첩자원ID 배율을 적용하고 반올림한다.</summary>
@@ -961,7 +974,7 @@ public sealed class BattleEngine
                 if (ended == 0 || !ResourceDefinitions.TryGetValue(id, out var stacked)) continue;
                 var left = Math.Max(0, Resources.GetValueOrDefault(id) - ended);
                 Resources[id] = left;
-                events.Add(new("ResourceChanged", Name, Detail: stacked.Name + " -" + ended + " (현재 " + left + ")"));
+                if (!stacked.HideLog) events.Add(new("ResourceChanged", Name, Detail: stacked.Name + " -" + ended + " (현재 " + left + ")"));
                 if (left == 0) expired.Add(id);
             }
             foreach (var id in ResourceTurns.Keys.ToArray())
@@ -972,7 +985,7 @@ public sealed class BattleEngine
                 if (Resources.GetValueOrDefault(id) > 0 && ResourceDefinitions.TryGetValue(id, out var resource))
                 {
                     Resources[id] = 0;
-                    events.Add(new("ResourceChanged", Name, Detail: resource.Name + "이(가) 사라졌습니다."));
+                    if (!resource.HideLog) events.Add(new("ResourceChanged", Name, Detail: resource.Name + "이(가) 사라졌습니다."));
                     expired.Add(id);
                 }
             }
@@ -991,7 +1004,7 @@ public sealed class BattleEngine
             StatusSources[id] = sourceSkillId;
             if (harmful) HarmfulStatuses.Add(id); else HarmfulStatuses.Remove(id);
             var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
-            if (announce) events.Add(new("StatusApplied", Name, Amount: applied, Detail: name));
+            if (announce && StatusDefinitions.GetValueOrDefault(id)?.HideLog != true) events.Add(new("StatusApplied", Name, Amount: applied, Detail: name));
         }
         public int HarmfulStatusCount => Statuses.Keys.Count(HarmfulStatuses.Contains);
         /// <summary>상대가 건 상태를 무작위로 <paramref name="count"/>개 제거한다. 후보가 하나 이하이면 난수를 소비하지 않는다.</summary>
@@ -1046,6 +1059,17 @@ public sealed class BattleEngine
             }
             return (damaged, healed);
         }
+        /// <summary>
+        /// 지속 피해 상태를 폭발시켜 남은 틱 피해를 한 번에 계산하고 상태를 제거한다. 보유 중이 아니거나 회복 상태면 0이다.
+        /// 지속턴 N인 상태는 보유자의 다음 N턴 시작에 한 번씩 들어가므로, 남은 지속턴이 곧 남은 틱 수다.
+        /// </summary>
+        public int DetonatePeriodicDamage(string statusId, double bonus, Rules rules)
+        {
+            if (!Statuses.TryGetValue(statusId, out var remainingTicks) || remainingTicks <= 0 || !PeriodicEffects.TryGetValue(statusId, out var periodic) || periodic.Heal) return 0;
+            RemoveStatus(statusId);
+            var incoming = Math.Max(.1d, 1d + StatusValue("받는피해증가") - StatusValue("받는피해감소"));
+            return Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount * remainingTicks - Defense * rules.DefenseCoefficient) * incoming * (1d + bonus)));
+        }
         /// <summary>턴 시작에 상태 지속턴을 1 줄인다. 0이 된 상태도 이번 행동까지 적용하고 <see cref="ExpireStatuses"/>에서 제거한다.</summary>
         public void TickStatuses()
         {
@@ -1062,7 +1086,7 @@ public sealed class BattleEngine
                 var source = RemoveStatus(id);
                 var name = StatusDefinitions.GetValueOrDefault(id)?.Name ?? id;
                 // 천옷 제작처럼 한 생활스킬이 같은 이름의 상태를 여러 개 걸면 해제 로그는 한 번만 남긴다.
-                if (announced.Add(name)) events.Add(new("StatusExpired", Name, Detail: name));
+                if (StatusDefinitions.GetValueOrDefault(id)?.HideLog != true && announced.Add(name)) events.Add(new("StatusExpired", Name, Detail: name));
                 if (!string.IsNullOrEmpty(source)) expired.Add((id, source));
             }
             return expired;
