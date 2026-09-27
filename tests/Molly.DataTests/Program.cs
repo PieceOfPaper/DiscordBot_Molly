@@ -712,6 +712,16 @@ var lostTurn = DiscordBot_Molly.Commands.BattleCommand.Format(extendEvents).Firs
 var lostIndex = Array.FindIndex(lostTurn, x => x.Contains("브레이크로 행동하지 못했습니다", StringComparison.Ordinal));
 Check(lostTurn[lostIndex] == "💢 B은(는) 브레이크로 행동하지 못했습니다!" && lostTurn.Skip(lostIndex + 1).All(x => x.StartsWith("　↳ ", StringComparison.Ordinal)),
     "브레이크로 잃은 행동은 행동 제목으로 쓰고, 턴을 마치며 생기는 로그는 그 아래 들여쓰기로 붙는다");
+// 모의배틀: 허수아비는 신청자와 전투력·생활력·매력이 같고 클래스만 고른 클래스다. 클래스 옵션은 ID·이름을 받고 배틀 미지원 클래스는 거부한다.
+var practiceData = BattleCatalog.Parse(ThiefBattleTests.Sheets, DateTimeOffset.UtcNow);
+var challenger = new CharacterBattleSnapshot(42, "종잇장", "thief", 12345, 23456, 34567);
+var dummy = DiscordBot_Molly.Commands.BattleCommand.CreateDummy(challenger, "thief");
+Check(dummy is { DiscordUserId: 0, CharacterName: "허수아비", ClassId: "thief", CombatPower: 12345, LifePower: 23456, CharmPower: 34567 }
+    && DiscordBot_Molly.Commands.BattleCommand.PracticeClassId(practiceData, "thief") == "thief" && DiscordBot_Molly.Commands.BattleCommand.PracticeClassId(practiceData, " 도적 ") == "thief"
+    && DiscordBot_Molly.Commands.BattleCommand.PracticeClassId(practiceData, "없는클래스") is null,
+    "모의배틀 허수아비는 신청자 능력치를 그대로 쓰고 클래스만 바꾸며, 클래스 옵션은 배틀 가능 클래스의 ID·이름만 받는다");
+var practiceEvents = new BattleEngine().Simulate(challenger, dummy, practiceData, new SystemBattleRandom()).Events;
+Check(practiceEvents.Any(x => x.Actor == "허수아비") && practiceEvents.Any(x => x.Actor == "종잇장"), "같은 클래스 허수아비와도 이름이 구분되어 전투한다");
 // 궁극기는 큰 글씨 제목(이모지)과 작은 글씨 대사를 사용 문구 위에 출력하고, 게이지 소모는 사용 문구 아래에 둔다.
 var ultimateGauge = new BattleResource("ultimate_gauge", "궁극기 게이지", "궁극기 게이지", 300, 300, 0, "가산");
 var ultimateSkill = new BattleSkill("test_ultimate", "혹한의 일격", "궁극기", null, true, 0, 0, 1, 1, [new BattleEffect("ult_hit", 1, "피해", "상대", 100, 1, 1, 0, null, 0, null, null, null, null, null, null, null, null)], "ultimate_gauge", "300") { UltimateQuote = "『여기 다시 한번』" };
