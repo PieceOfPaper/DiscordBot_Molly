@@ -712,6 +712,17 @@ Check(extendLog.Contains("💢 **브레이크!!**\nB이(가) **브레이크** �
 var lostBlock = DiscordBot_Molly.Commands.BattleLog.Format(extendEvents).SelectMany(x => x.Blocks).First(x => x.Title?.Contains("브레이크로 행동하지 못했습니다", StringComparison.Ordinal) == true);
 Check(lostBlock.Title == "💢 B은(는) 브레이크로 행동하지 못했습니다!" && lostBlock.Tone == DiscordBot_Molly.Commands.BattleLogTone.FighterB,
     "브레이크로 잃은 행동은 행동하지 못한 쪽 색의 임베드 제목으로 쓴다");
+// 랭킹 클래스 옵션: 비우거나 "전체 클래스"면 전체, 알려진 이름은 앞뒤 공백을 지워 받고, 모르는 이름은 거부한다. 자동완성은 25개 이하로 입력 글자를 포함한 것만 준다.
+Check(MobiRankBrowser.NormalizeClassName(null, out var rankAllValid) is null && rankAllValid
+    && MobiRankBrowser.NormalizeClassName("전체 클래스", out var rankAll2Valid) is null && rankAll2Valid
+    && MobiRankBrowser.NormalizeClassName(" 도적 ", out var rankThiefValid) == "도적" && rankThiefValid
+    && MobiRankBrowser.NormalizeClassName("없는클래스", out var rankUnknownValid) is null && !rankUnknownValid
+    && !MobiRankBrowser.ClassNames.Contains("전체 클래스"),
+    "랭킹 클래스 옵션은 공식 랭킹 클래스 이름만 받고 비우면 전체로 조회한다");
+Check(DiscordBot_Molly.Commands.RankClassAutocomplete.Suggest("").Count() == 25
+    && DiscordBot_Molly.Commands.RankClassAutocomplete.Suggest("견습").Count() == 6
+    && DiscordBot_Molly.Commands.RankClassAutocomplete.Suggest("술사").All(x => x.Contains("술사")),
+    "랭킹 클래스 자동완성은 25개 제한 안에서 입력 글자를 포함한 클래스를 보여준다");
 // 모의배틀: 허수아비는 신청자와 전투력·생활력·매력이 같고 클래스만 고른 클래스다. 클래스 옵션은 ID·이름을 받고 배틀 미지원 클래스는 거부한다.
 var practiceData = BattleCatalog.Parse(ThiefBattleTests.Sheets, DateTimeOffset.UtcNow);
 var challenger = new CharacterBattleSnapshot(42, "종잇장", "thief", 12345, 23456, 34567);

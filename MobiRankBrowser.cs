@@ -52,6 +52,22 @@ public static class MobiRankBrowser
         ["견습 도적"] = 2058842272,
     };
 
+    /// <summary>랭킹 클래스 옵션으로 고를 수 있는 클래스 이름("전체 클래스" 제외). 공식 랭킹 페이지의 클래스 목록 순서.</summary>
+    public static IReadOnlyList<string> ClassNames { get; } = CLASSNAME_TO_ID.Keys.Where(x => x != "전체 클래스").ToArray();
+
+    /// <summary>
+    /// 랭킹 클래스 옵션 값을 정규화한다. 비었거나 "전체 클래스"면 전체(null), 알려진 클래스면 그 이름.
+    /// 모르는 이름은 <paramref name="valid"/>가 false다.
+    /// </summary>
+    public static string? NormalizeClassName(string? input, out bool valid)
+    {
+        var value = input?.Trim();
+        valid = true;
+        if (string.IsNullOrEmpty(value) || value == "전체 클래스") return null;
+        valid = CLASSNAME_TO_ID.ContainsKey(value);
+        return valid ? value : null;
+    }
+
     private static readonly BrowserTypeLaunchOptions s_BrowserTypeLaunchOpt = new()
     {
         Headless = false,
