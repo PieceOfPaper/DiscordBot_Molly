@@ -2,6 +2,7 @@ using Discord;
 using DiscordBot_Molly.Commands;
 using Microsoft.Data.Sqlite;
 using Molly.Currency;
+using Molly.Attendance;
 
 /// <summary>마물 퇴치 증표의 서버별 잔액·원장·중복 방지·동시 차감, 증표규칙 시트 검증, 수량 표기를 검사한다.</summary>
 internal static class CurrencyTests
@@ -197,13 +198,24 @@ internal static class CurrencyTests
         Assert(created.Count == 0 && MollyToken.Emoji is null, "이모지 그림이 없으면 등록하지 않음");
         Assert(MollyToken.Named(10) == "마물 퇴치 증표 10개" && MollyToken.Amount(1234) == "마물 퇴치 증표 1,234개",
             "이모지가 없으면 수량 표기도 풀네임으로 대신");
-        Assert(BagCommand.Format("테스트서버", 0, null).Contains("**마물 퇴치 증표** 0개") && BagCommand.Format("테스트서버", 0, null).Contains("몰리 전용 놀이 재화"),
+        Assert(MollyToken.Label == "마물 퇴치 증표" && MollyToken.Decorate("받은 마물 퇴치 증표") == "받은 마물 퇴치 증표", "이모지가 없으면 이름만 표기");
+        Assert(BagCommand.Format("테스트서버", 0).Contains("\n**마물 퇴치 증표** 0개") && BagCommand.Format("테스트서버", 0).Contains("몰리 전용 놀이 재화"),
             "가방은 이모지 없이도 증표 이름·수량·놀이 재화 안내를 표시");
 
         await MollyToken.SyncEmojiAsync(() => Task.FromResult<IReadOnlyCollection<Emote>>([new Emote(5, "molly_token", false)]), Create, missingImage, _ => { });
-        Assert(created.Count == 0 && MollyToken.Amount(10) == "<:molly_token:5>10개" && MollyToken.Named(10) == "마물 퇴치 증표 10개",
-            "등록된 이모지는 다시 올리지 않고 이름 없는 수량 앞에 공백 없이 붙임");
-        Assert(BagCommand.Format("테스트서버", 50, MollyToken.Emoji).Contains("<:molly_token:5>**마물 퇴치 증표** 50개"), "가방은 증표 이름 앞에 이모지 표시");
+        Assert(created.Count == 0 && MollyToken.Amount(10) == "<:molly_token:5>10개", "등록된 이모지는 다시 올리지 않고 이름 없는 수량 앞에 공백 없이 붙임");
+        Assert(MollyToken.Label == "<:molly_token:5>마물 퇴치 증표" && MollyToken.Named(10) == "<:molly_token:5>마물 퇴치 증표 10개",
+            "증표 이름을 쓸 때는 항상 이름 앞에 이모지");
+        Assert(MollyToken.Decorate("마물 퇴치 증표를 받고 <:molly_token:5>마물 퇴치 증표를 써요") == "<:molly_token:5>마물 퇴치 증표를 받고 <:molly_token:5>마물 퇴치 증표를 써요",
+            "미리 쓴 안내문의 증표 이름에도 이모지를 한 번만 붙임");
+        var bag = BagCommand.Format("테스트서버", 50);
+        Assert(bag.Contains("<:molly_token:5>**마물 퇴치 증표** 50개") && bag.Contains("-# <:molly_token:5>마물 퇴치 증표는"), "가방의 증표 이름 앞에 이모지 표시");
+        var help = DiscordBot_Molly.Commands.HelpCommand.BuildTopic(DiscordBot_Molly.Commands.HelpCatalog.FindTopic("출석·가방")!);
+        Assert(help.Description.Contains("<:molly_token:5>마물 퇴치 증표") && help.Fields.All(f => !f.Name.Contains("증표"))
+            && help.Fields.Any(f => f.Value.Contains("<:molly_token:5>마물 퇴치 증표")), "도움말 본문의 증표 이름에 이모지를 붙이고, 이모지가 그려지지 않는 필드 이름에는 증표 이름을 쓰지 않음");
+        var board = AttendanceBoardRenderer.BuildEmbed(new(new DateOnly(2026, 9, 28), [], 50, true));
+        Assert(board.Description.Contains("<:molly_token:5>50개") && board.Description.Contains("<:molly_token:5>마물 퇴치 증표는") && !board.Footer!.Value.Text.Contains("증표"),
+            "출석부 본문의 증표 이름에 이모지를 붙이고, 이모지가 그려지지 않는 꼬리말에는 증표 이름을 쓰지 않음");
 
         await MollyToken.SyncEmojiAsync(() => Task.FromResult<IReadOnlyCollection<Emote>>([]), Create, missingImage, _ => { });
         Assert(MollyToken.Emoji is null, "이모지가 사라지면 풀네임 표기로 복귀");

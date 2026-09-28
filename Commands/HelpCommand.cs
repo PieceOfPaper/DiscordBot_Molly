@@ -1,5 +1,6 @@
 using Discord;
 using Discord.Interactions;
+using Molly.Currency;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -19,7 +20,8 @@ public sealed class HelpCommand : InteractionModuleBase<SocketInteractionContext
         [Choice("랭킹", "랭킹")]
         [Choice("이벤트", "이벤트")]
         [Choice("해연시세", "해연시세")]
-        [Choice("상자·패키지시세", "상자·패키지시세")] string? topic = null)
+        [Choice("상자·패키지시세", "상자·패키지시세")]
+        [Choice("출석·가방", "출석·가방")] string? topic = null)
     {
         var embed = topic is null ? BuildOverview() : HelpCatalog.FindTopic(topic) is { } found ? BuildTopic(found) : null;
         if (embed is null)
@@ -37,7 +39,7 @@ public sealed class HelpCommand : InteractionModuleBase<SocketInteractionContext
             .WithDescription("명령어의 옵션은 채팅창에 `/명령어`를 입력하면 볼 수 있어요.")
             .WithColor(Color.Blue);
         foreach (var category in HelpCatalog.Categories)
-            embed.AddField(category.Title, HelpCatalog.FormatCommands(category));
+            embed.AddField(category.Title, MollyToken.Decorate(HelpCatalog.FormatCommands(category)));
         embed.AddField($"{HelpCatalog.TopicMarker} 상세 도움말", HelpCatalog.FormatTopicGuide());
         return embed.Build();
     }
@@ -46,11 +48,11 @@ public sealed class HelpCommand : InteractionModuleBase<SocketInteractionContext
     {
         var embed = new EmbedBuilder()
             .WithTitle($"{topic.Title} 도움말")
-            .WithDescription(topic.Summary + "\n관련 명령: " + string.Join(" ", topic.Commands.Select(c => $"`/{c}`")))
+            .WithDescription(MollyToken.Decorate(topic.Summary) + "\n관련 명령: " + string.Join(" ", topic.Commands.Select(c => $"`/{c}`")))
             .WithColor(Color.Blue)
             .WithFooter("전체 명령어 목록은 /도움말");
         foreach (var (name, value) in topic.Fields)
-            embed.AddField(name, value);
+            embed.AddField(name, MollyToken.Decorate(value));
         return embed.Build();
     }
 }

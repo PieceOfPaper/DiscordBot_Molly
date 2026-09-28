@@ -4,8 +4,10 @@ namespace Molly.Currency;
 
 /// <summary>
 /// 마물 퇴치 증표의 이름·수량 표기와 전용 봇 이모지(Application Emoji).
-/// 몰리의 문장에서는 <see cref="Named"/>(풀네임), 이름을 생략하는 버튼·배율표·간단 잔액에서는 <see cref="Amount"/>(이모지+수량)를 쓴다.
-/// 이모지 그림은 assets/currency_emojis/molly_token.png이며, 파일이 없거나 등록 전이면 풀네임 표기로 대신한다.
+/// 이름을 쓸 때는 클래스 이름처럼 항상 이모지를 앞에 붙인다(<see cref="Label"/>·<see cref="Named"/>).
+/// 이름을 생략하는 버튼·배율표·간단 잔액에서는 <see cref="Amount"/>(이모지+수량)를 쓴다.
+/// 이모지 그림은 assets/currency_emojis/molly_token.png이며, 등록 전이거나 등록에 실패하면 이름만 쓴다.
+/// Discord는 임베드 제목·필드 이름·꼬리말과 슬래시 명령 설명에서 서버 이모지를 그리지 않으므로 그곳에는 증표 이름을 쓰지 않는다.
 /// 그림을 바꿀 때는 개발자 포털의 봇 앱 Emojis에서 기존 molly_token을 지운 뒤 봇을 다시 시작한다.
 /// </summary>
 public static class MollyToken
@@ -20,11 +22,18 @@ public static class MollyToken
     /// <summary>등록된 이모지 표기(<c>&lt;:molly_token:ID&gt;</c>). 없으면 null.</summary>
     public static string? Emoji => Volatile.Read(ref s_Emote)?.ToString();
 
-    /// <summary>문장용 풀네임 표기. 예: <c>마물 퇴치 증표 10개</c>.</summary>
-    public static string Named(long amount) => $"{Name} {Count(amount)}";
+    /// <summary>이모지를 붙인 이름. 예: <c>&lt;:molly_token:ID&gt;마물 퇴치 증표</c>. 이모지가 없으면 이름만.</summary>
+    public static string Label => Emoji + Name;
 
-    /// <summary>이름을 생략한 수량 표기. 예: <c>&lt;:molly_token:ID&gt;10개</c>. 이모지가 없으면 <see cref="Named"/>와 같다.</summary>
+    /// <summary>문장용 풀네임 표기. 예: <c>&lt;:molly_token:ID&gt;마물 퇴치 증표 10개</c>.</summary>
+    public static string Named(long amount) => $"{Label} {Count(amount)}";
+
+    /// <summary>이름을 생략한 수량 표기. 예: <c>&lt;:molly_token:ID&gt;10개</c>. 이모지가 없으면 <c>마물 퇴치 증표 10개</c>.</summary>
     public static string Amount(long amount) => Emoji is { } emoji ? emoji + Count(amount) : Named(amount);
+
+    /// <summary>미리 써둔 안내문(도움말 등) 속 증표 이름 앞에 이모지를 붙인다. 이미 붙어 있으면 그대로 둔다.</summary>
+    public static string Decorate(string text)
+        => Emoji is { } emoji ? text.Replace(emoji + Name, Name, StringComparison.Ordinal).Replace(Name, emoji + Name, StringComparison.Ordinal) : text;
 
     private static string Count(long amount) => amount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + "개";
 

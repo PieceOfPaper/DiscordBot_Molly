@@ -17,7 +17,7 @@ public sealed class BagCommand : InteractionModuleBase<SocketInteractionContext>
         try
         {
             var balance = await Program.instance.Tokens.GetBalanceAsync(Context.Guild.Id, Context.User.Id);
-            await RespondAsync(Format(Context.Guild.Name, balance, MollyToken.Emoji), ephemeral: true);
+            await RespondAsync(Format(Context.Guild.Name, balance), ephemeral: true);
         }
         catch (Exception ex)
         {
@@ -28,10 +28,9 @@ public sealed class BagCommand : InteractionModuleBase<SocketInteractionContext>
 
     /// <summary>
     /// 가방 메시지. 새로 보관할 것이 생기면 증표 줄 아래에 한 줄씩 더한다. 테스트에서 문구를 검사할 수 있도록 공개한다.
-    /// 이름을 함께 쓰므로 이모지는 이름 앞 아이콘으로만 붙인다.
     /// </summary>
-    public static string Format(string guildName, long tokenBalance, string? tokenEmoji)
+    public static string Format(string guildName, long tokenBalance)
         => "🎒 **내 가방** (" + guildName + ")\n"
-            + tokenEmoji + "**" + MollyToken.Name + "** " + tokenBalance.ToString("N0", CultureInfo.InvariantCulture) + "개\n"
-            + "-# " + MollyToken.Name + "는 몰리 전용 놀이 재화예요. 실제 마비노기 모바일 재화와는 관계없고, 서버마다 따로 모여요.";
+            + MollyToken.Emoji + "**" + MollyToken.Name + "** " + tokenBalance.ToString("N0", CultureInfo.InvariantCulture) + "개\n"
+            + "-# " + MollyToken.Label + "는 몰리 전용 놀이 재화예요. 실제 마비노기 모바일 재화와는 관계없고, 서버마다 따로 모여요.";
 }

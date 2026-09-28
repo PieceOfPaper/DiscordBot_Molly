@@ -16,6 +16,7 @@ using Molly.Crafting;
 using Molly.HaeyeonMarket;
 using Molly.KeywordMarket;
 using Molly.Currency;
+using Molly.Attendance;
 
 class Program
 {
@@ -35,6 +36,9 @@ class Program
     public BattleRecordStore BattleRecords { get; private set; } = null!;
     public MollyTokenStore Tokens { get; private set; } = null!;
     public TokenRuleCatalog TokenRules { get; private set; } = null!;
+    public AttendanceService Attendance { get; private set; } = null!;
+    private int m_AttendanceStarted;
+    private CancellationToken m_AppToken;
     public BattleCatalog Battles { get; private set; } = null!;
     public BattleSessions BattleSessions { get; } = new();
     // 모비라이프 OpenAPI. 키가 없거나 API가 중단돼도 봇은 정상 시작하며, 연동 기능만 안내 메시지를 표시합니다.
@@ -102,6 +106,8 @@ class Program
                 // 증표 이모지가 없어도 수량은 풀네임으로 표기되므로 실패해도 계속합니다.
                 try { await MollyToken.SyncEmojiAsync(m_Client); }
                 catch (Exception ex) { Console.WriteLine($"[증표 이모지] 동기화 실패: {ex.GetType().Name}: {ex.Message}"); }
+                // 출석부는 증표 이모지가 준비된 뒤 처음 Ready에서 한 번만 시작합니다(재시작 복구 후 매일 오전 6시 갱신).
+                if (Interlocked.Exchange(ref m_AttendanceStarted, 1) == 0) _ = Attendance.RunAsync(m_AppToken);
             });
 
             // 개발 초기에는 길드 명령(즉시 반영). 운영은 글로벌 명령(전파 수분~1시간)
@@ -213,6 +219,15 @@ class Program
             m_Config["GoogleSheets:TokenRuleSheetId"] ?? GoogleSheetsTokenRuleSource.DefaultSheetId),
             dataDirectory);
         await TokenRules.InitializeAsync(appCts.Token);
+        var attendanceStore = new AttendanceStore();
+        await attendanceStore.InitializeAsync(appCts.Token);
+        Attendance = new AttendanceService(attendanceStore, new DiscordAttendanceBoardGateway(m_Client), async ct =>
+        {
+            await TokenRules.EnsureFreshAsync(TimeSpan.FromMinutes(10), ct);
+            var reward = TokenRules.Current.GetInteger(AttendanceService.RewardRuleId, AttendanceService.DefaultReward);
+            return reward > 0 ? reward : AttendanceService.DefaultReward;
+        });
+        m_AppToken = appCts.Token;
         var haeyeonStore = new HaeyeonMarketStore();
         await haeyeonStore.InitializeAsync(appCts.Token);
         HaeyeonMarket = new HaeyeonMarketMonitor(
