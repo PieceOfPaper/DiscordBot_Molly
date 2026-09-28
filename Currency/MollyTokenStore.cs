@@ -216,7 +216,8 @@ public sealed class MollyTokenStore
         if (string.IsNullOrWhiteSpace(change.ReferenceId)) throw new ArgumentException("증표 변경의 참조 ID가 비어 있습니다.", nameof(change));
     }
 
-    private static async Task<long> GetBalanceAsync(SqliteConnection connection, SqliteTransaction? transaction, ulong guildId, ulong userId, CancellationToken ct)
+    /// <summary>호출한 쪽의 연결·트랜잭션에서 잔액을 읽는다(예측 베팅 상한 판정).</summary>
+    public static async Task<long> GetBalanceAsync(SqliteConnection connection, SqliteTransaction? transaction, ulong guildId, ulong userId, CancellationToken ct)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;

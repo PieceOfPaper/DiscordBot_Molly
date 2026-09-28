@@ -1,6 +1,7 @@
 using Discord;
 using Discord.Interactions;
 using Molly.Battle;
+using Molly.Prediction;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -74,8 +75,9 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         => "🎯 " + DummyName + "(" + ClassEmojis.Label(dummy.ClassId, Program.instance.Battles.Current.Classes.TryGetValue(dummy.ClassId, out var battleClass) ? battleClass.Name : dummy.ClassId) + ")";
 
     /// <summary>
-    /// 배틀·모의배틀 공통 진행: 서버별 배틀 슬롯 입장 → 참가자 준비 → 스레드 생성 → 준비 대기 → 중계 → (배틀만) 전적 저장 → 스레드 보관.
-    /// 호출 전에 DeferAsync로 응답을 지연해 둔다.
+    /// 배틀·모의배틀 공통 진행: 서버별 배틀 슬롯 입장 → 참가자 준비 → 스레드 생성 → (배틀만) 예측 열기 → 준비 대기 → (배틀만) 예측 마감
+    /// → 중계 → (배틀만) 전적 저장·예측 정산 → 스레드 보관. 호출 전에 DeferAsync로 응답을 지연해 둔다.
+    /// 예측 오류는 로그만 남기고 배틀 진행을 막지 않는다. 정산하지 못한 예측은 무효(증표 변동 없음)로 처리한다.
     /// </summary>
     private async Task RunAsync(string title, Func<CancellationToken, Task<(CharacterBattleSnapshot A, CharacterBattleSnapshot B, string ALabel, string BLabel)>> prepare, bool record)
     {
@@ -83,6 +85,9 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         IThreadChannel? thread = null;
         string? aLabel = null;
         string? bLabel = null;
+        OpenPrediction? prediction = null;
+        var predictionDone = false;
+        var cancelReason = PredictionCancelReason.Error;
         try
         {
             var (a, b, preparedALabel, preparedBLabel) = await prepare(session.CancellationToken);
@@ -91,9 +96,19 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
             bLabel = preparedBLabel;
             thread = await GameThreads.CreateAsync(Context.Channel, title + "-" + DateTimeOffset.Now.ToString("yyyyMMddHHmm"));
             await ModifyOriginalResponseAsync(x => x.Content = title + " 스레드 <#" + thread.Id + ">에서 자동전투를 시작합니다.");
-            await SendAsync(thread, "⚔️ " + aLabel + " vs " + bLabel + (record ? "" : "\n-# 모의배틀은 전적에 남지 않아요.") + "\n**" + PreBattleWaitSeconds + "초 뒤 전투를 시작합니다. 준비하세요!**", AllowedMentions.All);
+            // 예측은 배틀에만 연다. 예측 ID는 배틀 스레드 ID다.
+            if (record) prediction = await OpenPredictionAsync(thread.Id, Context.Guild.Id, a, b, session.CancellationToken);
+            var prepText = "⚔️ " + aLabel + " vs " + bLabel + (record ? "" : "\n-# 모의배틀은 전적에 남지 않아요.") + "\n**" + PreBattleWaitSeconds + "초 뒤 전투를 시작합니다. 준비하세요!**";
+            if (prediction is not null)
+            {
+                prediction.Message = await SendWithComponentsAsync(thread, prepText + BattlePredictionMessages.Intro(prediction.Rules),
+                    BattlePredictionMessages.Buttons(prediction.Id, a.CharacterName, b.CharacterName, prediction.Rules));
+            }
+            else await SendAsync(thread, prepText, AllowedMentions.All);
             await Task.Delay(TimeSpan.FromSeconds(PreBattleWaitSeconds), session.CancellationToken);
-            await SendAsync(thread, "전투를 시작합니다!");
+            // 예측을 마감한 뒤에 전투를 계산하므로 베팅하는 동안에는 결과가 정해져 있지 않다.
+            var lockText = prediction is null ? "" : await LockPredictionAsync(prediction, a.CharacterName, b.CharacterName);
+            await SendAsync(thread, "전투를 시작합니다!" + lockText);
             var result = new BattleEngine().Simulate(a, b, Program.instance.Battles.Current, new SystemBattleRandom());
             foreach (var turn in BattleLog.Format(result.Events, a.CharacterName))
             {
@@ -105,9 +120,20 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
             // 끝까지 중계한 배틀만 전적에 남긴다. 강제 종료된 배틀은 여기까지 오지 않는다. 저장 실패는 이미 끝난 배틀 결과를 바꾸지 않는다.
             // 모의배틀(허수아비)은 전적에 남기지 않는다.
             if (record) await RecordAsync(a, b, result.Outcome);
+            if (prediction is not null)
+            {
+                predictionDone = true;
+                await ResolvePredictionAsync(thread, prediction, result.Outcome switch
+                {
+                    BattleOutcome.FighterAWin => PredictionSide.Challenger,
+                    BattleOutcome.FighterBWin => PredictionSide.Opponent,
+                    _ => null,
+                });
+            }
         }
         catch (OperationCanceledException) when (session.IsStopRequested)
         {
+            cancelReason = PredictionCancelReason.Stopped;
             if (thread is null)
                 await ModifyOriginalResponseAsync(x => x.Content = title + " 시작 전에 강제 종료되었어요.");
             else
@@ -123,12 +149,110 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
         {
             if (thread is not null)
             {
+                // 끝까지 가지 못한 배틀의 예측은 무효다. 증표는 정산할 때만 움직이므로 되돌릴 것이 없다.
+                if (prediction is not null && !predictionDone) await CancelPredictionAsync(thread, prediction, cancelReason);
                 try { await SendAsync(thread, "⏳ 전투 기록은 " + ThreadCloseDelaySeconds + "초 뒤에 잠기고 보관됩니다."); } catch { }
                 await Task.Delay(TimeSpan.FromSeconds(ThreadCloseDelaySeconds));
                 try { await thread.ModifyAsync(x => { x.Locked = true; x.Archived = true; }); } catch { }
             }
             Program.instance.BattleSessions.Leave(Context.Guild.Id, session);
         }
+    }
+
+    /// <summary>진행 중인 배틀의 예측. 준비 메시지는 마감·무효 때 버튼을 없애는 데 쓴다.</summary>
+    private sealed class OpenPrediction(ulong id, PredictionRules rules)
+    {
+        public ulong Id { get; } = id;
+        public PredictionRules Rules { get; } = rules;
+        public IUserMessage? Message { get; set; }
+        public bool ButtonsRemoved { get; set; }
+    }
+
+    /// <summary>예측을 연다. 규칙 시트는 짧게만 기다리고, 실패하면 마지막 정상 규칙을 쓴다. 열지 못하면 null(배틀만 진행).</summary>
+    private static async Task<OpenPrediction?> OpenPredictionAsync(ulong predictionId, ulong guildId, CharacterBattleSnapshot a, CharacterBattleSnapshot b, CancellationToken ct)
+    {
+        try
+        {
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                await Program.instance.TokenRules.EnsureFreshAsync(TimeSpan.FromMinutes(10), timeout.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+            var rules = PredictionRules.From(Program.instance.TokenRules.Current);
+            await Program.instance.Predictions.OpenAsync(predictionId, guildId, a.DiscordUserId, b.DiscordUserId,
+                a.CharacterName, b.CharacterName, rules, DateTimeOffset.UtcNow, ct);
+            return new OpenPrediction(predictionId, rules);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[배틀 예측] 예측을 열지 못해 배틀만 진행합니다: " + ex.GetType().Name + ": " + ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>예측을 마감하고 버튼을 없앤 뒤 전투 시작 메시지에 붙일 비율 안내를 돌려준다. 실패하면 빈 문자열.</summary>
+    private static async Task<string> LockPredictionAsync(OpenPrediction prediction, string challengerName, string opponentName)
+    {
+        string text;
+        try
+        {
+            text = await Program.instance.Predictions.LockAsync(prediction.Id, DateTimeOffset.UtcNow) is { } locked
+                ? BattlePredictionMessages.Locked(locked, challengerName, opponentName, prediction.Rules)
+                : "";
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[배틀 예측] 마감 실패: " + ex.GetType().Name + ": " + ex.Message);
+            text = "";
+        }
+        await RemoveButtonsAsync(prediction);
+        return text;
+    }
+
+    private static async Task ResolvePredictionAsync(IMessageChannel thread, OpenPrediction prediction, PredictionSide? winner)
+    {
+        PredictionSettlement? settlement;
+        try { settlement = await Program.instance.Predictions.ResolveAsync(prediction.Id, winner, DateTimeOffset.UtcNow); }
+        catch (Exception ex)
+        {
+            Console.WriteLine("[배틀 예측] 정산 실패, 무효 처리합니다: " + ex.GetType().Name + ": " + ex.Message);
+            await CancelPredictionAsync(thread, prediction, PredictionCancelReason.SettlementFailed);
+            return;
+        }
+        await SendSettlementAsync(thread, settlement);
+    }
+
+    private static async Task CancelPredictionAsync(IMessageChannel thread, OpenPrediction prediction, PredictionCancelReason reason)
+    {
+        await RemoveButtonsAsync(prediction);
+        PredictionSettlement? settlement;
+        try { settlement = await Program.instance.Predictions.CancelAsync(prediction.Id, reason, DateTimeOffset.UtcNow); }
+        catch (Exception ex)
+        {
+            // 무효 처리에 실패해도 증표는 움직이지 않았고, 다음 시작 때 정산되지 않은 예측으로 무효 처리된다.
+            Console.WriteLine("[배틀 예측] 무효 처리 실패: " + ex.GetType().Name + ": " + ex.Message);
+            return;
+        }
+        await SendSettlementAsync(thread, settlement);
+    }
+
+    private static async Task SendSettlementAsync(IMessageChannel thread, PredictionSettlement? settlement)
+    {
+        if (settlement is null || BattlePredictionMessages.Settlement(settlement) is not { } text) return;
+        // 맞힌 사람은 이름만 보이게 하고 알림은 보내지 않는다.
+        try { await SendAsync(thread, text, AllowedMentions.None); }
+        catch (Exception ex) { Console.WriteLine("[배틀 예측] 정산 안내 전송 실패: " + ex.GetType().Name); }
+    }
+
+    private static async Task RemoveButtonsAsync(OpenPrediction prediction)
+    {
+        if (prediction.ButtonsRemoved || prediction.Message is null) return;
+        prediction.ButtonsRemoved = true;
+        try { await prediction.Message.ModifyAsync(x => x.Components = new ComponentBuilder().Build()); }
+        catch (Exception ex) { Console.WriteLine("[배틀 예측] 버튼 제거 실패: " + ex.GetType().Name); }
     }
 
     private static async Task RecordAsync(CharacterBattleSnapshot a, CharacterBattleSnapshot b, BattleOutcome outcome)
@@ -195,6 +319,11 @@ public sealed class BattleCommand : InteractionModuleBase<SocketInteractionConte
     {
         try { await channel.SendMessageAsync(text, allowedMentions: allowedMentions); }
         catch { await channel.SendMessageAsync(text, allowedMentions: allowedMentions); }
+    }
+    private static async Task<IUserMessage> SendWithComponentsAsync(IMessageChannel channel, string text, MessageComponent components)
+    {
+        try { return await channel.SendMessageAsync(text, allowedMentions: AllowedMentions.All, components: components); }
+        catch { return await channel.SendMessageAsync(text, allowedMentions: AllowedMentions.All, components: components); }
     }
     private static async Task SendBlocksAsync(IMessageChannel channel, IReadOnlyList<BattleLogBlock> blocks)
     {

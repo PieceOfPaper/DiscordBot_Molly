@@ -19,6 +19,9 @@ public static class MollyToken
 
     public static string EmojiPath => Path.Combine(AppContext.BaseDirectory, "assets", "currency_emojis", EmojiName + ".png");
 
+    /// <summary>등록된 이모지. 버튼 아이콘처럼 문자열이 아닌 이모지가 필요한 곳에 쓴다. 없으면 null.</summary>
+    public static Emote? Emote => Volatile.Read(ref s_Emote);
+
     /// <summary>등록된 이모지 표기(<c>&lt;:molly_token:ID&gt;</c>). 없으면 null.</summary>
     public static string? Emoji => Volatile.Read(ref s_Emote)?.ToString();
 

@@ -17,6 +17,7 @@ using Molly.HaeyeonMarket;
 using Molly.KeywordMarket;
 using Molly.Currency;
 using Molly.Attendance;
+using Molly.Prediction;
 
 class Program
 {
@@ -36,6 +37,7 @@ class Program
     public BattleRecordStore BattleRecords { get; private set; } = null!;
     public MollyTokenStore Tokens { get; private set; } = null!;
     public TokenRuleCatalog TokenRules { get; private set; } = null!;
+    public BattlePredictionStore Predictions { get; private set; } = null!;
     public AttendanceService Attendance { get; private set; } = null!;
     private int m_AttendanceStarted;
     private CancellationToken m_AppToken;
@@ -189,6 +191,11 @@ class Program
         await BattleRecords.InitializeAsync(appCts.Token);
         Tokens = new MollyTokenStore();
         await Tokens.InitializeAsync(appCts.Token);
+        Predictions = new BattlePredictionStore();
+        await Predictions.InitializeAsync(appCts.Token);
+        // 재시작으로 끊긴 배틀의 예측은 무효다. 증표는 정산할 때만 움직이므로 되돌릴 것이 없다.
+        var cancelledPredictions = await Predictions.CancelUnsettledAsync(DateTimeOffset.UtcNow, appCts.Token);
+        if (cancelledPredictions > 0) Console.WriteLine($"[배틀 예측] 재시작으로 정산되지 않은 예측 {cancelledPredictions}개를 무효 처리했습니다.");
 
         using var runeHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;
