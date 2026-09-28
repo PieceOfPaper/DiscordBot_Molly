@@ -29,6 +29,8 @@ class Program
     public LiarGameService LiarGames { get; } = new();
     public LotteryService Lotteries { get; } = new();
     public RegisteredCharacterStore RegisteredCharacters { get; private set; } = null!;
+    // /기본서버지정으로 정한 디스코드 서버별 기준 마비노기 모바일 서버. 랭킹·캐릭터등록의 서버 기본값.
+    public GuildDefaultServerStore DefaultServers { get; private set; } = null!;
     public BattleRecordStore BattleRecords { get; private set; } = null!;
     public BattleCatalog Battles { get; private set; } = null!;
     public BattleSessions BattleSessions { get; } = new();
@@ -169,6 +171,8 @@ class Program
         await MobiEventExpireAlert.InitializeStorageAsync(appCts.Token);
         RegisteredCharacters = new RegisteredCharacterStore();
         await RegisteredCharacters.InitializeAsync(appCts.Token);
+        DefaultServers = new GuildDefaultServerStore();
+        await DefaultServers.InitializeAsync(appCts.Token);
         BattleRecords = new BattleRecordStore();
         await BattleRecords.InitializeAsync(appCts.Token);
 

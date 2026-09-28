@@ -16,8 +16,8 @@ public sealed class CharacterRegistrationCommand : InteractionModuleBase<SocketI
 
     [SlashCommand("캐릭터등록", "종합 랭킹에 있는 내 캐릭터를 등록합니다.")]
     public async Task RegisterAsync(
-        [Summary("서버", "캐릭터가 있는 서버")] MobiServer server,
-        [Summary("캐릭터이름", "등록할 캐릭터 이름")] string characterName)
+        [Summary("캐릭터이름", "등록할 캐릭터 이름")] string characterName,
+        [Summary("서버", "캐릭터가 있는 서버 (미선택 시 /기본서버지정으로 정한 서버, 없으면 칼릭스)")] MobiServer server = 0)
     {
         var normalizedName = characterName?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedName))
@@ -46,7 +46,8 @@ public sealed class CharacterRegistrationCommand : InteractionModuleBase<SocketI
         }
 
         await DeferAsync(ephemeral: true);
-        await ModifyOriginalResponseAsync(message => message.Content = "🔎 종합 랭킹에서 캐릭터를 찾고 있어요...");
+        server = await Program.instance.DefaultServers.ResolveAsync(Context.Guild?.Id, server);
+        await ModifyOriginalResponseAsync(message => message.Content = $"🔎 [{server}] 서버 종합 랭킹에서 캐릭터를 찾고 있어요...");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(RankingTimeoutMilliseconds));
         try

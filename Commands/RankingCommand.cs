@@ -9,28 +9,28 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
     [SlashCommand("전투력랭킹", "캐릭터의 전투력 랭킹을 가져옵니다.")]
     public async Task Command_Rank1(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
-        [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
+        [Summary("서버", "서버 선택 (미선택 시 /기본서버지정으로 정한 서버, 없으면 칼릭스)")] MobiServer server = 0,
         [Summary("클래스이름", "클래스 선택 (미입력시 전체 클래스)"), Autocomplete(typeof(RankClassAutocomplete))] string? className = null)
         => await ProcessCommand(1, nickname, server, className);
     
     [SlashCommand("매력랭킹", "캐릭터의 매력 랭킹을 가져옵니다.")]
     public async Task Command_Rank2(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
-        [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
+        [Summary("서버", "서버 선택 (미선택 시 /기본서버지정으로 정한 서버, 없으면 칼릭스)")] MobiServer server = 0,
         [Summary("클래스이름", "클래스 선택 (미입력시 전체 클래스)"), Autocomplete(typeof(RankClassAutocomplete))] string? className = null)
         => await ProcessCommand(2, nickname, server, className);
     
     [SlashCommand("생활력랭킹", "캐릭터의 생활력 랭킹을 가져옵니다.")]
     public async Task Command_Rank3(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
-        [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
+        [Summary("서버", "서버 선택 (미선택 시 /기본서버지정으로 정한 서버, 없으면 칼릭스)")] MobiServer server = 0,
         [Summary("클래스이름", "클래스 선택 (미입력시 전체 클래스)"), Autocomplete(typeof(RankClassAutocomplete))] string? className = null)
         => await ProcessCommand(3, nickname, server, className);
 
     [SlashCommand("종합랭킹", "캐릭터의 종합 랭킹을 가져옵니다.")]
     public async Task Command_Rank4(
         [Summary("캐릭터이름", "캐릭터 이름 입력")] string nickname,
-        [Summary("서버", "서버 선택 (기본값은 칼릭스. 이유는 개발자가 칼릭서 서버)")] MobiServer server = 0,
+        [Summary("서버", "서버 선택 (미선택 시 /기본서버지정으로 정한 서버, 없으면 칼릭스)")] MobiServer server = 0,
         [Summary("클래스이름", "클래스 선택 (미입력시 전체 클래스)"), Autocomplete(typeof(RankClassAutocomplete))] string? className = null)
         => await ProcessCommand(4, nickname, server, className);
 
@@ -86,10 +86,9 @@ public class RankingCommand :  InteractionModuleBase<SocketInteractionContext>
                 break;
         }
         
-        if (server == 0) server = MobiServer.칼릭스; //기본값 설정
-
         // 1) 3초 내 ACK
         await DeferAsync(ephemeral: true);
+        server = await Program.instance.DefaultServers.ResolveAsync(Context.Guild?.Id, server);
 
         // (선택) 간헐적 시계오차 이슈 대응
         // DiscordSocketConfig.UseInteractionSnowflakeDate = false 로도 완화 가능 (부트스트랩시 적용)

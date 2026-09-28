@@ -512,6 +512,17 @@ try
     Check(migrated is { Enabled: true, ChannelId: 456, HoursBefore: 12 } && !File.Exists(Path.Combine(legacyDir, "123.json")), "기존 이벤트 알림 JSON을 SQLite로 이전 후 삭제");
     await settingsStore.SaveAsync(789, new EventExpireAlertSetting { Enabled = false, ChannelId = 987, HoursBefore = 24 });
     Check((await settingsStore.GetAllGuildIdsAsync()).SequenceEqual(new ulong[] { 123, 789 }) && (await settingsStore.LoadAsync(789))?.ChannelId == 987, "SQLite 이벤트 알림 설정 저장·조회");
+    // 기본 서버: 고른 서버 > 디스코드 서버별 /기본서버지정 > 칼릭스. 다시 지정하면 덮어쓰고, 다른 디스코드 서버에는 영향이 없다.
+    var defaultServerStore = new GuildDefaultServerStore(databasePath: Path.Combine(storageDir, "database", "molly.sqlite"));
+    await defaultServerStore.InitializeAsync();
+    Check(await defaultServerStore.LoadAsync(10) is null && await defaultServerStore.ResolveAsync(10, 0) == MobiServer.칼릭스
+        && await defaultServerStore.ResolveAsync(null, 0) == MobiServer.칼릭스,
+        "기본 서버를 지정하지 않은 디스코드 서버와 DM은 서버를 비우면 칼릭스로 조회한다");
+    await defaultServerStore.SaveAsync(10, MobiServer.데이안);
+    await defaultServerStore.SaveAsync(10, MobiServer.몰리);
+    Check(await defaultServerStore.LoadAsync(10) == MobiServer.몰리 && await defaultServerStore.ResolveAsync(10, 0) == MobiServer.몰리
+        && await defaultServerStore.ResolveAsync(10, MobiServer.라사) == MobiServer.라사 && await defaultServerStore.ResolveAsync(11, 0) == MobiServer.칼릭스,
+        "기본서버지정은 디스코드 서버별로 덮어써 저장되고, 직접 고른 서버가 기본 서버보다 우선한다");
     var characterStore = new RegisteredCharacterStore(databasePath: Path.Combine(storageDir, "database", "molly.sqlite"));
     await characterStore.InitializeAsync();
     await characterStore.SaveAsync(new RegisteredCharacter(100, MobiServer.몰리, "첫캐릭터", DateTimeOffset.UnixEpoch));
