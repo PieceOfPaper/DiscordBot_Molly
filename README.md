@@ -6,6 +6,12 @@
 - 새 콘텐츠의 방향과 채택 기준은 [몰리 콘텐츠 기획 가이드라인](docs/content-planning-guidelines.md)을 따릅니다.
 - 게임에 접속하지 않은 동안 대신 관찰하는 편의 기능과 Discord에서 부담 없이 즐기는 놀이 기능을 중심으로 개발합니다.
 
+세부 기획:
+
+- [마물 퇴치 증표 기획서](docs/currency/monster-hunt-token.md)
+- [출석 기획서](docs/attendance/README.md)
+- [배틀 예측 기획서](docs/battle/prediction.md)
+
 ## 핵심 기능
 - 진행 중 이벤트 조회(마감일/상시 구분)
 - 이벤트 마감 알림 등록(지정 시간 전)
