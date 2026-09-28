@@ -15,6 +15,7 @@ using Molly.MobiLife;
 using Molly.Crafting;
 using Molly.HaeyeonMarket;
 using Molly.KeywordMarket;
+using Molly.Currency;
 
 class Program
 {
@@ -32,6 +33,8 @@ class Program
     // /기본서버지정으로 정한 디스코드 서버별 기준 마비노기 모바일 서버. 랭킹·캐릭터등록의 서버 기본값.
     public GuildDefaultServerStore DefaultServers { get; private set; } = null!;
     public BattleRecordStore BattleRecords { get; private set; } = null!;
+    public MollyTokenStore Tokens { get; private set; } = null!;
+    public TokenRuleCatalog TokenRules { get; private set; } = null!;
     public BattleCatalog Battles { get; private set; } = null!;
     public BattleSessions BattleSessions { get; } = new();
     // 모비라이프 OpenAPI. 키가 없거나 API가 중단돼도 봇은 정상 시작하며, 연동 기능만 안내 메시지를 표시합니다.
@@ -96,6 +99,9 @@ class Program
             {
                 try { await ClassEmojis.SyncAsync(m_Client); }
                 catch (Exception ex) { Console.WriteLine($"[클래스 이모지] 동기화 실패: {ex.GetType().Name}: {ex.Message}"); }
+                // 증표 이모지가 없어도 수량은 풀네임으로 표기되므로 실패해도 계속합니다.
+                try { await MollyToken.SyncEmojiAsync(m_Client); }
+                catch (Exception ex) { Console.WriteLine($"[증표 이모지] 동기화 실패: {ex.GetType().Name}: {ex.Message}"); }
             });
 
             // 개발 초기에는 길드 명령(즉시 반영). 운영은 글로벌 명령(전파 수분~1시간)
@@ -175,6 +181,8 @@ class Program
         await DefaultServers.InitializeAsync(appCts.Token);
         BattleRecords = new BattleRecordStore();
         await BattleRecords.InitializeAsync(appCts.Token);
+        Tokens = new MollyTokenStore();
+        await Tokens.InitializeAsync(appCts.Token);
 
         using var runeHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;
@@ -200,6 +208,11 @@ class Program
             m_Config["GoogleSheets:CraftingSheetName"] ?? GoogleSheetsCraftingSource.DefaultSheetName),
             dataDirectory);
         await Crafting.InitializeAsync(appCts.Token);
+        TokenRules = new TokenRuleCatalog(new GoogleSheetsTokenRuleSource(runeHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
+            m_Config["GoogleSheets:TokenRuleSheetId"] ?? GoogleSheetsTokenRuleSource.DefaultSheetId),
+            dataDirectory);
+        await TokenRules.InitializeAsync(appCts.Token);
         var haeyeonStore = new HaeyeonMarketStore();
         await haeyeonStore.InitializeAsync(appCts.Token);
         HaeyeonMarket = new HaeyeonMarketMonitor(

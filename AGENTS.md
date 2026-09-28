@@ -42,6 +42,7 @@
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
 - Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세모니터링 판정·저장·정각 수집.
 - KeywordMarket/: 검색어로 찾은 거래소 아이템 전체를 추적하는 /상자시세모니터링·/패키지시세모니터링(시세 변동·신규·사라짐) 판정·저장·정각 수집. 정각 일정은 Market/MarketSchedule 공용.
+- Currency/: 서버별 놀이 재화 `마물 퇴치 증표`의 잔액·원장 저장소(MollyTokenStore), `증표규칙` 시트(TokenRuleCatalog), 표기·이모지(MollyToken). 증표를 주고받는 기능은 이 저장소만 쓴다.
 
 ## 구현 원칙
 - 사용자에게 보여주는 명령과 안내는 한국어로 작성한다.
