@@ -572,6 +572,7 @@ await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await KeywordMarketTests.RunAsync();
+MarketTrendTests.Run();
 CrossbowBattleTests.Run();
 HealerBattleTests.Run();
 ThiefBattleTests.Run();

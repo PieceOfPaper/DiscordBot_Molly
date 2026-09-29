@@ -36,12 +36,18 @@ public static class HaeyeonMarketReport
         _ => null,
     };
 
+    // 아이템·재료 목록에 변화 이모지가 하나라도 붙으면 목록 아래에 범례를 붙입니다.
     public static IReadOnlyList<string> BuildLines(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes, IReadOnlyDictionary<string, MarketPrice> prices) => view switch
     {
-        HaeyeonPriceView.Materials => MaterialLines(recipes, prices),
+        HaeyeonPriceView.Materials => MarketTrendEvaluator.AppendLegend(MaterialLines(recipes, prices), Shown(MaterialNames(recipes), prices)),
         HaeyeonPriceView.ProductTotals => recipes.Select(x => TotalLine(x, prices)).ToArray(),
-        _ => ProductsOf(view, recipes).Select(x => $"{x.Name} · {PriceText(prices, x.Name)}").ToArray(),
+        _ => MarketTrendEvaluator.AppendLegend(
+            ProductsOf(view, recipes).Select(x => $"{x.Name} · {PriceText(prices, x.Name)}").ToArray(),
+            Shown(ProductsOf(view, recipes).Select(x => x.Name), prices)),
     };
+
+    private static IEnumerable<MarketPrice> Shown(IEnumerable<string> names, IReadOnlyDictionary<string, MarketPrice> prices) =>
+        names.Where(x => !HaeyeonMarketRules.WorthlessMaterials.Contains(x)).Select(x => prices.GetValueOrDefault(x)).OfType<MarketPrice>();
 
     // 분류 머리글을 뺀 실제 아이템·재료 개수
     public static int ItemCount(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes) => view switch
@@ -119,12 +125,13 @@ public static class HaeyeonMarketReport
         return $"{icon} **{recipe.Name}** 완제품 {HaeyeonMarketMessages.Price(product.MinPrice)}{fewListings} / 재료 합계 {HaeyeonMarketMessages.Price(cost.Value)} · {comparison}";
     }
 
+    // 가격·매물 수 뒤에 변화 이모지(예: "📉⏬")를 붙입니다. 판정하기 어려우면 붙이지 않습니다.
     private static string PriceText(IReadOnlyDictionary<string, MarketPrice> prices, string name)
     {
         if (!prices.TryGetValue(name, out var price)) return "시세 없음";
         if (price.IsSoldOut || price.MinPrice <= 0) return "매진";
         var few = price.TotalCount < HaeyeonMarketRules.MinListingCount ? ", 적음" : "";
-        return $"**{HaeyeonMarketMessages.Price(price.MinPrice)}** (매물 {HaeyeonMarketMessages.Price(price.TotalCount)}개{few})";
+        return $"**{HaeyeonMarketMessages.Price(price.MinPrice)}** (매물 {HaeyeonMarketMessages.Price(price.TotalCount)}개{few}){MarketTrendEvaluator.Suffix(price)}";
     }
 
     /// <summary>
@@ -155,7 +162,8 @@ public static class HaeyeonMarketReport
             foreach (var (name, isProduct, current) in Pick(priceCandidates, random))
             {
                 // 기준값보다 0~10%p 더 큰 가상 변동률로 과거시세를 역산합니다.
-                priceAlerts.Add(new PriceChangeAlert(name, isProduct, TestBaseline.Create(current, thresholds.For(isProduct), random), current));
+                priceAlerts.Add(new PriceChangeAlert(name, isProduct, TestBaseline.Create(current, thresholds.For(isProduct), random), current)
+                    { Trend = MarketTrendEvaluator.Evaluate(prices[name]) });
             }
         }
         else

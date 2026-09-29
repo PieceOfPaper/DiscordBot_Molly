@@ -63,6 +63,7 @@ public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionConte
         description.AppendLine("- 새로운 아이템이 거래소에 올라옴");
         description.AppendLine($"- 추적하던 아이템이 {KeywordMarketRules.RemovalMissingRuns}회 연속 검색되지 않아 사라짐(판매 기간 종료 등)");
         description.AppendLine($"- 아이템 시세가 과거시세보다 {threshold * 100:0.#}%{(percent is null ? "(기본값)" : "")} 이상 변동");
+        description.AppendLine("- 상승·하락 표시(📈📉)나 가능성(⏫🔼⏬🔽)이 바뀜");
         description.AppendLine();
         description.AppendLine(latest is null
             ? "아직 저장된 시세가 없어요. 첫 수집 시세를 기준으로 삼고, 그다음 수집부터 알려드려요."

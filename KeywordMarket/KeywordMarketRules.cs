@@ -28,7 +28,4 @@ public static class KeywordMarketRules
 
     // 검색 결과에서 이 횟수만큼 연속으로 빠져야 사라진 아이템으로 알립니다. 일시적인 누락으로 사라짐·신규 알림이 반복되지 않게 합니다.
     public const int RemovalMissingRuns = 2;
-
-    // 시간별 시세 이력 보관 기간.
-    public static readonly TimeSpan HistoryRetention = TimeSpan.FromDays(90);
 }

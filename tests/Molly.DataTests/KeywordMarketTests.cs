@@ -15,6 +15,34 @@ internal static class KeywordMarketTests
         await MonitorTestsAsync();
         await GuildThresholdTestsAsync();
         await MobiLifeSourceTestsAsync();
+        await RetryTestsAsync();
+    }
+
+    private static async Task RetryTestsAsync()
+    {
+        var now = new DateTimeOffset(2026, 9, 25, 3, 0, 5, TimeSpan.Zero);
+        var delays = new List<TimeSpan>();
+        var logs = new List<string>();
+        Task Delay(TimeSpan delay, CancellationToken _) { delays.Add(delay); now += delay; return Task.CompletedTask; }
+
+        async Task<(bool Success, int Attempts)> Run(Func<int, bool> succeedsOn)
+        {
+            delays.Clear();
+            var attempts = 0;
+            var success = await MarketSchedule.CollectWithRetryAsync(_ => Task.FromResult(succeedsOn(++attempts)), () => now, Delay, logs.Add, default);
+            return (success, attempts);
+        }
+
+        Assert(await Run(_ => true) == (true, 1) && delays.Count == 0, "수집이 성공하면 재시도하지 않음");
+        now = new DateTimeOffset(2026, 9, 25, 3, 0, 5, TimeSpan.Zero);
+        Assert(await Run(attempt => attempt == 3) == (true, 3) && delays.SequenceEqual([TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10)]),
+            "실패하면 10분 뒤 다시 시도하고 성공하면 멈춤");
+        now = new DateTimeOffset(2026, 9, 25, 3, 0, 5, TimeSpan.Zero);
+        Assert(await Run(_ => false) == (false, 1 + MarketSchedule.MaxRetries) && delays.Count == 3 && logs[^1].Contains("다음 정각"),
+            "재시도는 최대 3번까지만 하고 다음 정각 수집을 기다림");
+        now = new DateTimeOffset(2026, 9, 25, 3, 45, 0, TimeSpan.Zero);
+        Assert(await Run(_ => false) == (false, 2) && delays.Count == 1,
+            "다음 재시도 시각이 다음 정각에 닿으면 재시도하지 않고 정각 수집에 맡김");
     }
 
     private static MarketPrice P(long kindId, string name, long price, long count = 100, bool soldOut = false) =>
@@ -172,7 +200,7 @@ internal static class KeywordMarketTests
             source.Set((1, "보물 상자", 1000), (2, "빛나는 상자", 500));
 
             var first = await monitor.CollectAsync(default);
-            Assert(first.Success && sender.Sent.Count == 0 && await boxStore.CountHistoryAsync() == 2 && await packageStore.CountHistoryAsync() == 0 &&
+            Assert(first.Success && sender.Sent.Count == 0 && await boxStore.CountLatestPricesAsync() == 2 && await packageStore.CountLatestPricesAsync() == 0 &&
                    source.Calls.Single() == ("상자", "아이템"), "첫 수집은 '아이템' 분류의 '상자' 검색 결과를 기준으로 저장하고 알리지 않음");
 
             now = now.AddHours(1);
@@ -193,8 +221,9 @@ internal static class KeywordMarketTests
                    states.Keys.Order().SequenceEqual([1L, 3L]) && (await boxStore.LoadBaselinesAsync(1))[1].Price == 800,
                 "2회 연속 검색되지 않은 아이템을 사라짐으로 알리고 DB 상태에서 제거");
             var latest = await boxStore.LoadLatestPricesAsync();
-            Assert(latest is { Prices.Count: 2 } && latest.CollectedAtUtc == now && await boxStore.CountHistoryAsync() == 6,
-                "마지막 정각 수집 시세를 읽고 시간별 이력 누적");
+            Assert(latest is { Prices.Count: 2 } && latest.CollectedAtUtc == now && await boxStore.CountLatestPricesAsync() == 2 &&
+                   latest.Prices.Select(x => x.Name).SequenceEqual(["보물 상자", "신규 상자"]),
+                "마지막 정각 수집 시세만 남기고, 검색에서 빠진 아이템의 옛 시세는 지움(회차별 이력은 쌓지 않음)");
 
             now = now.AddHours(1);
             source.Fail = true;
@@ -219,10 +248,23 @@ internal static class KeywordMarketTests
             await restarted.InitializeAsync();
             Assert((await restarted.LoadStatesAsync()).Count == 2 && (await restarted.GetChannelsAsync()).Count == 2, "재시작 후에도 DB의 상태·채널이 남아 있음");
 
-            now = now.Add(KeywordMarketRules.HistoryRetention).AddHours(2);
+            Assert((await restarted.LoadLatestPricesAsync())?.Prices.Single().MinPrice == 800, "재시작 후에도 마지막 정상 시세가 남아 있음");
+
+            // 모비라이프 변화량이 있으면 마지막 시세에 함께 저장
+            now = now.AddHours(1);
             source.Set((1, "보물 상자", 800), (3, "신규 상자", 300));
+            source.Changes = (-1.5m, -3.25m, 12m, 4m);
+            var sentBeforeTrend = sender.Sent.Count;
             await monitor.CollectAsync(default);
-            Assert(await boxStore.CountHistoryAsync() == 2, "보관 기간(90일)이 지난 시간별 이력 삭제");
+            source.Changes = null;
+            var trendMessage = sender.Sent.Last().Embeds[0].Description;
+            Assert(sender.Sent.Count == sentBeforeTrend + 1 && trendMessage.Contains("**🔀 상승·하락 변화**") &&
+                   trendMessage.Contains("보물 상자 · 800 · ➖ → 📉⏬") && !trendMessage.Contains("신규 상자 · 300 · ➖") &&
+                   trendMessage.Contains(MarketTrendEvaluator.Legend[0]) && trendMessage.Contains(MarketTrendEvaluator.NoneLegend),
+                "직전 회차와 판정이 바뀐 아이템을 상승·하락 변화로 알리고(표시 없음 → 판정 포함), 직전 회차에 없던 아이템은 비교하지 않음. 이모지 설명을 붙임");
+            var withChanges = (await boxStore.LoadLatestPricesAsync())!.Prices.Single(x => x.KindId == 1);
+            Assert(withChanges is { PriceChange1hPercent: -1.5m, PriceChange24hPercent: -3.25m, PriceChange7dPercent: 12m, CountChange24hPercent: 4m },
+                "변화량(퍼센트·매물 증감)을 마지막 시세에 저장하고 다시 읽음");
 
             // 재시작: 같은 정각 구간 안이면 수집하지 않고, 마지막 수집 이후 정각이 지났으면 즉시 수집
             var last = (await boxStore.GetLatestCollectedAtAsync())!.Value;
@@ -297,6 +339,14 @@ internal static class KeywordMarketTests
                         ('box', 1, '보물 상자', 1234, '2026-09-25T03:00:00.0000000Z', 1300, '2026-09-25T04:00:00.0000000Z', '2026-09-25T03:00:00.0000000Z', 0),
                         ('box', 2, '빈 상자', 0, '2026-09-25T03:00:00.0000000Z', 0, '2026-09-25T04:00:00.0000000Z', '2026-09-25T03:00:00.0000000Z', 0),
                         ('package', 7, '패키지', 500, '2026-09-25T03:00:00.0000000Z', 500, '2026-09-25T04:00:00.0000000Z', '2026-09-25T03:00:00.0000000Z', 0);
+                    CREATE TABLE keyword_market_price_history (monitor TEXT NOT NULL, collected_at_utc TEXT NOT NULL, kind_id INTEGER NOT NULL, item_name TEXT NOT NULL,
+                        category TEXT NOT NULL, min_price INTEGER NOT NULL, total_count INTEGER NOT NULL, is_sold_out INTEGER NOT NULL, priced_at_utc TEXT NOT NULL,
+                        PRIMARY KEY (monitor, collected_at_utc, kind_id));
+                    INSERT INTO keyword_market_price_history VALUES
+                        ('box', '2026-09-25T03:00:00.0000000Z', 1, '보물 상자', '아이템', 1234, 10, 0, '2026-09-25T03:00:00.0000000Z'),
+                        ('box', '2026-09-25T03:00:00.0000000Z', 2, '빈 상자', '아이템', 10, 10, 0, '2026-09-25T03:00:00.0000000Z'),
+                        ('box', '2026-09-25T04:00:00.0000000Z', 1, '보물 상자', '아이템', 1300, 10, 0, '2026-09-25T04:00:00.0000000Z'),
+                        ('package', '2026-09-25T03:00:00.0000000Z', 7, '패키지', '아이템', 500, 10, 0, '2026-09-25T03:00:00.0000000Z');
                     """;
                 await command.ExecuteNonQueryAsync();
             }
@@ -309,6 +359,18 @@ internal static class KeywordMarketTests
             Assert(migrated.Count == 1 && migrated[1].Price == 1234 && (await legacyPackage.LoadBaselinesAsync(6))[7].Price == 500 &&
                    await legacyBox.GetChannelAsync(5) is { ChangePercent: null, Threshold: 0.10m } && (await legacyBox.LoadStatesAsync())[1].CurrentPrice == 1300,
                 "이전 DB의 공용 과거시세를 모든 모니터링의 등록 길드로 옮기고, 저장된 등락률이 없으면 기본값 사용");
+            var boxLatest = await legacyBox.LoadLatestPricesAsync();
+            var packageLatest = await legacyPackage.LoadLatestPricesAsync();
+            Assert(boxLatest is { Prices.Count: 1 } && boxLatest.Prices[0].MinPrice == 1300 && boxLatest.CollectedAtUtc == s_Now.AddHours(1) &&
+                   boxLatest.Prices[0].PriceChange24hPercent is null && packageLatest?.Prices.Single().MinPrice == 500,
+                "이전 DB의 시간별 이력에서 모니터링마다 마지막 회차만 마지막 시세로 옮김");
+            await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={legacyPath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'keyword_market_price_history';";
+                Assert(Convert.ToInt32(await command.ExecuteScalarAsync()) == 0, "옮긴 뒤 이전 시간별 이력 표를 지움");
+            }
         }
         finally
         {
@@ -339,6 +401,35 @@ internal static class KeywordMarketTests
         requests.Clear();
         await new MobiLifeMarketPriceSource(client).SearchAsync("패키지", null, default);
         Assert(!requests[0].Query.Contains("parent_category"), "분류가 없으면 parent_category를 보내지 않음");
+
+        // 변화량 필드: 있으면 도메인 모델로 옮기고, 없거나 null이면 null, 가격이 100%보다 더 내렸다면 응답 이상
+        string Body(string changes, int totalCount) => $$$"""
+            {"data":[{"kind_id":1,"name":"상자","parent_category":"아이템","min_price":100,"total_count":{{{totalCount}}},"is_sold_out":false,"last_version":"2026-09-24T10:38:00Z"{{{changes}}}}],
+             "pagination":{"limit":100,"offset":0,"count":1}}
+            """;
+        async Task<MarketPriceSearchResult> SearchWith(string changes, int totalCount = 5)
+        {
+            var body = Body(changes, totalCount);
+            using var changeClient = new MobiLifeApiClient(new MobiLifeOptions { ApiKey = "k" },
+                new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) }), log: _ => { });
+            return await new MobiLifeMarketPriceSource(changeClient).SearchAsync("상자", null, default);
+        }
+        var full = await SearchWith(""","pct_change_1h":-1.5,"pct_change_24h":2.25,"pct_change_7d":-100,"count_change_24h":-3""");
+        Assert(full.Prices?.Single() is { PriceChange1hPercent: -1.5m, PriceChange24hPercent: 2.25m, PriceChange7dPercent: -100m, CountChange24hPercent: -3m },
+            "모비라이프 가격 등락(퍼센트)·매물 증감을 도메인 모델로 옮김");
+        var missing = await SearchWith(""","pct_change_1h":null""");
+        Assert(missing.Prices?.Single() is { PriceChange1hPercent: null, PriceChange24hPercent: null, PriceChange7dPercent: null, CountChange24hPercent: null },
+            "변화량 필드가 없거나 null이면 null로 두고 시세는 정상 사용");
+        var invalid = await SearchWith(""","pct_change_24h":-150""");
+        Assert(!invalid.IsSuccess && invalid.FailureMessage!.Contains("상자 pct_change_24h=-150"),
+            "가격이 100%보다 더 내렸다는 변화량은 일시적 데이터 오류로 보고 검색 실패(회차 재시도 대상)");
+        // 2026-09-29 실제 응답: 매물 수가 -1로 오고 매물 증감(퍼센트)도 -100 아래로 계산됨
+        var negativeCount = await SearchWith(""","count_change_24h":-100.02379252914584""", totalCount: -1);
+        Assert(!negativeCount.IsSuccess && negativeCount.FailureMessage!.Contains("일시적") && negativeCount.FailureMessage.Contains("상자 total_count=-1"),
+            "매물 수 -1은 일시적 데이터 오류로 검색 실패시키고 어느 아이템의 어느 값인지 알림");
+        var lowCountChange = await SearchWith(""","count_change_24h":-100.5""");
+        Assert(lowCountChange.IsSuccess && lowCountChange.Prices!.Single().CountChange24hPercent == -100.5m,
+            "매물 증감(퍼센트)은 -100 아래여도 그 자체로는 실패시키지 않음");
     }
 
     // RunAsync의 시작 시 수집 판단까지만 실행하고, 다음 정각 대기에 들어가면 중단합니다.
@@ -356,6 +447,7 @@ internal static class KeywordMarketTests
         public List<(string Keyword, string? Category)> Calls { get; } = [];
         public bool Fail { get; set; }
         public bool Truncated { get; set; }
+        public (decimal H1, decimal H24, decimal D7, decimal Count24h)? Changes { get; set; }
         public string Attribution => "모비라이프 제공";
 
         public void Set(params (long KindId, string Name, long Price)[] items) => m_Items = items;
@@ -364,7 +456,8 @@ internal static class KeywordMarketTests
         {
             Calls.Add((keyword, category));
             if (Fail) return Task.FromResult(MarketPriceSearchResult.Fail("실패"));
-            var prices = m_Items.Select(x => new MarketPrice(x.KindId, x.Name, "아이템", x.Price, 100, false, s_Now)).ToArray();
+            var prices = m_Items.Select(x => new MarketPrice(x.KindId, x.Name, "아이템", x.Price, 100, false, s_Now,
+                Changes?.H1, Changes?.H24, Changes?.D7, Changes?.Count24h)).ToArray();
             return Task.FromResult(new MarketPriceSearchResult(prices) { IsTruncated = Truncated });
         }
     }

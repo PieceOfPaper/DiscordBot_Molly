@@ -50,7 +50,10 @@ public sealed class HaeyeonMarketMonitor
 
     public static bool NeedsCatchUp(DateTimeOffset? lastCollectedUtc, DateTimeOffset nowUtc) => MarketSchedule.NeedsCatchUp(lastCollectedUtc, nowUtc);
 
-    /// <summary>시작 시 DB에 시세가 없거나 직전 정각 수집을 놓쳤으면 즉시 수집하고, 이후 매 정각(KST·UTC 모두 정시)에 수집합니다.</summary>
+    /// <summary>
+    /// 시작 시 DB에 시세가 없거나 직전 정각 수집을 놓쳤으면 즉시 수집하고, 이후 매 정각(KST·UTC 모두 정시)에 수집합니다.
+    /// 회차가 실패하면 10분 간격으로 최대 3번 다시 시도합니다(MarketSchedule).
+    /// </summary>
     public async Task RunAsync(CancellationToken ct)
     {
         try
@@ -61,7 +64,7 @@ public sealed class HaeyeonMarketMonitor
                 m_Log(last is null
                     ? "저장된 시세가 없어 즉시 수집합니다."
                     : $"마지막 수집({TimeZoneInfo.ConvertTime(last.Value, MobiTime.timezone):yyyy-MM-dd HH:mm} KST) 이후 정각 수집을 놓쳐 즉시 수집합니다.");
-                await CollectAsync(ct).ConfigureAwait(false);
+                await CollectWithRetryAsync(ct).ConfigureAwait(false);
             }
             while (!ct.IsCancellationRequested)
             {
@@ -70,11 +73,15 @@ public sealed class HaeyeonMarketMonitor
                 // Task.Delay가 시계보다 조금 일찍 깨어날 수 있어 정각이 지날 때까지 다시 기다립니다.
                 for (var remaining = next - m_UtcNow(); remaining > TimeSpan.Zero; remaining = next - m_UtcNow())
                     await Task.Delay(remaining, ct).ConfigureAwait(false);
-                await CollectAsync(ct).ConfigureAwait(false);
+                await CollectWithRetryAsync(ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
     }
+
+    private Task<bool> CollectWithRetryAsync(CancellationToken ct) =>
+        MarketSchedule.CollectWithRetryAsync(async token => (await CollectAsync(token).ConfigureAwait(false)).Success,
+            m_UtcNow, Task.Delay, m_Log, ct);
 
     public async Task<HaeyeonRunResult> CollectAsync(CancellationToken ct)
     {
@@ -118,6 +125,8 @@ public sealed class HaeyeonMarketMonitor
             m_Log($"시세 검색 결과에 없는 이름 {missing.Length}개(시트 이름 또는 검색어 확인): {string.Join(", ", missing)}");
 
         var lastPrices = (await Store.LoadLatestPricesAsync(ct).ConfigureAwait(false))?.Prices;
+        // 상승·하락 판정 변화는 직전 회차 마지막 시세와 비교하며 모든 서버가 같이 씁니다.
+        var trendAlerts = MarketTrendEvaluator.EvaluateChanges(prices.Values, lastPrices, x => x.Name);
         var previousByGuild = await Store.LoadAllPriceStatesAsync(ct).ConfigureAwait(false);
         var guildStates = new Dictionary<ulong, IReadOnlyDictionary<string, ItemPriceState>>();
         int sent = 0, priceAlerts = 0;
@@ -127,7 +136,8 @@ public sealed class HaeyeonMarketMonitor
             var priceResult = HaeyeonMarketEvaluator.EvaluatePrices(recipes, prices, previous, channel.Thresholds, collectedAt, lastPrices);
             guildStates[channel.GuildId] = priceResult.States;
             priceAlerts += priceResult.Alerts.Count;
-            var evaluation = new HaeyeonEvaluation(priceResult.Alerts, crafts.Alerts, priceResult.States, crafts.States, priceResult.MissingNames, priceResult.UnreliableNames);
+            var evaluation = new HaeyeonEvaluation(priceResult.Alerts, crafts.Alerts, priceResult.States, crafts.States, priceResult.MissingNames, priceResult.UnreliableNames)
+                { TrendAlerts = trendAlerts };
             if (!evaluation.HasAlerts) continue;
             try
             {
@@ -142,7 +152,7 @@ public sealed class HaeyeonMarketMonitor
             prices.Values.Select(x => new HaeyeonPriceSnapshot(x, tracked[x.Name])),
             guildStates, crafts.States.Values, ct).ConfigureAwait(false);
         return new HaeyeonRunResult(true,
-            $"수집 완료: 시세 {prices.Count}/{tracked.Count}개, 변동 알림 {priceAlerts}건(길드 합계), 유불리 전환 {crafts.Alerts.Count}건, 전송 채널 {sent}곳");
+            $"수집 완료: 시세 {prices.Count}/{tracked.Count}개, 변동 알림 {priceAlerts}건(길드 합계), 유불리 전환 {crafts.Alerts.Count}건, 상승·하락 변화 {trendAlerts.Count}건, 전송 채널 {sent}곳");
     }
 }
 
@@ -161,7 +171,7 @@ public static class HaeyeonMarketMessages
             {
                 var icon = alert.ChangeRate > 0 ? "📈" : "📉";
                 var kind = alert.IsProduct ? "제작품" : "재료";
-                lines.Add($"{icon} [{kind}] {alert.Name} {Price(alert.BaselinePrice)} → {Price(alert.CurrentPrice)} ({Percent(alert.ChangeRate)})");
+                lines.Add($"{icon} [{kind}] {alert.Name} {Price(alert.BaselinePrice)} → {Price(alert.CurrentPrice)} ({Percent(alert.ChangeRate)}){TrendSuffix(alert.Trend)}");
             }
         }
         if (evaluation.CraftAlerts.Count > 0)
@@ -177,9 +187,21 @@ public static class HaeyeonMarketMessages
             }
         }
 
+        if (evaluation.TrendAlerts.Count > 0)
+        {
+            if (lines.Count > 0) lines.Add("");
+            lines.Add("**🔀 상승·하락 변화**");
+            foreach (var alert in evaluation.TrendAlerts.OrderBy(x => x.Name, StringComparer.Ordinal))
+                lines.Add($"{alert.Name} · {Price(alert.Price.MinPrice)} · {alert.ChangeText}");
+        }
+
+        var hasTrend = evaluation.PriceAlerts.Any(x => x.Trend is not null) || evaluation.TrendAlerts.Count > 0;
+        var hasNone = evaluation.TrendAlerts.Any(x => x.Previous is null || x.Current is null);
         var title = $"{titlePrefix}💹 해연 시세 알림 · {Kst(collectedAtUtc)} 기준";
-        return BuildEmbeds(title, lines, attribution, collectedAtUtc);
+        return BuildEmbeds(title, MarketTrendEvaluator.AppendLegend(lines, hasTrend, hasNone), attribution, collectedAtUtc);
     }
+
+    private static string TrendSuffix(MarketTrend? trend) => trend is null ? "" : " · " + trend.Emoji;
 
     public static string Kst(DateTimeOffset utc) => TimeZoneInfo.ConvertTime(utc, MobiTime.timezone).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
 

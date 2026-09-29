@@ -19,8 +19,9 @@ public sealed record HaeyeonPriceSnapshot(MarketPrice Price, bool IsProduct);
 public sealed record HaeyeonLatestPrices(DateTimeOffset CollectedAtUtc, IReadOnlyDictionary<string, MarketPrice> Prices);
 
 /// <summary>
-/// /해연시세모니터링 SQLite 저장소. 길드별 알림 채널(길드당 1개)과 등락률, 시간별 시세 이력,
+/// /해연시세모니터링 SQLite 저장소. 길드별 알림 채널(길드당 1개)과 등락률, 마지막 정각 수집의 시세,
 /// 길드·아이템별 과거시세·현재시세, 제작 아이템별 유불리 상태를 보관합니다.
+/// 시세 이력은 모비라이프가 보관하므로 몰리는 마지막 성공 회차의 시세만 남깁니다(회차마다 통째로 교체).
 /// </summary>
 public sealed class HaeyeonMarketStore
 {
@@ -48,16 +49,20 @@ public sealed class HaeyeonMarketStore
                     channel_id INTEGER NOT NULL,
                     registered_at_utc TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS haeyeon_price_history (
-                    collected_at_utc TEXT NOT NULL,
-                    item_name TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS haeyeon_latest_prices (
+                    item_name TEXT PRIMARY KEY,
                     kind_id INTEGER NOT NULL,
+                    category TEXT NOT NULL,
                     is_product INTEGER NOT NULL,
                     min_price INTEGER NOT NULL,
                     total_count INTEGER NOT NULL,
                     is_sold_out INTEGER NOT NULL,
                     priced_at_utc TEXT NOT NULL,
-                    PRIMARY KEY (collected_at_utc, item_name)
+                    price_change_1h_pct REAL,
+                    price_change_24h_pct REAL,
+                    price_change_7d_pct REAL,
+                    count_change_24h REAL,
+                    collected_at_utc TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS haeyeon_guild_price_state (
                     guild_id INTEGER NOT NULL,
@@ -87,6 +92,15 @@ public sealed class HaeyeonMarketStore
                         (guild_id, item_name, is_product, baseline_price, baseline_at_utc, current_price, current_at_utc)
                     SELECT c.guild_id, s.item_name, s.is_product, s.baseline_price, s.baseline_at_utc, s.current_price, s.current_at_utc
                     FROM haeyeon_monitor_channels c CROSS JOIN haeyeon_price_state s;
+                    """, ct).ConfigureAwait(false);
+            // 이전에는 정각마다 시세를 90일간 쌓았습니다(haeyeon_price_history). 마지막 회차만 옮기고 이력 표는 지웁니다.
+            if (await MollySqliteSchema.TableExistsAsync(connection, transaction, "haeyeon_price_history", ct).ConfigureAwait(false))
+                await ExecuteAsync(connection, transaction, """
+                    INSERT OR IGNORE INTO haeyeon_latest_prices
+                        (item_name, kind_id, category, is_product, min_price, total_count, is_sold_out, priced_at_utc, collected_at_utc)
+                    SELECT item_name, kind_id, '', is_product, min_price, total_count, is_sold_out, priced_at_utc, collected_at_utc
+                    FROM haeyeon_price_history WHERE collected_at_utc = (SELECT MAX(collected_at_utc) FROM haeyeon_price_history);
+                    DROP TABLE haeyeon_price_history;
                     """, ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
@@ -181,7 +195,7 @@ public sealed class HaeyeonMarketStore
         {
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT MAX(collected_at_utc) FROM haeyeon_price_history;";
+            command.CommandText = "SELECT MAX(collected_at_utc) FROM haeyeon_latest_prices;";
             var value = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
             return value is string text ? Parse(text) : null;
         }
@@ -196,8 +210,9 @@ public sealed class HaeyeonMarketStore
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT collected_at_utc, item_name, kind_id, min_price, total_count, is_sold_out, priced_at_utc FROM haeyeon_price_history
-                WHERE collected_at_utc = (SELECT MAX(collected_at_utc) FROM haeyeon_price_history);
+                SELECT collected_at_utc, item_name, kind_id, category, min_price, total_count, is_sold_out, priced_at_utc,
+                    price_change_1h_pct, price_change_24h_pct, price_change_7d_pct, count_change_24h
+                FROM haeyeon_latest_prices;
                 """;
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             string? collectedAt = null;
@@ -205,8 +220,9 @@ public sealed class HaeyeonMarketStore
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 collectedAt = reader.GetString(0);
-                prices[reader.GetString(1)] = new MarketPrice(reader.GetInt64(2), reader.GetString(1), "", reader.GetInt64(3), reader.GetInt64(4),
-                    reader.GetInt64(5) != 0, Parse(reader.GetString(6)));
+                prices[reader.GetString(1)] = new MarketPrice(reader.GetInt64(2), reader.GetString(1), reader.GetString(3), reader.GetInt64(4), reader.GetInt64(5),
+                    reader.GetInt64(6) != 0, Parse(reader.GetString(7)),
+                    NullableDecimal(reader, 8), NullableDecimal(reader, 9), NullableDecimal(reader, 10), NullableDecimal(reader, 11));
             }
             return collectedAt is null ? null : new HaeyeonLatestPrices(Parse(collectedAt), prices);
         }
@@ -260,7 +276,8 @@ public sealed class HaeyeonMarketStore
     }
 
     /// <summary>
-    /// 한 회차의 원본 시세 이력과 새 판정 상태를 한 트랜잭션으로 저장하고, 보관 기간이 지난 이력을 지웁니다.
+    /// 한 회차의 시세와 새 판정 상태를 한 트랜잭션으로 저장합니다. 마지막 시세는 이번 회차 시세로 통째로 바꿔
+    /// 검색에서 빠진 아이템의 옛 시세가 남지 않게 합니다.
     /// 길드별 과거시세는 판정 중 등록이 해제된 길드면 저장하지 않습니다.
     /// </summary>
     public async Task SaveRunAsync(
@@ -276,17 +293,22 @@ public sealed class HaeyeonMarketStore
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
             var collectedAt = Format(collectedAtUtc);
+            await ExecuteAsync(connection, transaction, "DELETE FROM haeyeon_latest_prices;", ct).ConfigureAwait(false);
             foreach (var snapshot in snapshots)
             {
                 var price = snapshot.Price;
                 await ExecuteAsync(connection, transaction, """
-                    INSERT OR REPLACE INTO haeyeon_price_history
-                        (collected_at_utc, item_name, kind_id, is_product, min_price, total_count, is_sold_out, priced_at_utc)
-                    VALUES ($collectedAt, $name, $kindId, $isProduct, $minPrice, $totalCount, $isSoldOut, $pricedAt);
+                    INSERT OR REPLACE INTO haeyeon_latest_prices
+                        (item_name, kind_id, category, is_product, min_price, total_count, is_sold_out, priced_at_utc,
+                         price_change_1h_pct, price_change_24h_pct, price_change_7d_pct, count_change_24h, collected_at_utc)
+                    VALUES ($name, $kindId, $category, $isProduct, $minPrice, $totalCount, $isSoldOut, $pricedAt,
+                        $change1h, $change24h, $change7d, $countChange24h, $collectedAt);
                     """, ct,
-                    ("$collectedAt", collectedAt), ("$name", price.Name), ("$kindId", price.KindId), ("$isProduct", snapshot.IsProduct ? 1 : 0),
-                    ("$minPrice", price.MinPrice), ("$totalCount", price.TotalCount), ("$isSoldOut", price.IsSoldOut ? 1 : 0),
-                    ("$pricedAt", Format(price.PricedAtUtc))).ConfigureAwait(false);
+                    ("$collectedAt", collectedAt), ("$name", price.Name), ("$kindId", price.KindId), ("$category", price.Category),
+                    ("$isProduct", snapshot.IsProduct ? 1 : 0), ("$minPrice", price.MinPrice), ("$totalCount", price.TotalCount),
+                    ("$isSoldOut", price.IsSoldOut ? 1 : 0), ("$pricedAt", Format(price.PricedAtUtc)),
+                    ("$change1h", DbValue(price.PriceChange1hPercent)), ("$change24h", DbValue(price.PriceChange24hPercent)),
+                    ("$change7d", DbValue(price.PriceChange7dPercent)), ("$countChange24h", DbValue(price.CountChange24hPercent))).ConfigureAwait(false);
             }
             foreach (var (guildId, states) in guildPriceStates)
             {
@@ -311,21 +333,20 @@ public sealed class HaeyeonMarketStore
                     ("$name", state.ProductName), ("$advantage", state.Advantage.ToString()), ("$productPrice", state.ProductPrice),
                     ("$materialCost", state.MaterialCost), ("$updatedAt", Format(state.UpdatedAtUtc))).ConfigureAwait(false);
             }
-            await ExecuteAsync(connection, transaction, "DELETE FROM haeyeon_price_history WHERE collected_at_utc < $cutoff;", ct,
-                ("$cutoff", Format(collectedAtUtc - HaeyeonMarketRules.HistoryRetention))).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
         finally { m_Gate.Release(); }
     }
 
-    public async Task<int> CountHistoryAsync(CancellationToken ct = default)
+    // 저장된 마지막 시세 행 수. 회차가 거듭되어도 추적 아이템 수를 넘지 않아야 합니다.
+    public async Task<int> CountLatestPricesAsync(CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             await using var connection = await OpenAsync(ct).ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT COUNT(*) FROM haeyeon_price_history;";
+            command.CommandText = "SELECT COUNT(*) FROM haeyeon_latest_prices;";
             return Convert.ToInt32(await command.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture);
         }
         finally { m_Gate.Release(); }
@@ -362,6 +383,10 @@ public sealed class HaeyeonMarketStore
         foreach (var (name, value) in parameters) command.Parameters.AddWithValue(name, value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
+
+    // decimal은 문자열로 바인딩되므로 REAL 열에 맞게 double로 넘깁니다.
+    private static object DbValue(decimal? value) => value is { } number ? (double)number : DBNull.Value;
+    private static decimal? NullableDecimal(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetDecimal(ordinal);
 
     // UTC ISO 8601 고정 길이 문자열이라 문자열 비교가 시간 순서와 같습니다.
     private static string Format(DateTimeOffset value) => value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);

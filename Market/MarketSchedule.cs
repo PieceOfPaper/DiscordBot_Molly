@@ -15,4 +15,36 @@ public static class MarketSchedule
     /// </summary>
     public static bool NeedsCatchUp(DateTimeOffset? lastCollectedUtc, DateTimeOffset nowUtc) =>
         lastCollectedUtc is null || lastCollectedUtc.Value < NextHourUtc(nowUtc).AddHours(-1);
+
+    // 회차 수집이 실패하면 이 간격으로 최대 MaxRetries번 다시 시도합니다. 다음 정각에 닿으면 정각 수집에 맡깁니다.
+    public static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(10);
+    public const int MaxRetries = 3;
+
+    /// <summary>
+    /// 한 회차를 수집하고, 실패하면 RetryDelay마다 최대 MaxRetries번 다시 시도합니다.
+    /// 다음 재시도 시각이 다음 정각 이후면 더 시도하지 않습니다. 마지막 시도의 성공 여부를 돌려줍니다.
+    /// </summary>
+    public static async Task<bool> CollectWithRetryAsync(
+        Func<CancellationToken, Task<bool>> collect,
+        Func<DateTimeOffset> utcNow,
+        Func<TimeSpan, CancellationToken, Task> delay,
+        Action<string> log,
+        CancellationToken ct)
+    {
+        var nextHour = NextHourUtc(utcNow());
+        if (await collect(ct).ConfigureAwait(false)) return true;
+        for (var retry = 1; retry <= MaxRetries; retry++)
+        {
+            if (utcNow() + RetryDelay >= nextHour)
+            {
+                log("다음 정각이 가까워 재시도하지 않고 정각 수집을 기다립니다.");
+                return false;
+            }
+            log($"수집 실패로 {RetryDelay.TotalMinutes:0}분 뒤 다시 시도합니다({retry}/{MaxRetries}).");
+            await delay(RetryDelay, ct).ConfigureAwait(false);
+            if (await collect(ct).ConfigureAwait(false)) return true;
+        }
+        log($"재시도 {MaxRetries}번이 모두 실패해 다음 정각 수집을 기다립니다.");
+        return false;
+    }
 }

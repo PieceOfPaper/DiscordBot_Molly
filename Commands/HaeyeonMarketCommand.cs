@@ -39,6 +39,7 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
         description.AppendLine("매 정각 제작 시트의 해연 제작 아이템과 재료 시세를 저장하고, 다음 경우 알려드려요.");
         description.AppendLine($"- 제작 아이템 시세가 과거시세보다 {Percent(thresholds.Product, productPercent)} 이상, 재료 시세가 {Percent(thresholds.Material, materialPercent)} 이상 변동");
         description.AppendLine("- 완제품 구매가와 재료 구매 합계 중 더 저렴한 쪽이 바뀜");
+        description.AppendLine("- 상승·하락 표시(📈📉)나 가능성(⏫🔼⏬🔽)이 바뀜");
         if (latest is { } collectedAt)
         {
             var craftCount = crafts.Values.Count(x => x.Advantage == CraftAdvantage.Craft);

@@ -15,6 +15,9 @@ public sealed record CraftState(string ProductName, CraftAdvantage Advantage, lo
 public sealed record PriceChangeAlert(string Name, bool IsProduct, long BaselinePrice, long CurrentPrice)
 {
     public decimal ChangeRate => (decimal)(CurrentPrice - BaselinePrice) / BaselinePrice;
+
+    // 현재 시세의 상승·하락 판정. 알림 줄 끝에 이모지로 붙입니다(없으면 붙이지 않음).
+    public MarketTrend? Trend { get; init; }
 }
 
 public sealed record CraftSwitchAlert(string ProductName, CraftAdvantage Advantage, long ProductPrice, long MaterialCost)
@@ -31,7 +34,10 @@ public sealed record HaeyeonEvaluation(
     IReadOnlyList<string> MissingNames,
     IReadOnlyList<string> UnreliableNames)
 {
-    public bool HasAlerts => PriceAlerts.Count > 0 || CraftAlerts.Count > 0;
+    // 상승·하락 판정이 바뀐 아이템(모든 서버 공용).
+    public IReadOnlyList<MarketTrendChangeAlert> TrendAlerts { get; init; } = [];
+
+    public bool HasAlerts => PriceAlerts.Count > 0 || CraftAlerts.Count > 0 || TrendAlerts.Count > 0;
 }
 
 public sealed record HaeyeonPriceEvaluation(
@@ -113,7 +119,7 @@ public static class HaeyeonMarketEvaluator
                 }
             }
 
-            var alert = new PriceChangeAlert(name, isProduct, previous.BaselinePrice, current);
+            var alert = new PriceChangeAlert(name, isProduct, previous.BaselinePrice, current) { Trend = MarketTrendEvaluator.Evaluate(price) };
             if (Math.Abs(alert.ChangeRate) >= thresholds.For(isProduct))
             {
                 priceAlerts.Add(alert);

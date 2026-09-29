@@ -5,8 +5,8 @@
 
 | 기능 | 사용 API | 요청량 |
 | --- | --- | --- |
-| `/해연시세모니터링` (`HaeyeonMarket/`) | `market/prices` (`Market/IMarketPriceSource` → `MobiLife/MobiLifeMarketPriceSource`) | 매 정각 검색어 5개 = 하루 약 120회 |
-| `/상자시세모니터링`·`/패키지시세모니터링` (`KeywordMarket/`) | `market/prices` (같은 인터페이스, `parent_category` 조건 사용) | 매 정각 모니터링당 검색어 1개(결과 100건마다 1회, 최대 5회) = 2026-09-25 기준 하루 약 48회 |
+| `/해연시세모니터링` (`HaeyeonMarket/`) | `market/prices` (`Market/IMarketPriceSource` → `MobiLife/MobiLifeMarketPriceSource`) | 매 정각 검색어 5개 = 하루 약 120회. 회차 실패 시 10분 간격 최대 3번 재시도(최악 한 회차 4배) |
+| `/상자시세모니터링`·`/패키지시세모니터링` (`KeywordMarket/`) | `market/prices` (같은 인터페이스, `parent_category` 조건 사용) | 매 정각 모니터링당 검색어 1개(결과 100건마다 1회, 최대 5회) = 2026-09-25 기준 하루 약 48회. 재시도 규칙은 해연과 같음 |
 
 - API 문서: https://open.mabimobi.life/docs
 - 기본 주소: `https://open.mabimobi.life/v1/`

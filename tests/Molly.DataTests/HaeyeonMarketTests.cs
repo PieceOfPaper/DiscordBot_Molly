@@ -231,7 +231,7 @@ internal static class HaeyeonMarketTests
             Assert(await store.GetLatestCollectedAtAsync() is null, "시세가 없으면 시작 시 즉시 수집 대상");
             var first = await monitor.CollectAsync(default);
             Assert(first.Success && sender.Sent.Count == 0 && await store.GetLatestCollectedAtAsync() == now &&
-                   await store.CountHistoryAsync() == 6 && source.Keywords.SequenceEqual(HaeyeonMarketRules.SearchKeywords),
+                   await store.CountLatestPricesAsync() == 6 && source.Keywords.SequenceEqual(HaeyeonMarketRules.SearchKeywords),
                 "첫 수집은 검색어 5개로 조회해 추적 대상 시세만 저장하고 알리지 않음");
 
             now = now.AddHours(1);
@@ -244,13 +244,15 @@ internal static class HaeyeonMarketTests
             Assert(second.Success && sender.Sent.Count == 1 && sender.Sent[0].Channel.ChannelId == 11 &&
                    sender.Sent[0].Embeds[0].Description.Contains("해연의 숏소드ZZ 4,000 → 3,000 (-25.0%)") &&
                    sender.Sent[0].Embeds[0].Description.Contains("완제품을 사는") &&
-                   sender.Sent[0].Embeds[0].Footer!.Value.Text.Contains("모비라이프 제공"),
+                   sender.Sent[0].Embeds[0].Footer!.Value.Text.Contains("모비라이프 제공") &&
+                   !sender.Sent[0].Embeds[0].Description.Contains("상승·하락 변화"),
                 "변동·유불리 전환을 등록 채널에 출처와 함께 알리고, 한 채널 전송 실패가 다른 채널을 막지 않음");
             var latest = await store.LoadLatestPricesAsync();
-            Assert(latest is { Prices.Count: 6 } && latest.CollectedAtUtc == now && latest.Prices["해연의 숏소드ZZ"].MinPrice == 3000,
-                "/해연시세는 마지막 정각 수집의 시세 전체를 읽음");
+            Assert(latest is { Prices.Count: 6 } && latest.CollectedAtUtc == now && latest.Prices["해연의 숏소드ZZ"].MinPrice == 3000 &&
+                   latest.Prices["해연의 숏소드ZZ"].Category == "아이템" && !latest.Prices.ContainsKey("해연의 다른 장비"),
+                "/해연시세는 마지막 정각 수집의 시세 전체를 대분류와 함께 읽음");
             Assert(states["해연의 숏소드ZZ"].BaselinePrice == 3000 && crafts["해연의 숏소드ZZ"].Advantage == CraftAdvantage.Buy &&
-                   await store.CountHistoryAsync() == 12, "알림 뒤 과거시세·유불리 상태를 DB에 갱신하고 시간별 이력 누적");
+                   await store.CountLatestPricesAsync() == 6, "알림 뒤 과거시세·유불리 상태를 DB에 갱신하고, 시세는 마지막 회차만 남김(이력 누적 없음)");
 
             now = now.AddHours(1);
             source.FailKeyword = "영혼석";
@@ -261,15 +263,17 @@ internal static class HaeyeonMarketTests
 
             var restarted = new HaeyeonMarketStore(Path.Combine(directory, "database", "molly.sqlite"));
             await restarted.InitializeAsync();
-            Assert(await restarted.GetLatestCollectedAtAsync() is not null && (await restarted.LoadCraftStatesAsync()).Count == 2,
-                "재시작 후에도 DB의 시세·상태가 남아 있음");
+            Assert(await restarted.GetLatestCollectedAtAsync() is not null && (await restarted.LoadCraftStatesAsync()).Count == 2 &&
+                   (await restarted.LoadLatestPricesAsync())?.Prices["해연의 숏소드ZZ"].MinPrice == 3000,
+                "재시작 후에도 DB의 마지막 정상 시세·상태가 남아 있음(실패한 회차는 덮어쓰지 않음)");
 
-            // 보관 기간이 지난 이력은 다음 저장 때 정리
             source.FailKeyword = null;
-            now = now.Add(HaeyeonMarketRules.HistoryRetention).AddHours(2);
-            source.Set(("해연의 숏소드ZZ", 3000), ("해연의 페리도트 링ZZ", 1000), ("백금강괴", 100), ("특급 목재", 100), ("포식의 마력석", 100), ("망령의 영혼석", 10));
+            now = now.AddHours(2);
+            source.Set(("해연의 숏소드ZZ", 3000), ("해연의 페리도트 링ZZ", 1000), ("백금강괴", 100), ("특급 목재", 100), ("포식의 마력석", 100));
             await monitor.CollectAsync(default);
-            Assert(await store.CountHistoryAsync() == 6, "보관 기간(90일)이 지난 시간별 이력 삭제");
+            var shrunk = await store.LoadLatestPricesAsync();
+            Assert(await store.CountLatestPricesAsync() == 5 && !shrunk!.Prices.ContainsKey("망령의 영혼석"),
+                "검색에서 빠진 재료의 옛 시세는 마지막 시세에 남기지 않음");
 
             // 재시작: 같은 정각 구간 안이면 수집하지 않고, 마지막 수집 이후 정각이 지났으면 즉시 수집
             var last = (await store.GetLatestCollectedAtAsync())!.Value;
@@ -354,6 +358,12 @@ internal static class HaeyeonMarketTests
                         baseline_at_utc TEXT NOT NULL, current_price INTEGER NOT NULL, current_at_utc TEXT NOT NULL);
                     INSERT INTO haeyeon_monitor_channels VALUES (5, 50, '2026-09-24T03:00:00.0000000Z'), (6, 60, '2026-09-24T03:00:00.0000000Z');
                     INSERT INTO haeyeon_price_state VALUES ('해연의 숏소드ZZ', 1, 4321, '2026-09-24T03:00:00.0000000Z', 4400, '2026-09-24T04:00:00.0000000Z');
+                    CREATE TABLE haeyeon_price_history (collected_at_utc TEXT NOT NULL, item_name TEXT NOT NULL, kind_id INTEGER NOT NULL, is_product INTEGER NOT NULL,
+                        min_price INTEGER NOT NULL, total_count INTEGER NOT NULL, is_sold_out INTEGER NOT NULL, priced_at_utc TEXT NOT NULL, PRIMARY KEY (collected_at_utc, item_name));
+                    INSERT INTO haeyeon_price_history VALUES
+                        ('2026-09-24T03:00:00.0000000Z', '해연의 숏소드ZZ', 1, 1, 4321, 5, 0, '2026-09-24T03:00:00.0000000Z'),
+                        ('2026-09-24T03:00:00.0000000Z', '백금강괴', 2, 0, 100, 5, 0, '2026-09-24T03:00:00.0000000Z'),
+                        ('2026-09-24T04:00:00.0000000Z', '해연의 숏소드ZZ', 1, 1, 4400, 5, 0, '2026-09-24T04:00:00.0000000Z');
                     """;
                 await command.ExecuteNonQueryAsync();
             }
@@ -365,6 +375,10 @@ internal static class HaeyeonMarketTests
                    (await legacy.LoadPriceStatesAsync(6)).Count == 1 &&
                    (await legacy.GetChannelsAsync()).All(x => x.ProductChangePercent is null && x.Thresholds == HaeyeonThresholds.Default),
                 "이전 DB의 공용 과거시세를 등록 길드마다 옮기고, 저장된 등락률이 없으면 기본값 사용(재시작해도 다시 옮기지 않음)");
+            var legacyLatest = await legacy.LoadLatestPricesAsync();
+            Assert(legacyLatest is { Prices.Count: 1 } && legacyLatest.Prices["해연의 숏소드ZZ"].MinPrice == 4400 &&
+                   legacyLatest.CollectedAtUtc == new DateTimeOffset(2026, 9, 24, 4, 0, 0, TimeSpan.Zero) && await legacy.CountLatestPricesAsync() == 1,
+                "이전 DB의 시간별 이력에서 마지막 회차만 마지막 시세로 옮기고 이력 표는 지움(재시작해도 안전)");
         }
         finally
         {

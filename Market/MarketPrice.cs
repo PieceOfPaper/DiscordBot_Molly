@@ -1,7 +1,9 @@
 namespace Molly.Market;
 
 // 거래소 시세 도메인 모델. 기능은 이 인터페이스만 사용하고, 실제 공급 경로(현재 모비라이프 OpenAPI)는 구현체에서 교체합니다.
-public sealed record MarketPrice(long KindId, string Name, string Category, long MinPrice, long TotalCount, bool IsSoldOut, DateTimeOffset PricedAtUtc);
+// 변화량은 공급 경로가 계산해 준 값이며 없을 수 있습니다. 모두 퍼센트입니다(5.2 = +5.2%).
+public sealed record MarketPrice(long KindId, string Name, string Category, long MinPrice, long TotalCount, bool IsSoldOut, DateTimeOffset PricedAtUtc,
+    decimal? PriceChange1hPercent = null, decimal? PriceChange24hPercent = null, decimal? PriceChange7dPercent = null, decimal? CountChange24hPercent = null);
 
 // Prices가 null이면 실패이며, FailureMessage는 사용자에게 보여줄 수 있는 한국어 안내입니다.
 public sealed record MarketPriceSearchResult(IReadOnlyList<MarketPrice>? Prices, string? FailureMessage = null)
