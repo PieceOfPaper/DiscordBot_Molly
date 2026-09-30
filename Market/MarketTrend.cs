@@ -67,11 +67,6 @@ public static class MarketTrendEvaluator
     // 목록 한 줄 끝에 붙일 이모지. 판정하지 않으면 빈 문자열입니다.
     public static string Suffix(MarketPrice price) => Evaluate(price) is { } trend ? " · " + trend.Emoji : "";
 
-    // 판정이 없을 때(표시 없음) 변화 알림에서 쓰는 이모지.
-    public const string NoneEmoji = "➖";
-
-    public static string EmojiOf(MarketTrend? trend) => trend?.Emoji ?? NoneEmoji;
-
     // 목록 맨 아래에 붙이는 이모지 설명(Discord 작은 글씨).
     public static readonly IReadOnlyList<string> Legend =
     [
@@ -79,33 +74,9 @@ public static class MarketTrendEvaluator
         "-# 📉 하락 중 · ⏬ 하락 가능성 높음 · 🔽 하락 가능성 낮음",
     ];
 
-    public const string NoneLegend = "-# ➖ 방향 판단 어려움(표시 없음)";
-
-    // 보여준 시세 중 하나라도 변화 이모지가 붙었으면 목록 끝에 한 줄 띄우고 범례를 붙입니다.
+    // 보여준 시세 중 하나라도 변화 이모지가 붙었으면 목록 끝에 한 줄 띄우고 범례를 붙입니다. 조회 화면 전용이며 정각 알림은 확정 흐름(MarketTrendAlert)만 씁니다.
     public static IReadOnlyList<string> AppendLegend(IReadOnlyList<string> lines, IEnumerable<MarketPrice> shownPrices) =>
-        AppendLegend(lines, shownPrices.Any(x => Evaluate(x) is not null), includeNone: false);
-
-    public static IReadOnlyList<string> AppendLegend(IReadOnlyList<string> lines, bool hasTrend, bool includeNone) =>
-        !hasTrend && !includeNone ? lines : [.. lines, "", .. Legend, .. includeNone ? new[] { NoneLegend } : []];
-
-    /// <summary>
-    /// 직전 회차 시세와 이번 회차 시세의 판정(이모지)이 바뀐 아이템을 찾습니다. 표시 없음으로 바뀌거나 표시 없음에서 생겨도 알립니다.
-    /// 직전 회차에 없던 아이템(첫 수집·새 아이템)은 비교할 대상이 없어 알리지 않습니다.
-    /// </summary>
-    public static IReadOnlyList<MarketTrendChangeAlert> EvaluateChanges<TKey>(
-        IEnumerable<MarketPrice> current, IReadOnlyDictionary<TKey, MarketPrice>? previous, Func<MarketPrice, TKey> key) where TKey : notnull
-    {
-        if (previous is null) return [];
-        var alerts = new List<MarketTrendChangeAlert>();
-        foreach (var price in current)
-        {
-            if (!previous.TryGetValue(key(price), out var last)) continue;
-            var before = Evaluate(last);
-            var after = Evaluate(price);
-            if (before != after) alerts.Add(new MarketTrendChangeAlert(price, before, after));
-        }
-        return alerts;
-    }
+        shownPrices.Any(x => Evaluate(x) is not null) ? [.. lines, "", .. Legend] : lines;
 
     private static MarketTrendDirection? DirectionOf(decimal? percent) => percent switch
     {
@@ -114,11 +85,4 @@ public static class MarketTrendEvaluator
         <= -MarketTrendRules.MinPriceChangePercent => MarketTrendDirection.Down,
         _ => null,
     };
-}
-
-/// <summary>상승·하락 판정(이모지)이 바뀐 아이템. null은 표시 없음입니다.</summary>
-public sealed record MarketTrendChangeAlert(MarketPrice Price, MarketTrend? Previous, MarketTrend? Current)
-{
-    public string Name => Price.Name;
-    public string ChangeText => $"{MarketTrendEvaluator.EmojiOf(Previous)} → {MarketTrendEvaluator.EmojiOf(Current)}";
 }

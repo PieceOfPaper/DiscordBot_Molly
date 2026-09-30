@@ -172,7 +172,8 @@ internal static class KeywordMarketTests
                KeywordMarketMessages.BuildTestEvaluation([P(1, "A 상자", 1000)], new Random(1)) is { NewItems.Count: 1, RemovedItems.Count: 0 },
             "저장 시세가 없으면 테스트 알림을 만들지 않고, 아이템이 적으면 가능한 알림만 표시");
         var testEmbeds = KeywordMarketMessages.BuildAlertEmbeds(definition, KeywordMarketMessages.BuildTestEvaluation(prices, new Random(2))!, s_Now, "모비라이프 제공", "[테스트] ");
-        Assert(testEmbeds[0].Title.StartsWith("[테스트] 📦 상자 시세 알림"), "테스트 알림은 제목에 [테스트]를 붙임");
+        Assert(testEmbeds[0].Title.StartsWith("[테스트] 📦 상자 시세 알림") && testEmbeds[0].Description.Contains("**🔀 상승·하락 흐름**"),
+            "테스트 알림은 제목에 [테스트]를 붙이고 확정 흐름 예시 한 줄 포함");
     }
 
     private static async Task MonitorTestsAsync()
@@ -220,6 +221,7 @@ internal static class KeywordMarketTests
             Assert(third.Success && sender.Sent.Count == 2 && sender.Sent[1].Embeds[0].Description.Contains("👋 빛나는 상자 · 마지막 시세 500") &&
                    states.Keys.Order().SequenceEqual([1L, 3L]) && (await boxStore.LoadBaselinesAsync(1))[1].Price == 800,
                 "2회 연속 검색되지 않은 아이템을 사라짐으로 알리고 DB 상태에서 제거");
+            Assert((await boxStore.LoadTrendAlertStatesAsync()).Keys.Order().SequenceEqual(["1", "3"]), "사라짐으로 추적에서 빠진 아이템의 추세 알림 상태도 지움");
             var latest = await boxStore.LoadLatestPricesAsync();
             Assert(latest is { Prices.Count: 2 } && latest.CollectedAtUtc == now && await boxStore.CountLatestPricesAsync() == 2 &&
                    latest.Prices.Select(x => x.Name).SequenceEqual(["보물 상자", "신규 상자"]),
@@ -256,15 +258,33 @@ internal static class KeywordMarketTests
             source.Changes = (-1.5m, -3.25m, 12m, 4m);
             var sentBeforeTrend = sender.Sent.Count;
             await monitor.CollectAsync(default);
-            source.Changes = null;
-            var trendMessage = sender.Sent.Last().Embeds[0].Description;
-            Assert(sender.Sent.Count == sentBeforeTrend + 1 && trendMessage.Contains("**🔀 상승·하락 변화**") &&
-                   trendMessage.Contains("보물 상자 · 800 · ➖ → 📉⏬") && !trendMessage.Contains("신규 상자 · 300 · ➖") &&
-                   trendMessage.Contains(MarketTrendEvaluator.Legend[0]) && trendMessage.Contains(MarketTrendEvaluator.NoneLegend),
-                "직전 회차와 판정이 바뀐 아이템을 상승·하락 변화로 알리고(표시 없음 → 판정 포함), 직전 회차에 없던 아이템은 비교하지 않음. 이모지 설명을 붙임");
             var withChanges = (await boxStore.LoadLatestPricesAsync())!.Prices.Single(x => x.KindId == 1);
             Assert(withChanges is { PriceChange1hPercent: -1.5m, PriceChange24hPercent: -3.25m, PriceChange7dPercent: 12m, CountChange24hPercent: 4m },
                 "변화량(퍼센트·매물 증감)을 마지막 시세에 저장하고 다시 읽음");
+
+            // 추세 알림: 하락이 3회 연속 확인될 때만 알리고, 같은 회차 재시도는 한 번만 셈
+            now = now.AddHours(1);
+            await monitor.CollectAsync(default);
+            now = now.AddMinutes(10);
+            await monitor.CollectAsync(default);
+            now = now.AddMinutes(-10);
+            Assert(sender.Sent.Count == sentBeforeTrend && (await boxStore.LoadTrendAlertStatesAsync())["1"] is { Candidate: MarketTrendFlow.Down, CandidateCount: 2 },
+                "하락 2회까지는 추세 알림을 보내지 않고, 같은 정각의 재시도 성공은 연속 횟수를 한 번만 올림");
+            now = now.AddHours(1);
+            await monitor.CollectAsync(default);
+            var trendMessage = sender.Sent.Last().Embeds[0].Description;
+            Assert(sender.Sent.Count == sentBeforeTrend + 1 && trendMessage.Contains("**🔀 상승·하락 흐름**") &&
+                   trendMessage.Contains("📉 보물 상자 · 800 · 하락 흐름") && trendMessage.Contains("📉 신규 상자 · 300 · 하락 흐름") &&
+                   !trendMessage.Contains("⏬") && await boxStore.CountLatestPricesAsync() == 2,
+                "같은 하락이 정각 3회 연속 확인되면 확정 흐름으로 알리고, 알림 안정화를 위해 최근 시세를 따로 쌓지 않음");
+
+            var restartedMonitor = new KeywordMarketMonitor(KeywordMarketRules.Box, source, new KeywordMarketStore(KeywordMarketRules.Box.Id, databasePath), sender, () => now, _ => { });
+            await restartedMonitor.Store.InitializeAsync();
+            now = now.AddHours(1);
+            await restartedMonitor.CollectAsync(default);
+            Assert(sender.Sent.Count == sentBeforeTrend + 1 && (await boxStore.LoadTrendAlertStatesAsync())["1"] is { Confirmed: MarketTrendFlow.Down, LastAlerted: MarketTrendFlow.Down },
+                "봇 재시작 뒤에도 확정·마지막 알림 상태가 이어져 같은 하락을 다시 알리지 않음");
+            source.Changes = null;
 
             // 재시작: 같은 정각 구간 안이면 수집하지 않고, 마지막 수집 이후 정각이 지났으면 즉시 수집
             var last = (await boxStore.GetLatestCollectedAtAsync())!.Value;

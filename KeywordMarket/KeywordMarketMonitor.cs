@@ -45,6 +45,9 @@ public sealed class KeywordMarketMonitor
     public KeywordMarketStore Store { get; }
     public string Attribution => m_Source.Attribution;
 
+    // 추세 알림 상태 표의 아이템 키. 상자·패키지는 거래소 kind_id로 구분합니다.
+    public static string TrendKey(MarketPrice price) => price.KindId.ToString(CultureInfo.InvariantCulture);
+
     /// <summary>
     /// 시작 시 DB에 시세가 없거나 직전 정각 수집을 놓쳤으면 즉시 수집하고, 이후 매 정각(KST·UTC 모두 정시)에 수집합니다.
     /// 회차가 실패하면 10분 간격으로 최대 3번 다시 시도합니다(MarketSchedule).
@@ -112,10 +115,13 @@ public sealed class KeywordMarketMonitor
 
         var lastPrices = await Store.LoadLatestPricesAsync(ct).ConfigureAwait(false);
         var isFirstRun = lastPrices is null;
-        // 상승·하락 판정 변화는 직전 회차 마지막 시세와 비교하며 모든 길드가 같이 씁니다.
-        var trendAlerts = MarketTrendEvaluator.EvaluateChanges(prices.DistinctBy(x => x.KindId),
-            lastPrices?.Prices.DistinctBy(x => x.KindId).ToDictionary(x => x.KindId), x => x.KindId);
         var items = KeywordMarketEvaluator.EvaluateItems(prices, previous, isFirstRun, canDetectRemoval: !search.IsTruncated, collectedAt);
+        // 상승·하락 흐름은 정각 회차마다 한 번 세어 3회 연속 확인될 때만 알리며 모든 길드가 같이 씁니다.
+        // 사라짐으로 추적에서 빠진 아이템의 상태는 버리고, 이번 응답에만 없는 아이템은 이전 상태를 둡니다(다시 나타나면 1회부터).
+        var trend = MarketTrendAlertEvaluator.Evaluate(prices.DistinctBy(x => x.KindId), await Store.LoadTrendAlertStatesAsync(ct).ConfigureAwait(false),
+            TrendKey, MarketSchedule.HourOf(collectedAt));
+        var trendAlerts = trend.Alerts;
+        var trackedKeys = items.States.Keys.Select(x => x.ToString(CultureInfo.InvariantCulture)).ToHashSet(StringComparer.Ordinal);
 
         var previousByGuild = await Store.LoadAllBaselinesAsync(ct).ConfigureAwait(false);
         var guildBaselines = new Dictionary<ulong, IReadOnlyDictionary<long, KeywordBaseline>>();
@@ -137,10 +143,11 @@ public sealed class KeywordMarketMonitor
             catch (Exception ex) { m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}"); }
         }
 
-        await Store.SaveRunAsync(collectedAt, prices, items.States.Values, guildBaselines, ct).ConfigureAwait(false);
+        await Store.SaveRunAsync(collectedAt, prices, items.States.Values, guildBaselines,
+            trend.States.Values.Where(x => trackedKeys.Contains(x.ItemKey)), ct).ConfigureAwait(false);
         return new KeywordRunResult(true,
             $"수집 완료: 시세 {prices.Count}개{(isFirstRun ? "(첫 수집, 기준으로 저장)" : "")}, 변동 알림 {priceAlerts}건(길드 합계), " +
-            $"신규 {items.NewItems.Count}건, 사라짐 {items.RemovedItems.Count}건, 상승·하락 변화 {trendAlerts.Count}건, 전송 채널 {sent}곳");
+            $"신규 {items.NewItems.Count}건, 사라짐 {items.RemovedItems.Count}건, 상승·하락 흐름 {trendAlerts.Count}건, 전송 채널 {sent}곳");
     }
 }
 
@@ -156,7 +163,7 @@ public static class KeywordMarketMessages
         {
             lines.Add("**🆕 새로 올라온 아이템**");
             foreach (var item in evaluation.NewItems.OrderBy(x => x.Price.Name, StringComparer.Ordinal))
-                lines.Add($"🆕 {item.Price.Name} · {PriceText(item.Price)}{MarketTrendEvaluator.Suffix(item.Price)}");
+                lines.Add($"🆕 {item.Price.Name} · {PriceText(item.Price)}");
         }
         if (evaluation.RemovedItems.Count > 0)
         {
@@ -172,23 +179,20 @@ public static class KeywordMarketMessages
             foreach (var alert in evaluation.PriceAlerts.OrderByDescending(x => Math.Abs(x.ChangeRate)))
             {
                 var icon = alert.ChangeRate > 0 ? "📈" : "📉";
-                lines.Add($"{icon} {alert.Name} {Price(alert.BaselinePrice)} → {Price(alert.CurrentPrice)} ({Percent(alert.ChangeRate)})" +
-                    (alert.Trend is { } trend ? " · " + trend.Emoji : ""));
+                lines.Add($"{icon} {alert.Name} {Price(alert.BaselinePrice)} → {Price(alert.CurrentPrice)} ({Percent(alert.ChangeRate)})");
             }
         }
         if (evaluation.TrendAlerts.Count > 0)
         {
             if (lines.Count > 0) lines.Add("");
-            lines.Add("**🔀 상승·하락 변화**");
+            lines.Add(MarketTrendAlertEvaluator.SectionTitle);
             foreach (var alert in evaluation.TrendAlerts.OrderBy(x => x.Name, StringComparer.Ordinal))
-                lines.Add($"{alert.Name} · {Price(alert.Price.MinPrice)} · {alert.ChangeText}");
+                lines.Add(MarketTrendAlertEvaluator.Line(alert, Price));
+            lines.Add(MarketTrendAlertEvaluator.SectionNote);
         }
 
-        var hasTrend = evaluation.PriceAlerts.Any(x => x.Trend is not null) || evaluation.TrendAlerts.Count > 0 ||
-                       evaluation.NewItems.Any(x => MarketTrendEvaluator.Evaluate(x.Price) is not null);
-        var hasNone = evaluation.TrendAlerts.Any(x => x.Previous is null || x.Current is null);
         var title = $"{titlePrefix}{definition.Emoji} {definition.DisplayName} 시세 알림 · {Kst(collectedAtUtc)} 기준";
-        return BuildEmbeds(definition, title, MarketTrendEvaluator.AppendLegend(lines, hasTrend, hasNone), attribution, collectedAtUtc);
+        return BuildEmbeds(definition, title, lines, attribution, collectedAtUtc);
     }
 
     public static string Footer(KeywordMarketDefinition definition, string attribution) => $"몰리 • {definition.DisplayName} 시세 모니터링 • 데이터: {attribution}";
@@ -252,10 +256,10 @@ public static class KeywordMarketMessages
         foreach (var price in shuffled.Where(x => !x.IsSoldOut && x.MinPrice > 0).Take(random.Next(1, 3)))
         {
             // 기준값보다 0~10%p 더 큰 가상 변동률로 과거시세를 역산합니다.
-            priceAlerts.Add(new KeywordPriceChangeAlert(price.Name, TestBaseline.Create(price.MinPrice, threshold ?? KeywordMarketRules.ChangeThreshold, random), price.MinPrice)
-                { Trend = MarketTrendEvaluator.Evaluate(price) });
+            priceAlerts.Add(new KeywordPriceChangeAlert(price.Name, TestBaseline.Create(price.MinPrice, threshold ?? KeywordMarketRules.ChangeThreshold, random), price.MinPrice));
         }
         return new KeywordEvaluation(priceAlerts, [new KeywordNewItemAlert(newItem)],
-            removedItem is null ? [] : [new KeywordRemovedItemAlert(removedItem.Name, removedItem.IsSoldOut ? 0 : removedItem.MinPrice)]);
+            removedItem is null ? [] : [new KeywordRemovedItemAlert(removedItem.Name, removedItem.IsSoldOut ? 0 : removedItem.MinPrice)])
+            { TrendAlerts = MarketTrendAlertEvaluator.BuildTestAlerts(prices, random) };
     }
 }

@@ -14,9 +14,6 @@ public sealed record KeywordBaseline(long KindId, long Price, DateTimeOffset AtU
 public sealed record KeywordPriceChangeAlert(string Name, long BaselinePrice, long CurrentPrice)
 {
     public decimal ChangeRate => (decimal)(CurrentPrice - BaselinePrice) / BaselinePrice;
-
-    // 현재 시세의 상승·하락 판정. 알림 줄 끝에 이모지로 붙입니다(없으면 붙이지 않음).
-    public MarketTrend? Trend { get; init; }
 }
 
 public sealed record KeywordNewItemAlert(MarketPrice Price);
@@ -39,8 +36,8 @@ public sealed record KeywordEvaluation(
     IReadOnlyList<KeywordNewItemAlert> NewItems,
     IReadOnlyList<KeywordRemovedItemAlert> RemovedItems)
 {
-    // 상승·하락 판정이 바뀐 아이템(모든 서버 공용).
-    public IReadOnlyList<MarketTrendChangeAlert> TrendAlerts { get; init; } = [];
+    // 3회 연속 확인되어 확정된 상승·하락 흐름(모든 서버 공용).
+    public IReadOnlyList<MarketTrendFlowAlert> TrendAlerts { get; init; } = [];
 
     public bool HasAlerts => PriceAlerts.Count > 0 || NewItems.Count > 0 || RemovedItems.Count > 0 || TrendAlerts.Count > 0;
 }
@@ -128,7 +125,7 @@ public static class KeywordMarketEvaluator
                 }
             }
 
-            var alert = new KeywordPriceChangeAlert(price.Name, baseline.Price, current) { Trend = MarketTrendEvaluator.Evaluate(price) };
+            var alert = new KeywordPriceChangeAlert(price.Name, baseline.Price, current);
             if (Math.Abs(alert.ChangeRate) >= threshold)
             {
                 alerts.Add(alert);

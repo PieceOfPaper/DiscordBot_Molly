@@ -85,6 +85,7 @@ public sealed class KeywordMarketStore
                     PRIMARY KEY (monitor, guild_id, kind_id)
                 );
                 """, ct).ConfigureAwait(false);
+            await MarketTrendAlertTable.CreateAsync(connection, transaction, ct).ConfigureAwait(false);
             // 등락률 열은 나중에 추가되어 이전 DB에는 없습니다. 값이 없으면(NULL) 기본값을 씁니다.
             await MollySqliteSchema.AddColumnIfMissingAsync(connection, transaction, "keyword_market_channels", "change_percent", "INTEGER", ct).ConfigureAwait(false);
             // 이전에는 과거시세를 모든 길드가 함께 썼습니다(keyword_market_item_state.baseline_price).
@@ -268,12 +269,25 @@ public sealed class KeywordMarketStore
         finally { m_Gate.Release(); }
     }
 
+    // 아이템(kind_id 문자열)별 추세 알림 확인 상태(3회 연속 확인·중복 알림 방지).
+    public async Task<IReadOnlyDictionary<string, MarketTrendAlertState>> LoadTrendAlertStatesAsync(CancellationToken ct = default)
+    {
+        await m_Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+            return await MarketTrendAlertTable.LoadAsync(connection, m_Monitor, ct).ConfigureAwait(false);
+        }
+        finally { m_Gate.Release(); }
+    }
+
     /// <summary>
     /// 한 회차의 시세와 새 상태를 한 트랜잭션으로 저장합니다. 마지막 시세는 이번 회차 시세로 통째로 바꾸고, states에 없는 아이템(사라짐)은 상태에서 지웁니다.
-    /// 길드별 과거시세는 넘겨받은 길드만 통째로 바꾸며, 판정 중 등록이 해제된 길드는 저장하지 않습니다.
+    /// 길드별 과거시세는 넘겨받은 길드만 통째로 바꾸며, 판정 중 등록이 해제된 길드는 저장하지 않습니다. 추세 알림 상태도 넘겨받은 것으로 통째로 바꿉니다.
     /// </summary>
     public async Task SaveRunAsync(DateTimeOffset collectedAtUtc, IEnumerable<MarketPrice> prices, IEnumerable<KeywordItemState> states,
-        IReadOnlyDictionary<ulong, IReadOnlyDictionary<long, KeywordBaseline>> guildBaselines, CancellationToken ct = default)
+        IReadOnlyDictionary<ulong, IReadOnlyDictionary<long, KeywordBaseline>> guildBaselines, IEnumerable<MarketTrendAlertState> trendStates,
+        CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -323,6 +337,7 @@ public sealed class KeywordMarketStore
                         ("$guildId", checked((long)guildId)), ("$kindId", baseline.KindId), ("$price", baseline.Price), ("$at", Format(baseline.AtUtc))).ConfigureAwait(false);
                 }
             }
+            await MarketTrendAlertTable.ReplaceAsync(connection, transaction, m_Monitor, trendStates, ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
         finally { m_Gate.Release(); }

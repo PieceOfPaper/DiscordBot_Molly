@@ -9,6 +9,13 @@ public static class MarketSchedule
         return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero).AddHours(1);
     }
 
+    // 수집 시각이 속한 정각 회차. 10분 간격 재시도(예: 10:10)나 늦은 시작 직후 수집(13:03)도 해당 정각(10:00·13:00) 회차로 봅니다.
+    public static DateTimeOffset HourOf(DateTimeOffset utc)
+    {
+        utc = utc.ToUniversalTime();
+        return new DateTimeOffset(utc.Year, utc.Month, utc.Day, utc.Hour, 0, 0, TimeSpan.Zero);
+    }
+
     /// <summary>
     /// 시작 시 즉시 수집이 필요한지 판단합니다. 저장된 시세가 없거나, 마지막 수집이 가장 최근 정각보다 이전이면
     /// (예: 13:03 시작, 마지막 수집 12:57 → 13:00 수집을 놓침) 즉시 수집합니다.

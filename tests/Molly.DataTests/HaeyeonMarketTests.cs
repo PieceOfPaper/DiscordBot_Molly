@@ -203,8 +203,9 @@ internal static class HaeyeonMarketTests
         Assert(HaeyeonMarketReport.BuildTestEvaluation(recipes, new Dictionary<string, MarketPrice>(), new Random(1)) is null,
             "저장 시세가 없으면 테스트 알림을 만들지 않음");
         var testEmbeds = HaeyeonMarketMessages.BuildAlertEmbeds(HaeyeonMarketReport.BuildTestEvaluation(recipes, prices, new Random(3))!, s_Now, "모비라이프 제공", "[테스트] ");
-        Assert(testEmbeds[0].Title.StartsWith("[테스트] 💹 해연 시세 알림") && testEmbeds[0].Footer!.Value.Text.Contains("모비라이프 제공"),
-            "테스트 알림은 제목에 [테스트]를 붙이고 출처 표기");
+        Assert(testEmbeds[0].Title.StartsWith("[테스트] 💹 해연 시세 알림") && testEmbeds[0].Footer!.Value.Text.Contains("모비라이프 제공") &&
+               testEmbeds[0].Description.Contains("**🔀 상승·하락 흐름**"),
+            "테스트 알림은 제목에 [테스트]를 붙이고 출처 표기, 확정 흐름 예시 한 줄 포함");
     }
 
     private static async Task MonitorTestsAsync()
@@ -245,7 +246,7 @@ internal static class HaeyeonMarketTests
                    sender.Sent[0].Embeds[0].Description.Contains("해연의 숏소드ZZ 4,000 → 3,000 (-25.0%)") &&
                    sender.Sent[0].Embeds[0].Description.Contains("완제품을 사는") &&
                    sender.Sent[0].Embeds[0].Footer!.Value.Text.Contains("모비라이프 제공") &&
-                   !sender.Sent[0].Embeds[0].Description.Contains("상승·하락 변화"),
+                   !sender.Sent[0].Embeds[0].Description.Contains("상승·하락 흐름"),
                 "변동·유불리 전환을 등록 채널에 출처와 함께 알리고, 한 채널 전송 실패가 다른 채널을 막지 않음");
             var latest = await store.LoadLatestPricesAsync();
             Assert(latest is { Prices.Count: 6 } && latest.CollectedAtUtc == now && latest.Prices["해연의 숏소드ZZ"].MinPrice == 3000 &&

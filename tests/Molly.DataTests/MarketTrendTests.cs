@@ -28,42 +28,28 @@ internal static class MarketTrendTests
         Assert(MarketTrendEvaluator.Evaluate(P(-2, -5, 10))!.Reason == "가격은 내리고 매물은 늘고 있어요." &&
                MarketTrendEvaluator.Evaluate(P(2, 5, 10))!.Reason == "가격은 오르고 있지만 매물도 늘고 있어요.", "판정 이유 문장");
 
-        // 판정 변화 알림: 이모지가 바뀌면 표시 없음으로의 전환까지 모두 알림
-        var previous = new Dictionary<long, MarketPrice>
-        {
-            [1] = P(-2, -5, 10) with { KindId = 1, Name = "가" },
-            [2] = P(-2, -5, 10) with { KindId = 2, Name = "나" },
-            [3] = P(0, 0, 0) with { KindId = 3, Name = "다" },
-            [4] = P(2, 5, 10) with { KindId = 4, Name = "라" },
-            [5] = P(-2, -5, 10) with { KindId = 5, Name = "마" },
-        };
-        var changes = MarketTrendEvaluator.EvaluateChanges(
-        [
-            P(-2, -5, -10) with { KindId = 1, Name = "가" },  // 📉⏬ → 📉🔽 가능성 변화
-            P(0, 0, 0) with { KindId = 2, Name = "나" },      // 📉⏬ → ➖ 판정 사라짐
-            P(2, 5, -10) with { KindId = 3, Name = "다" },    // ➖ → 📈⏫ 판정 생김
-            P(-2, -5, 10) with { KindId = 4, Name = "라" },   // 📈🔼 → 📉⏬ 방향 변화
-            P(-3, -9, 50) with { KindId = 5, Name = "마" },   // 📉⏬ 그대로(수치만 다름)
-            P(-2, -5, 10) with { KindId = 6, Name = "바" },   // 직전 회차에 없음
-        ], previous, x => x.KindId);
-        Assert(changes.Select(x => $"{x.Name} {x.ChangeText}").SequenceEqual(["가 📉⏬ → 📉🔽", "나 📉⏬ → ➖", "다 ➖ → 📈⏫", "라 📈🔼 → 📉⏬"]),
-            "상승·하락·가능성 이모지가 바뀌면 표시 없음으로의 전환까지 모두 알리고, 같은 이모지나 직전 회차에 없던 아이템은 알리지 않음");
-        Assert(MarketTrendEvaluator.EvaluateChanges([P(-2, -5, 10)], (IReadOnlyDictionary<long, MarketPrice>?)null, x => x.KindId).Count == 0,
-            "직전 회차 시세가 없으면(첫 수집) 판정 변화를 알리지 않음");
+        StepTests();
 
-        // 해연 알림 메시지: 시세 변동 줄 끝 이모지, 상승·하락 변화 구역, 범례
+        // 해연 알림 메시지: 시세 변동 줄에는 즉시 판정 이모지를 붙이지 않고, 확정 흐름 구역만 안내
         var haeyeon = new HaeyeonEvaluation(
-            [new PriceChangeAlert("해연의 숏소드ZZ", true, 1000, 800) { Trend = MarketTrendEvaluator.Evaluate(P(-2, -5, 10)) }], [],
+            [new PriceChangeAlert("해연의 숏소드ZZ", true, 1000, 800)], [],
             new Dictionary<string, ItemPriceState>(), new Dictionary<string, CraftState>(), [], [])
-            { TrendAlerts = [new MarketTrendChangeAlert(P(2, 5, -10) with { Name = "백금강괴", MinPrice = 120 }, null, MarketTrendEvaluator.Evaluate(P(2, 5, -10)))] };
+            {
+                TrendAlerts =
+                [
+                    new MarketTrendFlowAlert(P(2, 5, -10) with { Name = "백금강괴", MinPrice = 120 }, MarketTrendFlow.None, MarketTrendFlow.Up),
+                    new MarketTrendFlowAlert(P(2, 5, -10) with { Name = "특급 목재", MinPrice = 90 }, MarketTrendFlow.Up, MarketTrendFlow.Down),
+                ],
+            };
         var haeyeonText = HaeyeonMarketMessages.BuildAlertEmbeds(haeyeon, s_Now, "모비라이프 제공")[0].Description;
-        Assert(haeyeon.HasAlerts && haeyeonText.Contains("해연의 숏소드ZZ 1,000 → 800 (-20.0%) · 📉⏬") &&
-               haeyeonText.Contains("**🔀 상승·하락 변화**\n백금강괴 · 120 · ➖ → 📈⏫") && haeyeonText.EndsWith(MarketTrendEvaluator.NoneLegend),
-            "해연 알림에 시세 변동의 상승·하락 이모지와 판정 변화 구역, 이모지 설명을 붙임");
+        Assert(haeyeon.HasAlerts && haeyeonText.Contains("해연의 숏소드ZZ 1,000 → 800 (-20.0%)\n") &&
+               haeyeonText.Contains("**🔀 상승·하락 흐름**\n📈 백금강괴 · 120 · 상승 흐름\n📉 특급 목재 · 90 · 상승 → 하락 흐름") &&
+               haeyeonText.EndsWith(MarketTrendAlertEvaluator.SectionNote) && !haeyeonText.Contains("⏫") && !haeyeonText.Contains(MarketTrendEvaluator.Legend[0]),
+            "해연 알림은 시세 변동 줄에 가능성 이모지·범례를 붙이지 않고, 확정된 흐름만 새 흐름·방향 전환으로 안내");
         var plain = new HaeyeonEvaluation([new PriceChangeAlert("해연의 숏소드ZZ", true, 1000, 800)], [],
             new Dictionary<string, ItemPriceState>(), new Dictionary<string, CraftState>(), [], []);
         Assert(!HaeyeonMarketMessages.BuildAlertEmbeds(plain, s_Now, "모비라이프 제공")[0].Description.Contains("-# "),
-            "이모지가 없는 알림에는 설명을 붙이지 않음");
+            "확정 흐름이 없는 알림에는 안내 문구를 붙이지 않음");
 
         // 조회 화면 적용
         var lines = KeywordMarketMessages.BuildPriceLines([P(-2, -5, 10) with { Name = "하락 상자" }, P(0, 0, 0) with { KindId = 2, Name = "보합 상자" }]);
@@ -83,6 +69,71 @@ internal static class MarketTrendTests
         Assert(HaeyeonMarketReport.BuildLines(HaeyeonPriceView.Weapons, recipes, prices).SequenceEqual(["해연의 숏소드ZZ · **1,000** (매물 100개) · 📈⏫", "", .. MarketTrendEvaluator.Legend]) &&
                HaeyeonMarketReport.BuildLines(HaeyeonPriceView.Materials, recipes, prices).Last() == "백금강괴 · **100** (매물 100개)",
             "/해연시세 아이템·재료 목록에 같은 판정기로 변화 이모지를 붙이고, 이모지가 없는 목록에는 범례를 붙이지 않음");
+    }
+
+    // 추세 알림 연속 확인(3회) 규칙. 정각 회차마다 방향만 비교합니다.
+    private static void StepTests()
+    {
+        var hour = new DateTimeOffset(2026, 9, 30, 1, 0, 0, TimeSpan.Zero);
+        MarketTrendAlertState? state = null;
+        var alerts = new List<string>();
+        // flows를 정각마다 차례로 넣고, 알림이 나간 회차를 "시:이전→현재"로 모읍니다.
+        void Run(params MarketTrendFlow[] flows)
+        {
+            foreach (var flow in flows)
+            {
+                state = MarketTrendAlertEvaluator.Step(state, "가", flow, hour, out var from);
+                if (from is { } f) alerts.Add($"{hour.Hour}:{f}→{state.Confirmed}");
+                hour = hour.AddHours(1);
+            }
+        }
+        const MarketTrendFlow Up = MarketTrendFlow.Up, Down = MarketTrendFlow.Down, None = MarketTrendFlow.None;
+
+        Run(Down, Down);
+        Assert(alerts.Count == 0 && state is { Candidate: Down, CandidateCount: 2, Confirmed: None }, "상승·하락이 3회 연속 확인되기 전에는 추세 알림을 보내지 않음");
+        Run(Down);
+        Assert(alerts.SequenceEqual(["3:None→Down"]) && state is { CandidateCount: 3, Confirmed: Down, LastAlerted: Down }, "같은 방향 3회 연속이면 확정하고 한 번 알림");
+        Run(Down, Down);
+        Assert(alerts.Count == 1 && state!.CandidateCount == 3, "이미 확정된 방향이 이어지면 다시 알리지 않고 횟수는 3에서 멈춤");
+        Run(None, Down, None, None, Down);
+        Assert(alerts.Count == 1 && state is { Confirmed: Down, Candidate: Down, CandidateCount: 1 }, "표시 없음 1~2회는 확정 방향을 해제하지 않고, 표시 없음이 생기거나 사라져도 알리지 않음");
+        Run(Up, Up);
+        Assert(alerts.Count == 1 && state!.Confirmed == Down, "반대 방향 2회까지는 확정 방향을 유지");
+        Run(Up);
+        Assert(alerts.Last() == "13:Down→Up" && state!.Confirmed == Up, "반대 방향이 3회 연속이면 방향 전환 알림");
+        Run(None, None, None);
+        Assert(alerts.Count == 2 && state is { Confirmed: None, LastAlerted: None, Candidate: None, CandidateCount: 3 }, "표시 없음 3회 연속이면 알림 없이 확정 방향만 해제");
+        Run(Up, Up, Up);
+        Assert(alerts.Last() == "19:None→Up", "해제 뒤 같은 방향이 다시 3회 확인되면 새 흐름으로 알림");
+
+        // 가능성 단계는 연속 횟수에 영향을 주지 않음: 📉⏬ → 📉🔽 → 📉⏬
+        var prices = new[] { P(-2, -5, 10), P(-2, -5, -10), P(-2, -5, 10) };
+        var states = (IReadOnlyDictionary<string, MarketTrendAlertState>)new Dictionary<string, MarketTrendAlertState>();
+        var flowAlerts = new List<MarketTrendFlowAlert>();
+        var at = s_Now;
+        foreach (var price in prices)
+        {
+            var result = MarketTrendAlertEvaluator.Evaluate([price], states, x => x.Name, at);
+            flowAlerts.AddRange(result.Alerts);
+            states = result.States;
+            at = at.AddHours(1);
+        }
+        Assert(flowAlerts.Single() is { Previous: None, Current: Down } && flowAlerts[0].Price == prices[2],
+            "가능성 높음·낮음만 바뀌어도 같은 방향으로 세고, 가능성 변화만으로는 알리지 않음");
+
+        // 회차 연속성
+        var two = new MarketTrendAlertState("가", Down, 2, s_Now, None, None);
+        var retried = MarketTrendAlertEvaluator.Step(two, "가", Down, MarketSchedule.HourOf(s_Now.AddMinutes(10)), out var retryAlert);
+        Assert(retried == two && retryAlert is null, "같은 정각 회차의 재시도 성공은 연속 횟수를 올리지 않음(한 회차에 한 번)");
+        Assert(MarketTrendAlertEvaluator.Step(two, "가", Down, s_Now.AddHours(-1), out _) == two, "이미 평가한 회차보다 이전 회차는 상태를 바꾸지 않음");
+        var skipped = MarketTrendAlertEvaluator.Step(two, "가", Down, s_Now.AddHours(2), out var skippedAlert);
+        Assert(skipped is { CandidateCount: 1 } && skippedAlert is null, "정각 성공 회차가 빠지면 다음 성공 회차는 후보 1회부터 다시 시작");
+        Assert(MarketSchedule.HourOf(new DateTimeOffset(2026, 9, 30, 13, 3, 0, TimeSpan.FromHours(9))) == new DateTimeOffset(2026, 9, 30, 4, 0, 0, TimeSpan.Zero),
+            "수집 시각은 해당 정각 회차로 봄(13:03 KST 수집 → 13:00 회차)");
+
+        var kept = MarketTrendAlertEvaluator.Evaluate([P(-2, -5, 10) with { Name = "나" }],
+            new Dictionary<string, MarketTrendAlertState> { ["가"] = two }, x => x.Name, s_Now.AddHours(1));
+        Assert(kept.States["가"] == two && kept.States["나"].CandidateCount == 1, "이번 응답에 없는 아이템은 이전 상태를 그대로 둠");
     }
 
     private static void Assert(bool condition, string name)

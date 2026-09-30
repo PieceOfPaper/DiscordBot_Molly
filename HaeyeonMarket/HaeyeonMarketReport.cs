@@ -162,8 +162,7 @@ public static class HaeyeonMarketReport
             foreach (var (name, isProduct, current) in Pick(priceCandidates, random))
             {
                 // 기준값보다 0~10%p 더 큰 가상 변동률로 과거시세를 역산합니다.
-                priceAlerts.Add(new PriceChangeAlert(name, isProduct, TestBaseline.Create(current, thresholds.For(isProduct), random), current)
-                    { Trend = MarketTrendEvaluator.Evaluate(prices[name]) });
+                priceAlerts.Add(new PriceChangeAlert(name, isProduct, TestBaseline.Create(current, thresholds.For(isProduct), random), current));
             }
         }
         else
@@ -171,7 +170,8 @@ public static class HaeyeonMarketReport
             craftAlerts.AddRange(Pick(craftCandidates, random));
         }
         return new HaeyeonEvaluation(priceAlerts, craftAlerts,
-            new Dictionary<string, ItemPriceState>(), new Dictionary<string, CraftState>(), [], []);
+            new Dictionary<string, ItemPriceState>(), new Dictionary<string, CraftState>(), [], [])
+            { TrendAlerts = MarketTrendAlertEvaluator.BuildTestAlerts(prices.Values, random) };
     }
 
     private static IEnumerable<T> Pick<T>(IReadOnlyList<T> items, Random random) =>

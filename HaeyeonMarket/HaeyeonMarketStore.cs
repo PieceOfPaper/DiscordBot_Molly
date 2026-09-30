@@ -25,6 +25,9 @@ public sealed record HaeyeonLatestPrices(DateTimeOffset CollectedAtUtc, IReadOnl
 /// </summary>
 public sealed class HaeyeonMarketStore
 {
+    // 추세 알림 상태 표(market_trend_alert_state)에서 해연 시세를 구분하는 값. 상자·패키지 모니터링 Id와 겹치지 않아야 합니다.
+    public const string TrendMonitorId = "haeyeon";
+
     private readonly string m_DatabasePath;
     private readonly SemaphoreSlim m_Gate = new(1, 1);
 
@@ -82,6 +85,7 @@ public sealed class HaeyeonMarketStore
                     updated_at_utc TEXT NOT NULL
                 );
                 """, ct).ConfigureAwait(false);
+            await MarketTrendAlertTable.CreateAsync(connection, transaction, ct).ConfigureAwait(false);
             // 등락률 열은 나중에 추가되어 이전 DB에는 없습니다. 값이 없으면(NULL) 기본값을 씁니다.
             await MollySqliteSchema.AddColumnIfMissingAsync(connection, transaction, "haeyeon_monitor_channels", "product_change_percent", "INTEGER", ct).ConfigureAwait(false);
             await MollySqliteSchema.AddColumnIfMissingAsync(connection, transaction, "haeyeon_monitor_channels", "material_change_percent", "INTEGER", ct).ConfigureAwait(false);
@@ -275,16 +279,29 @@ public sealed class HaeyeonMarketStore
         finally { m_Gate.Release(); }
     }
 
+    // 아이템 이름별 추세 알림 확인 상태(3회 연속 확인·중복 알림 방지).
+    public async Task<IReadOnlyDictionary<string, MarketTrendAlertState>> LoadTrendAlertStatesAsync(CancellationToken ct = default)
+    {
+        await m_Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+            return await MarketTrendAlertTable.LoadAsync(connection, TrendMonitorId, ct).ConfigureAwait(false);
+        }
+        finally { m_Gate.Release(); }
+    }
+
     /// <summary>
     /// 한 회차의 시세와 새 판정 상태를 한 트랜잭션으로 저장합니다. 마지막 시세는 이번 회차 시세로 통째로 바꿔
     /// 검색에서 빠진 아이템의 옛 시세가 남지 않게 합니다.
-    /// 길드별 과거시세는 판정 중 등록이 해제된 길드면 저장하지 않습니다.
+    /// 길드별 과거시세는 판정 중 등록이 해제된 길드면 저장하지 않습니다. 추세 알림 상태는 넘겨받은 것으로 통째로 바꿉니다.
     /// </summary>
     public async Task SaveRunAsync(
         DateTimeOffset collectedAtUtc,
         IEnumerable<HaeyeonPriceSnapshot> snapshots,
         IReadOnlyDictionary<ulong, IReadOnlyDictionary<string, ItemPriceState>> guildPriceStates,
         IEnumerable<CraftState> craftStates,
+        IEnumerable<MarketTrendAlertState> trendStates,
         CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct).ConfigureAwait(false);
@@ -333,6 +350,7 @@ public sealed class HaeyeonMarketStore
                     ("$name", state.ProductName), ("$advantage", state.Advantage.ToString()), ("$productPrice", state.ProductPrice),
                     ("$materialCost", state.MaterialCost), ("$updatedAt", Format(state.UpdatedAtUtc))).ConfigureAwait(false);
             }
+            await MarketTrendAlertTable.ReplaceAsync(connection, transaction, TrendMonitorId, trendStates, ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
         finally { m_Gate.Release(); }
