@@ -578,6 +578,7 @@ HealerBattleTests.Run();
 ThiefBattleTests.Run();
 IceMageBattleTests.Run();
 FireMageBattleTests.Run();
+WarriorBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
 await ClassIconTests.RunAsync();
@@ -1641,6 +1642,24 @@ var hitTriggerSnapshot = new BattleDataSnapshot
 var hitTriggerEvents = Duel(hitTriggerSnapshot).Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail).ToArray();
 Check(hitTriggerEvents.SequenceEqual(new[] { "추가타 적중 +1 (현재 1)", "추가타 적중 +1 (현재 2)", "기본 공격 적중 +1 (현재 1)" }),
     "스킬 추가타와 일반 공격 추가타는 추가타적중시를 두 번, 일반 공격 적중은 기본공격적중시를 한 번만 발동한다");
+
+// 가드(전사 방패 치기): 타격마다 가드 확률로 막아 가드피해감소만큼 덜 받고, 막은 쪽의 가드시 패시브를 막은 타격마다 발동한다. 추가타는 따로 가드하지 않는다.
+BattleDataSnapshot GuardSnapshot(double chance) => new()
+{
+    Rules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "2")),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "가드", ["test_guard"], PassiveIds: ["test_guard_count"]), ["idle"] = idleClass },
+    Skills = new Dictionary<string, BattleSkill> { ["test_guard"] = new("test_guard", "방패 들기", "일반", null, true, 99, 0, 1, 1, [Fx("test_guard_1", 1, "상태효과", "자신", duration: 2, status: "test_guard")]) },
+    Passives = new Dictionary<string, BattlePassive> { ["test_guard_count"] = new("test_guard_count", true, [new BattleEffect("tgc_01", 1, "자원증가", "자신", 1, 1, 1, 0, "guards", 0, null, null, null, null, null, null, null, null, 1d, "가드시")]) },
+    Resources = new Dictionary<string, BattleResource> { ["guards"] = new("guards", "가드 횟수", "중첩", 0, 0, 0, "가산") },
+    Statuses = new Dictionary<string, BattleStatus> { ["test_guard"] = new("test_guard", "가드", "가드|가드피해감소", 0, "") { Values = [chance, .5] } },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var unguarded = Duel(GuardSnapshot(0));
+var guarded = Duel(GuardSnapshot(1));
+Check(!unguarded.Events.Any(x => x.Type == "AttackGuarded") && guarded.Events.Count(x => x.Type == "AttackGuarded" && x.Actor == "B" && x.Target == "A") == 1
+    && Math.Abs((DamageBy(guarded, "B")[0] ?? 0) * 2 - (DamageBy(unguarded, "B")[0] ?? 0)) <= 1
+    && guarded.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail!.StartsWith("가드 횟수", StringComparison.Ordinal)) == 1,
+    "가드에 성공하면 그 타격의 피해가 가드피해감소만큼 줄고 가드시 패시브가 한 번 발동하며, 가드 확률이 없으면 판정하지 않는다");
 
 // 체력비례지속피해증폭(힐러 쇠약): 틱 직전 HP 비율만큼 그 지속 피해를 키운다(값 1 → 가득 찬 체력에서 ×2).
 var weakenRules = RulesWith(("base_max_hp", "1000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "5"));

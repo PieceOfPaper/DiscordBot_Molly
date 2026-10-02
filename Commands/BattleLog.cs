@@ -35,6 +35,8 @@ public static class BattleLog
         var blocks = new List<Block>();
         Block? current = null;
         var pendingCritical = false;
+        // 가드(전사 방패)는 다단 공격마다 따로 줄을 만들지 않고 다음 피해 줄 앞에 붙인다.
+        var pendingGuard = false;
         // 턴 시작 상태 효과 묶음의 제목은 그 턴의 주인이다. 지속 피해 이벤트의 Actor는 피해를 건 쪽이라 제목에 쓰면 상대의 상태처럼 보인다.
         string? turnOwner = null;
         BattleLogTone ToneOf(string actor) { fighterAName ??= actor; return actor == fighterAName ? BattleLogTone.FighterA : BattleLogTone.FighterB; }
@@ -70,13 +72,14 @@ public static class BattleLog
             if (x.Type == "BreakActionLost") { Heading(x.Target!, "💢 " + x.Target + "은(는) 브레이크로 행동하지 못했습니다!"); continue; }
             if (x.Type == "LifeSkillUsed") { Heading(x.Actor, "🌿 " + x.Actor + "의 생활스킬 " + x.Detail + "!"); continue; }
             if (x.Type == "CriticalHit") { pendingCritical = true; continue; }
+            if (x.Type == "AttackGuarded") { pendingGuard = true; continue; }
             if (x.Type is "BreakActivated" or "BreakExtended")
             {
                 // 브레이크·브레이크 익스텐드는 굵은 글씨 한 줄로 강조한다. 큰 글씨는 궁극기에만 써서 스킬 사용 문구가 묻히지 않게 한다.
                 var block = Current(x.Actor);
                 block.AddLine(x.Type == "BreakActivated" ? "💢 **브레이크!!**" : "🧊 **브레이크 익스텐드!!**");
                 block.AddLine(x.Type == "BreakActivated" ? x.Target + "이(가) **브레이크** 상태에 빠졌습니다!" : x.Target + "의 브레이크가 연장되어 " + x.Amount + "턴 더 행동하지 못합니다!");
-                pendingCritical = false;
+                pendingCritical = false; pendingGuard = false;
                 continue;
             }
             // 자원 증감은 본문 끝의 작은 글씨 한 줄로 모은다.
@@ -93,16 +96,16 @@ public static class BattleLog
             // 상태 적용·해제·소모는 같은 대상의 연속된 줄을 한 줄로 묶는다.
             switch (x.Type)
             {
-                case "StatusApplied": Current(x.Actor).AddStatus("적용", x.Actor, x.Detail ?? "", x.Amount); pendingCritical = false; continue;
-                case "StatusExpired": Current(x.Actor).AddStatus("해제", x.Actor, x.Detail ?? "", null); pendingCritical = false; continue;
-                case "StatusConsumed": Current(x.Actor).AddStatus("소모", x.Actor, x.Detail ?? "", null); pendingCritical = false; continue;
-                case "StatusCleansed": Current(x.Actor).AddStatus("정화", x.Actor, x.Detail ?? "", null); pendingCritical = false; continue;
+                case "StatusApplied": Current(x.Actor).AddStatus("적용", x.Actor, x.Detail ?? "", x.Amount); pendingCritical = false; pendingGuard = false; continue;
+                case "StatusExpired": Current(x.Actor).AddStatus("해제", x.Actor, x.Detail ?? "", null); pendingCritical = false; pendingGuard = false; continue;
+                case "StatusConsumed": Current(x.Actor).AddStatus("소모", x.Actor, x.Detail ?? "", null); pendingCritical = false; pendingGuard = false; continue;
+                case "StatusCleansed": Current(x.Actor).AddStatus("정화", x.Actor, x.Detail ?? "", null); pendingCritical = false; pendingGuard = false; continue;
             }
             var text = x.Type switch
             {
-                "LifeSkillNarration" => x.Detail, "LifeSkillEffect" => (pendingCritical ? "💥 **치명타!** " : "") + x.Detail, "DamageDealt" => pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!", "AttackEvaded" => "💨 " + x.Target + "은(는) 상대의 시야에서 벗어나 공격을 흘려냈습니다!", "ShieldAbsorbed" => "🛡️ " + x.Target + "의 **" + x.Detail + "**이(가) " + x.Amount?.ToString("N0") + "의 피해를 흡수했습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "AdditionalDamage" => "✨ " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해를 입혔습니다!", "StatusDetonated" => "💥 **" + x.Detail + " 폭발!** " + x.Target + "에게 남은 지속 피해 " + x.Amount?.ToString("N0") + "을(를) 한꺼번에 입혔습니다!", "StatusDamage" => "🌒 **" + x.Detail + "!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 지속 피해를 입혔습니다!", "BreakGaugeChanged" => x.Target + "의 브레이크 게이지가 " + x.Amount + "/" + x.Detail + "이 되었습니다.", "BreakGaugeBlocked" => x.Target + "은(는) 이미 브레이크 상태라 브레이크 게이지가 오르지 않습니다.", "BreakImmune" => "🛡️ " + x.Target + "은(는) 브레이크를 버텨냈습니다!", "CooldownReduced" => x.Actor + "의 스킬 쿨다운이 " + x.Detail + "턴씩 감소했습니다.", "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "StatusHeal" => "💚 **" + x.Detail + "!** " + x.Target + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
+                "LifeSkillNarration" => x.Detail, "LifeSkillEffect" => (pendingCritical ? "💥 **치명타!** " : "") + x.Detail, "DamageDealt" => (pendingGuard ? "🛡️ **가드!** " : "") + (pendingCritical ? "💥 **치명타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 치명타 피해를 입혔습니다!" : x.Target + "에게 " + x.Amount?.ToString("N0") + "의 피해를 입혔습니다!"), "AttackEvaded" => "💨 " + x.Target + "은(는) 상대의 시야에서 벗어나 공격을 흘려냈습니다!", "ShieldAbsorbed" => "🛡️ " + x.Target + "의 **" + x.Detail + "**이(가) " + x.Amount?.ToString("N0") + "의 피해를 흡수했습니다!", "AdditionalHit" => "⚡ **추가타!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해!", "AdditionalDamage" => "✨ " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 추가 피해를 입혔습니다!", "StatusDetonated" => "💥 **" + x.Detail + " 폭발!** " + x.Target + "에게 남은 지속 피해 " + x.Amount?.ToString("N0") + "을(를) 한꺼번에 입혔습니다!", "StatusDamage" => "🌒 **" + x.Detail + "!** " + x.Target + "에게 " + x.Amount?.ToString("N0") + "의 지속 피해를 입혔습니다!", "BreakGaugeChanged" => x.Target + "의 브레이크 게이지가 " + x.Amount + "/" + x.Detail + "이 되었습니다.", "BreakGaugeBlocked" => x.Target + "은(는) 이미 브레이크 상태라 브레이크 게이지가 오르지 않습니다.", "BreakImmune" => "🛡️ " + x.Target + "은(는) 브레이크를 버텨냈습니다!", "CooldownReduced" => x.Actor + "의 스킬 쿨다운이 " + x.Detail + "턴씩 감소했습니다.", "HealApplied" => x.Actor + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "StatusHeal" => "💚 **" + x.Detail + "!** " + x.Target + "의 HP가 " + x.Amount?.ToString("N0") + " 회복되었습니다!", "HpStatus" => x.Actor + "은 " + x.Detail, "CharacterDefeated" => x.Target + "이(가) 쓰러졌습니다!", _ => null
             };
-            pendingCritical = false;
+            pendingCritical = false; pendingGuard = false;
             if (text is not null) Current(x.Actor).AddLine(text);
         }
         if (blocks.Count > 0) yield return Flush(blocks);

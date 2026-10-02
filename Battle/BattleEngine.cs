@@ -266,7 +266,8 @@ public sealed class BattleEngine
                 var hits = detail.Where(x => x.Type == "DamageDealt" && x.Actor == actor.Name && x.Target == receiver.Name).ToArray();
                 if (effect.Message is null || hits.Length == 0) { events.AddRange(detail); return; }
                 var critical = detail.Any(x => x.Type == "CriticalHit" && x.Actor == actor.Name);
-                detail.RemoveAll(x => hits.Contains(x) || x.Type == "CriticalHit" && x.Actor == actor.Name);
+                // 가드 표시도 효과문구 한 줄에 합쳐 다음 피해 줄에 잘못 붙지 않게 한다.
+                detail.RemoveAll(x => hits.Contains(x) || x.Type == "CriticalHit" && x.Actor == actor.Name || x.Type == "AttackGuarded" && x.Target == receiver.Name);
                 if (critical) events.Add(new("CriticalHit", actor.Name, receiver.Name));
                 events.Add(new("LifeSkillEffect", actor.Name, receiver.Name, hits.Sum(x => x.Amount ?? 0), RenderLifeText(effect.Message, actor.Name, receiver.Name, damage: hits.Sum(x => x.Amount ?? 0))));
                 events.AddRange(detail);
@@ -875,6 +876,14 @@ public sealed class BattleEngine
             var outgoing = Math.Max(.1d, 1d + actor.StatusValue("주는피해증가") - actor.StatusValue("주는피해감소") + actor.MelodySkillDamageBonus(sourceSkill) + actor.SkillDamageBonus(sourceSkill) + extraDamageMultiplier
                 + (classSkillAttack ? actor.StatusValue("다음스킬피해증가") : 0d) + (target.HasStatusEffect("브레이크") ? actor.StatusValue("무방비피해증가") : 0d));
             var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (normalAttack ? target.StatusValue("받는기본공격피해감소") : 0d));
+            // 전사 가드: 타격마다 가드 확률을 판정해 막으면 그 타격의 피해를 가드피해감소만큼 줄인다. 가드 확률이 없으면 난수를 소비하지 않는다.
+            var guardChance = Math.Clamp(target.StatusValue("가드"), 0d, 1d);
+            var guarded = guardChance > 0 && random.NextDouble() < guardChance;
+            if (guarded)
+            {
+                incoming *= 1d - Math.Clamp(target.StatusValue("가드피해감소"), 0d, 1d);
+                events.Add(new("AttackGuarded", actor.Name, target.Name));
+            }
             // 약점 노출의 "방어도 무시 50%"는 이 타격에 반영되는 상대 방어력만 줄인다.
             var defenseIgnore = Math.Clamp(target.StatusValue("받는방어무시"), 0d, 1d);
             var amount = Math.Max(1, baseDamage - target.Defense * (1d - defenseIgnore) * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
@@ -907,6 +916,8 @@ public sealed class BattleEngine
                 // 힐러 소생의 "공격이 추가타로 적중하면"에 반응한다. 대상스킬ID를 지정하면 그 스킬의 추가타에만 반응한다.
                 if (target.Hp > 0 && actor.Hp > 0) FirePassiveTrigger(actor, target, "추가타적중시", sourceSkill?.Id, null, random, rules, events);
             }
+            // 전사 카운터 어택·복수심·투지의 "방패로 적의 공격을 방어하면"에 반응한다. 막은 사람(target) 관점이며 막은 타격마다 발동한다.
+            if (guarded && target.Hp > 0 && actor.Hp > 0) FirePassiveTrigger(target, actor, "가드시", sourceSkill?.Id, null, random, rules, events);
         }
         // 선수필승처럼 "상대에게 먼저 공격받았는지"에 반응하는 패시브를 피격자 관점에서 발동한다.
         if (damaged && target.Hp > 0) FirePassiveTrigger(target, actor, "피격시", sourceSkill?.Id, null, random, rules, events);
