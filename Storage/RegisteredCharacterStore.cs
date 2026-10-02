@@ -107,19 +107,44 @@ public sealed class RegisteredCharacterStore
             await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
             if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
 
-            return new RegisteredCharacter(
-                discordUserId,
-                (MobiServer)reader.GetInt32(0),
-                reader.GetString(1),
-                DateTimeOffset.Parse(reader.GetString(2), null, System.Globalization.DateTimeStyles.RoundtripKind),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetInt32(4),
-                reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                reader.IsDBNull(6) ? null : reader.GetInt32(6),
-                reader.IsDBNull(7) ? null : DateTimeOffset.Parse(reader.GetString(7), null, System.Globalization.DateTimeStyles.RoundtripKind));
+            return Read(reader, discordUserId, 0);
         }
         finally { m_Gate.Release(); }
     }
+
+    /// <summary>등록된 모든 캐릭터. 등록은 길드와 무관하므로 길드별 현황은 호출한 쪽에서 멤버 여부로 거른다.</summary>
+    public async Task<IReadOnlyList<RegisteredCharacter>> LoadAllAsync(CancellationToken ct = default)
+    {
+        await m_Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var connection = OpenConnection();
+            await connection.OpenAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT discord_user_id, server_id, character_name, registered_at_utc, class_id, combat_power, life_power, charm_power, last_synced_at_utc
+                FROM registered_characters
+                ORDER BY discord_user_id;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            var characters = new List<RegisteredCharacter>();
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                characters.Add(Read(reader, (ulong)reader.GetInt64(0), 1));
+            return characters;
+        }
+        finally { m_Gate.Release(); }
+    }
+
+    private static RegisteredCharacter Read(SqliteDataReader reader, ulong discordUserId, int offset) => new(
+        discordUserId,
+        (MobiServer)reader.GetInt32(offset),
+        reader.GetString(offset + 1),
+        DateTimeOffset.Parse(reader.GetString(offset + 2), null, System.Globalization.DateTimeStyles.RoundtripKind),
+        reader.IsDBNull(offset + 3) ? null : reader.GetString(offset + 3),
+        reader.IsDBNull(offset + 4) ? null : reader.GetInt32(offset + 4),
+        reader.IsDBNull(offset + 5) ? null : reader.GetInt32(offset + 5),
+        reader.IsDBNull(offset + 6) ? null : reader.GetInt32(offset + 6),
+        reader.IsDBNull(offset + 7) ? null : DateTimeOffset.Parse(reader.GetString(offset + 7), null, System.Globalization.DateTimeStyles.RoundtripKind));
 
     private SqliteConnection OpenConnection() => new(new SqliteConnectionStringBuilder
     {

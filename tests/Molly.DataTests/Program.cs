@@ -529,6 +529,29 @@ try
     await characterStore.SaveAsync(new RegisteredCharacter(100, MobiServer.칼릭스, "바꾼캐릭터", DateTimeOffset.UnixEpoch.AddDays(1)));
     var registeredCharacter = await characterStore.LoadAsync(100);
     Check(registeredCharacter is { Server: MobiServer.칼릭스, CharacterName: "바꾼캐릭터" }, "캐릭터 등록은 길드와 무관하게 Discord 사용자별로 저장·갱신");
+    await characterStore.SaveAsync(new RegisteredCharacter(200, MobiServer.몰리, "둘째", DateTimeOffset.UnixEpoch, "thief", 5000));
+    var allCharacters = await characterStore.LoadAllAsync();
+    Check(allCharacters.Count == 2 && allCharacters[0] is { DiscordUserId: 100, CharacterName: "바꾼캐릭터" }
+        && allCharacters[1] is { DiscordUserId: 200, Server: MobiServer.몰리, ClassId: "thief", CombatPower: 5000 },
+        "등록 현황용 전체 조회는 사용자마다 마지막 등록 캐릭터 하나만 돌려준다");
+    var statusPages = DiscordBot_Molly.Commands.CharacterRegistrationStatusCommand.Format("몰리길드",
+        [("@가", new RegisteredCharacter(1, MobiServer.칼릭스, "약한캐릭", DateTimeOffset.FromUnixTimeSeconds(1_700_000_000), "thief", 1000)),
+         ("@나", new RegisteredCharacter(2, MobiServer.몰리, "모름", DateTimeOffset.UnixEpoch)),
+         ("@다", new RegisteredCharacter(3, MobiServer.칼릭스, "센캐릭", DateTimeOffset.UnixEpoch, "thief", 99999))],
+        id => id == "thief" ? "도적" : id);
+    var statusLines = statusPages[0].Split('\n');
+    Check(statusPages.Count == 1 && statusLines[0] == "📋 **몰리길드 캐릭터 등록 현황** · 3명" && statusLines[1] == "도적 2 · 클래스 확인 전 1"
+        && statusLines[3] == "1. @다 — [칼릭스] 센캐릭 · 도적 · ⚔️ 99,999 · 등록 <t:0:d>"
+        && statusLines[4] == "2. @가 — [칼릭스] 약한캐릭 · 도적 · ⚔️ 1,000 · 등록 <t:1700000000:d>"
+        && statusLines[5] == "3. @나 — [몰리] 모름 · 클래스 확인 전 · ⚔️ - · 등록 <t:0:d>",
+        "캐릭터 등록 현황은 인원·클래스별 인원과 전투력 높은 순 목록을 보여주고, 전투력을 모르면 맨 뒤에 둔다");
+    Check(DiscordBot_Molly.Commands.CharacterRegistrationStatusCommand.Format("몰리길드", [], id => id).Single().EndsWith("등록한 멤버가 없어요."),
+        "등록한 멤버가 없으면 그대로 안내한다");
+    var manyPages = DiscordBot_Molly.Commands.CharacterRegistrationStatusCommand.Format("몰리길드",
+        Enumerable.Range(1, 100).Select(i => ("<@" + (100_000_000_000_000_000UL + (ulong)i) + ">", new RegisteredCharacter((ulong)i, MobiServer.칼릭스, "캐릭터" + i, DateTimeOffset.UnixEpoch, "thief", i))).ToList(),
+        id => "<:class_thief:1234567890123456789>도적");
+    Check(manyPages.Count > 1 && manyPages.All(p => p.Length <= 2000) && manyPages.Sum(p => p.Split('\n').Count(l => l.Contains(" — ["))) == 100,
+        "등록 현황이 길면 2000자 이하 메시지 여러 개로 나누고 빠지는 멤버가 없다");
     var recordStore = new BattleRecordStore(databasePath: Path.Combine(storageDir, "database", "molly.sqlite"));
     await recordStore.InitializeAsync();
     await recordStore.RecordAsync(100, "thief", BattleRecordStore.Result.Win);
