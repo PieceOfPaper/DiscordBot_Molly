@@ -580,6 +580,7 @@ IceMageBattleTests.Run();
 FireMageBattleTests.Run();
 WarriorBattleTests.Run();
 ArcherBattleTests.Run();
+BardBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
 await ClassIconTests.RunAsync();
@@ -1675,6 +1676,20 @@ var critReceived = Duel(critReceivedSnapshot);
 Check(critReceived.Events.Count(x => x.Type == "CriticalHit") == 2 && critReceived.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "받은 치명타 +1 (현재 1)") == 1
     && !critReceived.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "받은 치명타 +1 (현재 2)"),
     "치명타피격시는 상대의 치명타에 맞았을 때만 발동하고, 자기가 낸 치명타에는 발동하지 않는다");
+
+// 중첩방식=선점(음유시인 악상): 같은 분류의 선점 자원을 이미 가지고 있으면 새 자원을 얻지 못하고, 먼저 얻은 자원이 소모되면 다시 얻을 수 있다.
+var firstComeResources = new Dictionary<string, BattleResource>
+{
+    ["first_a"] = new("first_a", "선점 A", "선점분류", 1, 0, 0, "선점"),
+    ["first_b"] = new("first_b", "선점 B", "선점분류", 1, 0, 0, "선점")
+};
+var firstComeSkill = new BattleSkill("first_come", "선점", "일반", null, true, 99, 0, 1, 1,
+    [Fx("fc_1", 1, "자원설정", "자신", 1, status: "first_a"), Fx("fc_2", 2, "자원설정", "자신", 1, status: "first_b"),
+     new BattleEffect("fc_3", 3, "자원소모", "자신", 0, 1, 1, 0, "first_a", 0, null, null, null, null, null, null, null, "전부"), Fx("fc_4", 4, "자원설정", "자신", 1, status: "first_b")]);
+var firstComeEvents = Duel(new BattleDataSnapshot { Rules = quietRules, Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "선점", ["first_come"]), ["idle"] = idleClass }, Skills = new Dictionary<string, BattleSkill> { ["first_come"] = firstComeSkill }, Resources = firstComeResources, LoadedAt = DateTimeOffset.UtcNow })
+    .Events.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail).ToArray();
+Check(firstComeEvents.SequenceEqual(new[] { "선점 A +1 (현재 1)", "선점 A -1 (현재 0)", "선점 B +1 (현재 1)" }),
+    "중첩방식=선점은 같은 분류의 자원을 이미 가지고 있으면 새 자원을 얻지 못하고, 먼저 얻은 자원이 소모되면 얻는다");
 
 // 체력비례지속피해증폭(힐러 쇠약): 틱 직전 HP 비율만큼 그 지속 피해를 키운다(값 1 → 가득 찬 체력에서 ×2).
 var weakenRules = RulesWith(("base_max_hp", "1000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "5"));

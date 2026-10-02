@@ -783,6 +783,9 @@ public sealed class BattleEngine
     {
         if (!fighter.ResourceDefinitions.TryGetValue(id, out var definition)) return;
         var capped = definition.Maximum == 0 ? Math.Max(0, value) : Math.Clamp(value, 0, definition.Maximum);
+        // 중첩방식=선점(음유시인 악상): 같은 분류의 선점 자원을 이미 하나 갖고 있으면 새 자원을 얻지 못한다. 먼저 얻은 자원이 소모·만료되어야 다음 자원을 얻는다.
+        if (capped > 0 && definition.Stacking == "선점"
+            && fighter.ResourceDefinitions.Values.Any(x => x.Id != id && x.Kind == definition.Kind && x.Stacking == "선점" && fighter.Resources.GetValueOrDefault(x.Id) > 0)) return;
         if (capped > 0 && definition.Stacking == "상호배타")
             foreach (var peer in fighter.ResourceDefinitions.Values.Where(x => x.Id != id && x.Kind == definition.Kind && x.Stacking == "상호배타"))
                 if (fighter.Resources.GetValueOrDefault(peer.Id) > 0) ChangeResource(fighter, opponent, peer, 0, random, rules, events);
