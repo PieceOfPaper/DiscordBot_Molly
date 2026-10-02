@@ -906,6 +906,8 @@ public sealed class BattleEngine
             events.Add(new("DamageDealt", actor.Name, target.Name, damage));
             target.Hp = Math.Max(0, target.Hp - AbsorbShield(target, actor, damage, random, rules, events));
             if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+            // 궁수 순풍의 "피격 시 급소 회피가 발동하지 않을 경우"처럼 치명타를 맞은 쪽(target) 관점에서 반응한다. 치명타 타격마다 발동한다.
+            if (critical && target.Hp > 0 && actor.Hp > 0) FirePassiveTrigger(target, actor, "치명타피격시", sourceSkill?.Id, null, random, rules, events);
             if (target.Hp > 0 && random.NextDouble() < rules.AdditionalHitChance + actor.StatusValue("추가타확률증가"))
             {
                 // 추가타는 이미 확정된 피해의 일부만 더하고, 치명타 판정을 따로 하지 않습니다.

@@ -579,6 +579,7 @@ ThiefBattleTests.Run();
 IceMageBattleTests.Run();
 FireMageBattleTests.Run();
 WarriorBattleTests.Run();
+ArcherBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
 await ClassIconTests.RunAsync();
@@ -1660,6 +1661,20 @@ Check(!unguarded.Events.Any(x => x.Type == "AttackGuarded") && guarded.Events.Co
     && Math.Abs((DamageBy(guarded, "B")[0] ?? 0) * 2 - (DamageBy(unguarded, "B")[0] ?? 0)) <= 1
     && guarded.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail!.StartsWith("가드 횟수", StringComparison.Ordinal)) == 1,
     "가드에 성공하면 그 타격의 피해가 가드피해감소만큼 줄고 가드시 패시브가 한 번 발동하며, 가드 확률이 없으면 판정하지 않는다");
+
+// 치명타피격시(궁수 순풍): 치명타를 맞은 쪽 관점에서 치명타 타격마다 발동한다. 자기가 치명타를 낸 때는 발동하지 않는다.
+var critReceivedSnapshot = new BattleDataSnapshot
+{
+    Rules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "2"), ("base_critical_chance", "1")),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "순풍", Array.Empty<string>(), PassiveIds: ["test_crit_received"]), ["idle"] = idleClass },
+    Passives = new Dictionary<string, BattlePassive> { ["test_crit_received"] = new("test_crit_received", true, [new BattleEffect("tcr_01", 1, "자원증가", "자신", 1, 1, 1, 0, "crits_taken", 0, null, null, null, null, null, null, null, null, 1d, "치명타피격시")]) },
+    Resources = new Dictionary<string, BattleResource> { ["crits_taken"] = new("crits_taken", "받은 치명타", "중첩", 0, 0, 0, "가산") },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var critReceived = Duel(critReceivedSnapshot);
+Check(critReceived.Events.Count(x => x.Type == "CriticalHit") == 2 && critReceived.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "받은 치명타 +1 (현재 1)") == 1
+    && !critReceived.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "받은 치명타 +1 (현재 2)"),
+    "치명타피격시는 상대의 치명타에 맞았을 때만 발동하고, 자기가 낸 치명타에는 발동하지 않는다");
 
 // 체력비례지속피해증폭(힐러 쇠약): 틱 직전 HP 비율만큼 그 지속 피해를 키운다(값 1 → 가득 찬 체력에서 ×2).
 var weakenRules = RulesWith(("base_max_hp", "1000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "5"));
