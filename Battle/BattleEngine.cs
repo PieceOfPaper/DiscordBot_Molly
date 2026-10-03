@@ -491,7 +491,7 @@ public sealed class BattleEngine
         {
             if (actor.Hp <= 0 || target.Hp <= 0) break;
             var receiver = effect.Target == "자신" ? actor : target;
-            if (!CanApplyEffect(actor, target, effect)) continue;
+            if (!CanApplyEffect(actor, target, effect, resolution: resolution)) continue;
             ApplyEffect(actor, target, receiver, effect, skill, surpriseMultiplier, random, rules, events, resolution, conditionalDamage);
         }
         return resolution;
@@ -506,6 +506,8 @@ public sealed class BattleEngine
         foreach (var passive in owner.Passives)
         {
             if (owner.Hp <= 0) return;
+            // 같은 패시브가 이번 발동에서 실행한 피해 행의 적중 수를 뒤 행의 피해적중 조건·적중횟수 참조가 읽는다(다발 사격의 불화살 추가 피해).
+            var resolution = new EffectResolution();
             foreach (var effect in passive.Effects)
             {
                 if (effect.Trigger != trigger) continue;
@@ -514,8 +516,8 @@ public sealed class BattleEngine
                 if (owner.Hp <= 0 || opponent.Hp <= 0) return;
                 var receiver = effect.Target == "자신" ? owner : opponent;
                 if (effect.ReactivationCooldown > 0 && owner.PassiveCooldowns.GetValueOrDefault(effect.Id) > 0) continue;
-                if (effect.ConditionType == "효과미발동" ? effect.ConditionId is null || applied.Contains(effect.ConditionId) : !CanApplyEffect(owner, opponent, effect, ownerHpRatioBeforeHeal)) continue;
-                if (!ApplyEffect(owner, opponent, receiver, effect, null, 1d, random, rules, events, new EffectResolution())) continue;
+                if (effect.ConditionType == "효과미발동" ? effect.ConditionId is null || applied.Contains(effect.ConditionId) : !CanApplyEffect(owner, opponent, effect, ownerHpRatioBeforeHeal, resolution)) continue;
+                if (!ApplyEffect(owner, opponent, receiver, effect, null, 1d, random, rules, events, resolution)) continue;
                 applied.Add(effect.Id);
                 if (effect.ReactivationCooldown > 0) owner.PassiveCooldowns[effect.Id] = effect.ReactivationCooldown;
             }
@@ -539,13 +541,16 @@ public sealed class BattleEngine
                 // 각 타격은 별도로 치명타·추가타를 판정하므로 연출과 변동성은 남습니다.
                 var totalBaseDamage = effect.FixedValue > 0 ? effect.FixedValue * effect.Count * rules.FixedDamageScale : actor.Attack * SkillMultiplier(skill, rules) * surpriseMultiplier;
                 var hitBaseDamage = totalBaseDamage * conditionalDamageMultiplier / effect.Count;
-                var multiHitBonus = effect.Count > 1 ? actor.StatusValue("멀티히트피해증가") : 0d;
+                // 연타 피해 증가는 횟수>1인 다단 피해에 붙는다. 연타확정 상태(궁수 다발 사격) 중에는 표현상 1회로 나눈 행(다발 사격 첫 화살)도 연타로 본다.
+                var multiHitBonus = effect.Count > 1 || actor.HasStatusEffect("연타확정") ? actor.StatusValue("멀티히트피해증가") : 0d;
                 for (var hit = 0; hit < effect.Count && target.Hp > 0; hit++)
                 {
                     if (random.NextDouble() >= effect.Chance) continue;
                     // 연속치명타배율 <1이면 타격마다(0번째 제외) 누적 제곱으로 치명타 확률이 감소한다(거스팅 볼트: 매 발사 0.75배).
                     var criticalChanceMultiplier = Math.Pow(effect.CriticalChanceMultiplierPerHit, hit);
-                    resolution.TargetDamaged |= Attack(actor, receiver, hitBaseDamage, 1, random, rules, events, skill, criticalChanceMultiplier, multiHitBonus);
+                    if (!Attack(actor, receiver, hitBaseDamage, 1, random, rules, events, skill, criticalChanceMultiplier, multiHitBonus)) continue;
+                    resolution.TargetDamaged = true;
+                    resolution.HitsLanded++;
                 }
                 break;
             case "지속피해" when effect.StatusId is { } periodicStatusId && effect.Duration > 0:
@@ -581,7 +586,9 @@ public sealed class BattleEngine
             case "추가피해":
                 if (random.NextDouble() < effect.Chance)
                 {
-                    var damage = ResolveFixedAmount(actor, effect);
+                    // 수치참조방식=적중횟수는 앞선 피해 행이 실제로 적중한 타격 수만큼 곱한다(궁수 불화살: 화살마다 추가 피해). 하나도 맞지 않으면 주지 않는다.
+                    var damage = effect.NumericReferenceMode == "적중횟수" ? effect.FixedValue * resolution.HitsLanded : ResolveFixedAmount(actor, effect);
+                    if (effect.NumericReferenceMode == "적중횟수" && damage <= 0) break;
                     ApplyAdditionalDamage(actor, receiver, damage, random, rules, events);
                     resolution.TargetDamaged = true;
                 }
@@ -675,7 +682,7 @@ public sealed class BattleEngine
         return true;
     }
 
-    private static bool CanApplyEffect(Fighter actor, Fighter target, BattleEffect effect, double? actorHpRatioOverride = null)
+    private static bool CanApplyEffect(Fighter actor, Fighter target, BattleEffect effect, double? actorHpRatioOverride = null, EffectResolution? resolution = null)
     {
         // 1:1 자동전투에는 '주변 적'이 존재하지 않는다.
         if (effect.Target == "주변적") return false;
@@ -693,6 +700,9 @@ public sealed class BattleEngine
             "상태효과유형보유" when effect.ConditionId is { } effectType => conditionOwner.HasStatusEffect(effectType),
             "상태효과유형미보유" when effect.ConditionId is { } effectType => !conditionOwner.HasStatusEffect(effectType),
             // 패시브의 "회복적용시"처럼 HP 비율을 조건으로 거는 효과(예: 활력의 40% 미만)에 사용한다.
+            // 같은 스킬(패시브는 같은 패시브의 이번 발동)에서 앞선 피해 행이 한 번이라도 적중했을 때만 참이다.
+            // 전사 투지의 "강타 적중 시 투지 1"처럼 회피·대상 해제로 모두 빗나가면 주지 않는 보너스에 쓴다.
+            "피해적중" => resolution?.HitsLanded > 0,
             "HP비율" => CompareRatio(ReferenceEquals(conditionOwner, actor) && actorHpRatioOverride is { } ratio ? ratio : (double)conditionOwner.Hp / conditionOwner.MaxHp, effect.ConditionOperator, effect.ConditionValue),
             _ => false
         };
@@ -893,7 +903,7 @@ public sealed class BattleEngine
         {
             // 무방비피해증가(도적 스닉 어택)는 상대가 브레이크 상태일 때만 더한다. 공식 가이드의 무방비는 여러 경우가 있지만 배틀에서는 브레이크만 무방비로 본다.
             var outgoing = Math.Max(.1d, 1d + actor.StatusValue("주는피해증가") - actor.StatusValue("주는피해감소") + actor.MelodySkillDamageBonus(sourceSkill) + actor.SkillDamageBonus(sourceSkill) + extraDamageMultiplier
-                + (classSkillAttack ? actor.StatusValue("다음스킬피해증가") : 0d) + (target.HasStatusEffect("브레이크") ? actor.StatusValue("무방비피해증가") : 0d));
+                + (classSkillAttack ? actor.StatusValue("다음스킬피해증가") : 0d) + (target.HasStatusEffect("브레이크") ? actor.StatusValue("무방비피해증가") : 0d) + WeakPointBonus(actor, target));
             var incoming = Math.Max(.1d, 1d + target.StatusValue("받는피해증가") - target.StatusValue("받는피해감소") - (normalAttack ? target.StatusValue("받는기본공격피해감소") : 0d));
             // 전사 가드: 타격마다 가드 확률을 판정해 막으면 그 타격의 피해를 가드피해감소만큼 줄인다. 가드 확률이 없으면 난수를 소비하지 않는다.
             var guardChance = Math.Clamp(target.StatusValue("가드"), 0d, 1d);
@@ -947,6 +957,18 @@ public sealed class BattleEngine
         return damaged;
     }
 
+    /// <summary>
+    /// 궁수 약점 관통: 약점 확률(약점확률)만큼 약점 피해(약점피해증가)를 기대값으로 주는 피해에 더한다(30% × 30% = +9%). 타격마다 난수를 쓰지 않는다.
+    /// 공격자가 약점확정(다발 사격)이거나 대상이 받는약점확정(호크 샷 약화)이면 확률을 100%로 바꿔 +30%가 된다. 확정끼리는 겹쳐도 한 번만 붙는다.
+    /// </summary>
+    private static double WeakPointBonus(Fighter actor, Fighter target)
+    {
+        var bonus = actor.StatusValue("약점피해증가");
+        if (bonus <= 0) return 0d;
+        var chance = actor.HasStatusEffect("약점확정") || target.HasStatusEffect("받는약점확정") ? 1d : Math.Clamp(actor.StatusValue("약점확률"), 0d, 1d);
+        return chance * bonus;
+    }
+
     private static string HpStatus(Fighter fighter) => ((double)fighter.Hp / fighter.MaxHp) switch
     {
         >= .85 => "아직 끄떡없습니다.", >= .60 => "조금씩 밀리기 시작합니다.", >= .30 => "상태가 심상치 않습니다.", _ => "간신히 버티고 있습니다."
@@ -956,6 +978,8 @@ public sealed class BattleEngine
     {
         public bool TargetDamaged;
         public bool ActorHealed;
+        /// <summary>이 스킬(또는 패시브 발동)의 피해 행이 실제로 적중한 타격 수. 회피·대상 해제된 타격은 세지 않는다.</summary>
+        public int HitsLanded;
     }
 
     private sealed class Fighter

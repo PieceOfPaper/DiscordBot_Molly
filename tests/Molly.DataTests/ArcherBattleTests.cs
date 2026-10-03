@@ -9,8 +9,8 @@ internal static class ArcherBattleTests
 {
     private static double Variance(double random) => .9 + random * .2;
     private static int Hit(double shownDamage, double random = .9, double outgoing = 1, double incoming = 1, double critical = 1) => (int)Math.Round((shownDamage * .25 - 200 * .5) * outgoing * incoming * Variance(random) * critical);
-    // 약점 관통 기대값 +9%. 다단 피해에는 전투 숙련: 쾌속 연타 +5%와 순풍 중첩당 연타 +6%가 더해진다.
-    private static double Outgoing(int tailwind = 0, bool multiHit = false, double extra = 0) => 1 + .09 + (multiHit ? .05 + .06 * tailwind : 0) + extra;
+    // 약점 관통 기대값 +9%(약점 확정이면 +30%). 다단 피해에는 전투 숙련: 쾌속 연타 +5%와 순풍 중첩당 연타 +6%가 더해진다. 모두 주는 피해에 합산한다.
+    private static double Outgoing(int tailwind = 0, bool multiHit = false, double extra = 0, bool weak = false) => 1 + (weak ? .3 : .09) + (multiHit ? .05 + .06 * tailwind : 0) + extra;
 
     public static void Run()
     {
@@ -20,6 +20,7 @@ internal static class ArcherBattleTests
         HawkShotTests(data);
         MultiShotTests(data);
         BlazingTrailTests(data);
+        FireArrowHitTests(data);
     }
 
     private static void TailwindTests(BattleDataSnapshot data)
@@ -51,13 +52,22 @@ internal static class ArcherBattleTests
 
     private static void HawkShotTests(BattleDataSnapshot data)
     {
-        // 호크 샷의 약화(받는 피해 +21%)는 상대 턴으로 세어 2턴이라, 궁수의 다음 행동(일반 공격)까지 남는다.
+        // 호크 샷의 약화는 상대 턴으로 세어 2턴이라, 궁수의 다음 행동(일반 공격)까지 남는다.
+        // 약화는 받는 피해 증가가 아니라 약점 확정이다. 약점 관통 기대값 +9%가 +30%로 바뀌어 주는 피해에 합산된다(GitHub Issue #17).
         var weakened = Duel(data, ["hawk_shot"], maxActions: 3);
         var turns = Turns(weakened);
         Assert(turns[0].Skill == "호크 샷" && turns[0].Damage == 2 * Hit(5620, outgoing: Outgoing(1, true)) && turns[0].Statuses.Contains("약화"),
             "호크 샷은 두 번 적중하고 상대를 약화시킨다");
-        Assert(turns[1].Skill == "(일반 공격)" && turns[1].Damage == (int)Math.Round(1400 * Outgoing() * 1.21 * Variance(.9)),
-            "약화된 상대는 궁수의 다음 공격에 약점으로 맞아 30%(기대값 9% + 21%) 더 받는다");
+        Assert(turns[1].Skill == "(일반 공격)" && turns[1].Damage == (int)Math.Round(1400 * 1.30 * Variance(.9)),
+            "약화된 상대는 궁수의 일반 공격에 약점으로 맞아 정확히 30% 더 받는다(1.09 × 1.21이 아니다)");
+
+        // 약화 뒤 단타(매그넘 샷)는 약점 +30%만, 연타(애로우 리볼버)는 약점 +30%에 연타 보너스를 더한다. 곱하지 않는다.
+        var single = Turns(Duel(data, ["magnum_shot", "hawk_shot"], maxActions: 3));
+        Assert(single[0].Skill == "호크 샷" && single[1].Skill == "매그넘 샷" && single[1].Damage == Hit(10154, outgoing: Outgoing(weak: true)),
+            "약화된 상대에게 단타 스킬은 약점 확정 +30%로 적중한다");
+        var multi = Turns(Duel(data, ["arrow_revolver", "hawk_shot"], maxActions: 3));
+        Assert(multi[0].Skill == "호크 샷" && multi[1].Skill == "애로우 리볼버" && multi[1].Damage == 6 * Hit(2357, outgoing: Outgoing(2, true, weak: true)),
+            "약화된 상대에게 연타 스킬은 약점 +30%와 연타·순풍 보너스를 합산해 받는다");
 
         // 매그넘 샷으로 브레이크를 건 뒤 호크 샷은 총합 대미지가 두 배(+100%)이고 무방비 120%가 붙는다.
         var broken = Duel(data, ["hawk_shot", "magnum_shot"], maxActions: 3, rules: [("break_gauge_maximum", "1")]);
@@ -70,13 +80,54 @@ internal static class ArcherBattleTests
 
     private static void MultiShotTests(BattleDataSnapshot data)
     {
-        // 타격 수 30에서 스킬이 적중하면(+10) 40이 되어 다발 사격을 쏘고 초기화한다. 다발 사격은 항상 약점에 적중한다(원본 × 1.3/1.09로 반영).
+        // 타격 수 30에서 스킬이 적중하면(+10) 40이 되어 다발 사격을 쏘고 초기화한다. 다발 사격 상태 동안 다섯 발 모두 약점(+30%)·연타로 적중한다.
         var result = Duel(data, ["magnum_shot"], maxActions: 1, initial: [("archer_multi_count", 30)]);
         var turns = Turns(result);
         Assert(turns[0].Statuses.Contains("다발 사격") && turns[0].Hits == 6
-            && turns[0].Damage == Hit(10154, outgoing: Outgoing()) + Hit(8737, outgoing: Outgoing()) + 4 * Hit(4368, outgoing: Outgoing(1, true))
+            && turns[0].Damage == Hit(10154, outgoing: Outgoing()) + MultiShot(1)
             && result.Events.Any(x => x.Type == "StatusExpired" && x.Actor == "A" && x.Detail == "다발 사격"),
             "타격 40회가 되면 스킬 적중 뒤 다발 사격으로 화살 다섯 발을 더 쏜다");
+
+        // 첫 화살도 연타다. 순풍 0·1·5중첩 모두 다섯 발이 같은 연타 보너스를 받는다(GitHub Issue #17).
+        foreach (var (tailwind, initialTailwind, without) in new[] { (0, 0, new[] { "tailwind" }), (1, 0, Array.Empty<string>()), (5, 4, Array.Empty<string>()) })
+        {
+            var shot = Turns(Duel(data, ["magnum_shot"], maxActions: 1, initial: [("archer_multi_count", 30), ("archer_tailwind", initialTailwind)], withoutPassives: without))[0];
+            Assert(shot.Hits == 6 && shot.Damage == Hit(10154, outgoing: Outgoing()) + MultiShot(tailwind),
+                $"순풍 {tailwind}중첩에서 다발 사격 다섯 발이 모두 연타 보너스를 받는다");
+        }
+
+        // 약화된 상대에게도 다발 사격은 이미 약점 확정이라 +30%를 한 번만 받는다. 호크 샷 적중 직후(약화 부여 뒤) 다발 사격이 나간다.
+        var weakened = Turns(Duel(data, ["hawk_shot"], maxActions: 1, initial: [("archer_multi_count", 30)]));
+        Assert(weakened[0].Statuses.Contains("약화") && weakened[0].Statuses.Contains("다발 사격")
+            && weakened[0].Damage == 2 * Hit(5620, outgoing: Outgoing(1, true)) + MultiShot(1),
+            "약화된 상대에게 다발 사격의 약점 보너스는 중복되지 않는다");
+    }
+
+    /// <summary>다발 사격 다섯 발(첫 화살 7,326 + 추가 3,662×4)의 피해. 모두 약점 확정·연타 판정이다.</summary>
+    private static int MultiShot(int tailwind) => Hit(7326, outgoing: Outgoing(tailwind, true, weak: true)) + 4 * Hit(3662, outgoing: Outgoing(tailwind, true, weak: true));
+
+    private static void FireArrowHitTests(BattleDataSnapshot data)
+    {
+        // 작열의 궤적(궁극기 게이지 300) 뒤 애로우 리볼버: 불화살 추가 피해는 실제로 적중한 화살 수만큼이다(GitHub Issue #17).
+        var all = Turns(Duel(data, ["arrow_revolver", "blazing_trail"], maxActions: 3, initial: [("ultimate_gauge", 300)]));
+        Assert(all[0].Skill == "작열의 궤적" && all[1].Skill == "애로우 리볼버" && all[1].Hits == 6 && all[1].AdditionalDamage.SequenceEqual([6 * 254]),
+            "불화살 중 애로우 리볼버가 모두 적중하면 화살 여섯 발만큼 추가 피해를 준다");
+
+        // 모두 회피하면 추가 피해도 다발 사격 타격 수도 없다. 타격 수 30에서 시작해도 다발 사격이 나가지 않는다.
+        var evaded = Turns(Duel(data, ["arrow_revolver", "blazing_trail"], maxActions: 3, initial: [("ultimate_gauge", 300), ("archer_multi_count", 30)], evade: 1));
+        Assert(evaded[1].Skill == "애로우 리볼버" && evaded[1].Hits == 0 && evaded[1].AdditionalDamage.Count == 0 && evaded.All(x => !x.Statuses.Contains("다발 사격")),
+            "불화살 중이라도 화살이 모두 빗나가면 추가 피해와 타격 수 적립이 없다");
+
+        // 회피 50%에서 난수를 .9·.1·.9로 돌려 주면 일부 화살만 맞는다. 추가 피해는 맞은 화살 수 × 254다.
+        var partial = Turns(Duel(data, ["arrow_revolver", "blazing_trail"], maxActions: 3, initial: [("ultimate_gauge", 300)], evade: .5, randomValues: [.9, .1, .9]));
+        var revolver = partial.First(x => x.Skill == "애로우 리볼버");
+        Assert(revolver.Hits is > 0 and < 6 && revolver.AdditionalDamage.SequenceEqual([revolver.Hits * 254]),
+            $"불화살 중 일부 화살만 맞으면 맞은 {revolver.Hits}발만큼만 추가 피해를 준다");
+
+        // 불화살 중 다발 사격 다섯 발에도 화살마다 추가 피해가 붙는다. 작열의 궤적 적중으로 타격 수 40이 되어 바로 다발 사격이 나간다.
+        var multi = Turns(Duel(data, ["magnum_shot", "blazing_trail"], maxActions: 1, initial: [("ultimate_gauge", 300), ("archer_multi_count", 30)]));
+        Assert(multi[0].Skill == "작열의 궤적" && multi[0].Statuses.Contains("다발 사격") && multi[0].AdditionalDamage.SequenceEqual([5 * 254]),
+            "불화살 중 다발 사격은 다섯 발만큼 추가 피해를 준다");
     }
 
     private static void BlazingTrailTests(BattleDataSnapshot data)
@@ -91,22 +142,25 @@ internal static class ArcherBattleTests
             "불화살 동안에는 재사용 대기가 초기화된 매그넘 샷에 화살마다 추가 피해가 붙는다");
     }
 
-    private sealed record Turn(string Skill, int Damage, IReadOnlyList<string> Resources, IReadOnlyList<string> Statuses, int Hits, bool Broken);
+    private sealed record Turn(string Skill, int Damage, IReadOnlyList<string> Resources, IReadOnlyList<string> Statuses, int Hits, bool Broken, IReadOnlyList<int> AdditionalDamage);
 
-    private static BattleResult Duel(BattleDataSnapshot data, string[] skills, int maxActions = 12, double random = .9, (string Id, int Value)[]? initial = null, (string Id, string Value)[]? rules = null)
+    /// <param name="evade">0보다 크면 상대(B)가 그 확률의 회피 상태로 시작한다(테스트 전용 회피확률 상태).</param>
+    /// <param name="randomValues">주면 첫 난수(선공 판정 0) 뒤에 이 값들을 차례로 반복한다.</param>
+    private static BattleResult Duel(BattleDataSnapshot data, string[] skills, int maxActions = 12, double random = .9, (string Id, int Value)[]? initial = null, (string Id, string Value)[]? rules = null, string[]? withoutPassives = null, double evade = 0, double[]? randomValues = null)
     {
         var ruleMap = data.Rules.ToDictionary(x => x.Key, x => x.Value);
         foreach (var (id, value) in new[] { ("base_max_hp", "10000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", maxActions.ToString()) }.Concat(rules ?? [])) ruleMap[id] = ruleMap[id] with { Value = value };
         var resources = data.Resources.ToDictionary(x => x.Key, x => x.Value);
         foreach (var (id, value) in initial ?? []) resources[id] = resources[id] with { InitialValue = value };
+        var evasion = TestEvasion.Add(data, evade);
         var snapshot = new BattleDataSnapshot
         {
             Rules = ruleMap,
-            Classes = new Dictionary<string, BattleClass> { ["archer"] = data.Classes["archer"] with { SkillIds = skills }, ["idle"] = new("idle", "대상", Array.Empty<string>()) },
-            Skills = data.Skills, Passives = data.Passives, Resources = resources, Statuses = data.Statuses, Derivations = data.Derivations, LoadedAt = data.LoadedAt
+            Classes = new Dictionary<string, BattleClass> { ["archer"] = data.Classes["archer"] with { SkillIds = skills, PassiveIds = data.Classes["archer"].PassiveIds.Except(withoutPassives ?? []).ToArray() }, ["idle"] = new("idle", "대상", Array.Empty<string>(), PassiveIds: evade > 0 ? [TestEvasion.PassiveId] : null) },
+            Skills = data.Skills, Passives = evasion.Passives, Resources = resources, Statuses = evasion.Statuses, Derivations = data.Derivations, LoadedAt = data.LoadedAt
         };
         // 궁수가 항상 먼저 행동하도록 첫 난수(선공 판정)는 0으로 준다.
-        return new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "archer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), snapshot, new FirstThenConstantRandom(random));
+        return new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "archer", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), snapshot, new FirstThenConstantRandom(randomValues ?? [random]));
     }
 
     /// <summary>A의 행동별로 사용 스킬·A가 준 피해 합계·A의 자원 변화·새로 걸린 상태·타격 수·브레이크 발동 여부를 모은다.</summary>
@@ -123,7 +177,8 @@ internal static class ArcherBattleTests
                     current.Where(x => x.Type == "ResourceChanged" && x.Actor == "A").Select(x => x.Detail ?? "").ToArray(),
                     current.Where(x => x.Type == "StatusApplied").Select(x => x.Detail ?? "").ToArray(),
                     current.Count(x => x.Type == "DamageDealt" && x.Actor == "A"),
-                    current.Any(x => x.Type == "BreakActivated")));
+                    current.Any(x => x.Type == "BreakActivated"),
+                    current.Where(x => x.Type == "AdditionalDamage" && x.Actor == "A").Select(x => x.Amount ?? 0).ToArray()));
             current = e.Actor == "A" ? [] : null;
         }
         return turns;
@@ -135,10 +190,10 @@ internal static class ArcherBattleTests
         Console.WriteLine("PASS " + name);
     }
 
-    private sealed class FirstThenConstantRandom(double value) : IBattleRandom
+    private sealed class FirstThenConstantRandom(double[] values) : IBattleRandom
     {
-        private bool first = true;
-        public double NextDouble() { if (!first) return value; first = false; return 0; }
+        private int index = -1;
+        public double NextDouble() => index++ < 0 ? 0 : values[(index - 1) % values.Length];
     }
 
     public static readonly IReadOnlyDictionary<string, string> Sheets = new Dictionary<string, string>(CrossbowBattleTests.Sheets.Where(x => x.Key is "배틀규칙" or "배틀스킬AI" or "배틀돌발이벤트" or "배틀돌발이벤트효과" or "생활스킬" or "배틀생활스킬" or "배틀생활스킬효과"))
@@ -181,21 +236,21 @@ fixture_placeholder,arrow_revolver,magnum_shot,대체,1,1,자원보유,archer_wi
         ["배틀스킬효과"] = """"
 ID,스킬ID,실행순서,효과유형,대상,계수기준,고정값,횟수,발동확률,지속턴,상태효과ID,최대중첩,효과문구,비고,조건대상,조건유형,조건ID,조건연산자,조건값,수치참조ID,수치참조방식,연속치명타배율
 arv_01,arrow_revolver,1,피해,상대,,2357,6,1,0,,0,,"원본 3,367×6",,,,,,,,
-arv_02,arrow_revolver,2,추가피해,상대,,1524,1,1,0,,0,,"불화살 추가 대미지 원본 1,450×6발 × 보정 × 0.25(배틀 HP 직접)",자신,상태효과보유,archer_fire_arrow,,,,,
+arv_02,arrow_revolver,2,추가피해,상대,,254,1,1,0,,0,,"불화살 추가 대미지 원본 1,450 × 보정 0.7 × 0.25(배틀 HP 직접) = 화살당 254. 적중한 화살 수만큼(적중횟수)",자신,상태효과보유,archer_fire_arrow,,,,적중횟수,
 mgs_01,magnum_shot,1,피해,상대,,10154,1,1,0,,0,,"원본 14,505",,,,,,,,
 mgs_02,magnum_shot,2,브레이크피해,상대,,1,1,1,0,,0,,브레이크 대미지 1칸,,,,,,,,
-mgs_03,magnum_shot,3,추가피해,상대,,254,1,1,0,,0,,"불화살 추가 대미지 원본 1,450×1발 × 보정 × 0.25(배틀 HP 직접)",자신,상태효과보유,archer_fire_arrow,,,,,
+mgs_03,magnum_shot,3,추가피해,상대,,254,1,1,0,,0,,"불화살 추가 대미지 원본 1,450 × 보정 0.7 × 0.25(배틀 HP 직접) = 화살당 254. 적중한 화살 수만큼(적중횟수)",자신,상태효과보유,archer_fire_arrow,,,,적중횟수,
 sds_01,side_step,1,피해,상대,,3989,3,1,0,,0,,"원본 5,698×3",,,,,,,,
-sds_02,side_step,2,추가피해,상대,,762,1,1,0,,0,,"불화살 추가 대미지 원본 1,450×3발 × 보정 × 0.25(배틀 HP 직접)",자신,상태효과보유,archer_fire_arrow,,,,,
+sds_02,side_step,2,추가피해,상대,,254,1,1,0,,0,,"불화살 추가 대미지 원본 1,450 × 보정 0.7 × 0.25(배틀 HP 직접) = 화살당 254. 적중한 화살 수만큼(적중횟수)",자신,상태효과보유,archer_fire_arrow,,,,적중횟수,
 sds_03,side_step,3,자원증가,자신,,25,1,1,0,archer_wind,0,,바람 획득 25%,,,,,,,,
 hks_01,hawk_shot,1,조건부피해증가,상대,,100,1,1,0,,0,,"브레이크 대상 총합 대미지 16,059×2 = +100%",상대,상태효과유형보유,브레이크,,,,,
 hks_02,hawk_shot,2,피해,상대,,5620,2,1,0,,0,,"원본 총합 대미지 8,029×2",,,,,,,,
-hks_03,hawk_shot,3,추가피해,상대,,508,1,1,0,,0,,"불화살 추가 대미지 원본 1,450×2발 × 보정 × 0.25(배틀 HP 직접)",자신,상태효과보유,archer_fire_arrow,,,,,
+hks_03,hawk_shot,3,추가피해,상대,,254,1,1,0,,0,,"불화살 추가 대미지 원본 1,450 × 보정 0.7 × 0.25(배틀 HP 직접) = 화살당 254. 적중한 화살 수만큼(적중횟수)",자신,상태효과보유,archer_fire_arrow,,,,적중횟수,
 hks_04,hawk_shot,4,상태효과,상대,,0,1,1,2,archer_weakened,1,,약화 5초. 상대 턴으로 세므로 궁수의 다음 행동까지 남도록 2턴,,,,,,,,
 hks_05,hawk_shot,5,자원증가,자신,,25,1,1,0,archer_wind,0,,바람 획득 25%,,,,,,,,
 esc_01,escape_step,1,상태효과,자신,,0,1,1,1,archer_escape_crit,1,,초탄 치명타 확률 100%(이번 스킬에만),,,,,,,,
 esc_02,escape_step,2,피해,상대,,5584,1,1,0,,0,,"원본 7,977",,,,,,,,
-esc_03,escape_step,3,추가피해,상대,,254,1,1,0,,0,,"불화살 추가 대미지 원본 1,450×1발 × 보정 × 0.25(배틀 HP 직접)",자신,상태효과보유,archer_fire_arrow,,,,,
+esc_03,escape_step,3,추가피해,상대,,254,1,1,0,,0,,"불화살 추가 대미지 원본 1,450 × 보정 0.7 × 0.25(배틀 HP 직접) = 화살당 254. 적중한 화살 수만큼(적중횟수)",자신,상태효과보유,archer_fire_arrow,,,,적중횟수,
 esc_04,escape_step,4,상태효과,상대,,0,1,1,1,archer_slowed,1,,이동 속도 감소 50% 5초→1턴,,,,,,,,
 esc_05,escape_step,5,자원증가,자신,,75,1,1,0,archer_wind,0,,바람 획득 75%,,,,,,,,
 blt_01,blazing_trail,1,피해,상대,,10154,1,1,0,,0,,"원본 14,505",,,,,,,,
@@ -215,14 +270,15 @@ tailwind,TRUE,"5초마다 순풍 1중첩(턴당 1, 최대 5). 중첩당 급소 �
 ID,패시브ID,실행순서,효과유형,대상,고정값,횟수,발동확률,지속턴,상태효과ID,최대중첩,효과문구,조건대상,조건유형,조건ID,조건연산자,조건값,수치참조ID,수치참조방식,발동시점,대상스킬ID,대상자원ID,비고,재발동대기턴
 wfl_01,wind_flow,1,상태효과,자신,0,1,1,1,archer_gale,0,,,,,,,,,자원최대치도달시,,archer_wind,바람 100% → 질주하는 바람 1턴,
 wfl_02,wind_flow,2,자원소모,자신,0,1,1,0,archer_wind,0,,,,,,,,전부,자원최대치도달시,,archer_wind,바람을 모두 소모(질주하는 바람 동안 소모),
-wpp_01,weak_point_piercing,1,주는피해증가,자신,0,1,1,0,archer_weak_point,0,,,,,,,,,전투시작,,,약점 적중 기대값 +9%,
+wpp_01,weak_point_piercing,1,약점피해증가,자신,0,1,1,0,archer_weak_point,0,,,,,,,,,전투시작,,,약점 확률 30% × 약점 피해 +30% = 기대값 +9%. 약점 확정이면 +30%,
 cmsa_01,combat_mastery_swift_archer,1,멀티히트피해증가,자신,0,1,1,0,combat_mastery_swift_multi,0,,,,,,,,,전투시작,,,연타 대미지 +5%,
 mts_01,multi_shot,1,자원증가,자신,10,1,1,0,archer_multi_count,0,,,,,,,,,스킬적중완료시,,,스킬이 적중한 턴의 타격 수 10(스킬 화살 + 사이사이 기본 공격),
-mts_02,multi_shot,2,상태효과,자신,0,1,1,1,archer_multi_shot,0,,,,,,,,,자원최대치도달시,,archer_multi_count,다발 사격 로그 표시용,
-mts_03,multi_shot,3,피해,상대,8737,1,1,0,,0,,,,,,,,,자원최대치도달시,,archer_multi_count,"원본 10,465 × 보정 × 항상 약점(1.3/1.09)",
-mts_04,multi_shot,4,피해,상대,4368,4,1,0,,0,,,,,,,,,자원최대치도달시,,archer_multi_count,"추가 적중 원본 5,232×4 × 보정 × 항상 약점",
-mts_05,multi_shot,5,상태해제,자신,0,1,1,0,archer_multi_shot,0,,,,,,,,,자원최대치도달시,,archer_multi_count,표시용 상태 해제,
-mts_06,multi_shot,6,자원소모,자신,0,1,1,0,archer_multi_count,0,,,,,,,,전부,자원최대치도달시,,archer_multi_count,타격 수 초기화,
+mts_02,multi_shot,2,상태효과,자신,0,1,1,1,archer_multi_shot,0,,,,,,,,,자원최대치도달시,,archer_multi_count,다발 사격 상태: 다섯 발 모두 약점·연타로 적중(로그 표시 겸용),
+mts_03,multi_shot,3,피해,상대,7326,1,1,0,,0,,,,,,,,,자원최대치도달시,,archer_multi_count,"원본 10,465 × 보정 0.7. 다발 사격 상태로 약점 확정(+30%)·연타 판정",
+mts_04,multi_shot,4,피해,상대,3662,4,1,0,,0,,,,,,,,,자원최대치도달시,,archer_multi_count,"추가 적중 원본 5,232×4 × 보정 0.7. 다발 사격 상태로 약점 확정·연타 판정",
+mts_07,multi_shot,5,추가피해,상대,254,1,1,0,,0,,자신,상태효과보유,archer_fire_arrow,,,,적중횟수,자원최대치도달시,,archer_multi_count,"불화살 중 다발 사격 화살마다 추가 대미지 원본 1,450 × 보정 0.7 × 0.25 = 254. 적중한 화살 수만큼(적중횟수)",
+mts_05,multi_shot,6,상태해제,자신,0,1,1,0,archer_multi_shot,0,,,,,,,,,자원최대치도달시,,archer_multi_count,표시용 상태 해제,
+mts_06,multi_shot,7,자원소모,자신,0,1,1,0,archer_multi_count,0,,,,,,,,전부,자원최대치도달시,,archer_multi_count,타격 수 초기화,
 prp_01,propulsion,1,상태효과,자신,0,1,1,1,archer_propulsion,0,,,,,,,,,자원최대치도달시,,archer_wind,질주하는 바람(이동 속도 +25%) 동안 주는 피해 +12.5%,
 twd_01,tailwind,1,턴당자원증가,자신,0,1,1,0,archer_tailwind_gain,0,,,,,,,,,전투시작,,,턴 시작마다 순풍 +1,
 twd_02,tailwind,2,받는치명타확률감소,자신,0,1,1,0,archer_tailwind_evasion,0,,,,,,,,,전투시작,,,중첩자원ID=archer_tailwind로 중첩당 급소 회피 +8%,
@@ -242,15 +298,15 @@ break_broken,브레이크,브레이크|받는피해증가,0.2,브레이크 시 �
 combat_mastery_swift_multi,전투 숙련: 쾌속,멀티히트피해증가,0.05,적에게 주는 연타(다단) 피해 +5%,,,,,,,,
 archer_gale,질주하는 바람,없음,0,바람이 가득 차 얻는 강화 효과(1턴). 이동 속도 +25%(패시브 추진력으로 주는 피해 +12.5%). 도탄은 1:1이라 주변 적이 없어 제외,,,,,,,,
 archer_propulsion,추진력,주는피해증가,0.125,질주하는 바람의 이동 속도 +25% × 1%당 대미지 0.5% = 주는 피해 +12.5%(1턴).,,,,,,,,TRUE
-archer_weak_point,약점 관통,주는피해증가,0.09,30% 확률로 약점 적중(최종 대미지 +30%)을 기대값 +9%로 단순화한 영구 상태.,,,,,,,,
-archer_weakened,약화,받는피해증가,0.21,호크 샷 약화(5초). 궁수의 모든 공격이 약점으로 적중해 약점 관통 기대값 +9%에 +21%를 더해 +30%. 상대 턴으로 세므로 궁수의 다음 행동까지 남도록 2턴.,,,,,,,,
+archer_weak_point,약점 관통,약점확률|약점피해증가,0.3,약점 관통: 30% 확률로 약점 적중(최종 대미지 +30%). 타격마다 판정하지 않고 기대값 +9%를 주는 피해에 더한다. 다발 사격(약점확정)·호크 샷 약화(받는약점확정)면 +30%로 확정한다.,,,,,,,,
+archer_weakened,약화,받는약점확정,0,"호크 샷 약화(5초). 궁수의 모든 공격이 약점으로 적중한다(약점 관통 기대값 +9% 대신 +30%, 이미 약점 확정인 다발 사격에는 겹치지 않음). 상대 턴으로 세므로 궁수의 다음 행동까지 남도록 2턴.",,,,,,,,
 archer_escape_crit,이스케이프 스텝: 치명타,다음스킬치명타확률증가|다음스킬소모,1,이스케이프 스텝 초탄 치명타 확률 100%. 이번 스킬에만 적용하고 소모한다.,,,,,,,,TRUE
 archer_slowed,둔화,쿨다운증가,1,이스케이프 스텝 이동 속도 감소 50%(5초→1턴). 지속 중 상대의 쿨다운이 줄지 않는다(석궁사수 둔화와 같은 단순화).,,,,,,,,
 archer_fire_arrow,불화살,없음,0,"작열의 궤적(15초→3턴). 모든 공격이 불화살로 바뀌어 화살마다 추가 피해(원본 1,450)를 준다.",,,,,,,,
 archer_tailwind_gain,순풍: 획득,턴당자원증가,1,전투 시작에 거는 영구 상태. 궁수의 턴 시작마다 순풍 +1(5초마다 → 턴당 1).,,,,,,archer_tailwind,,TRUE
 archer_tailwind_evasion,순풍: 급소 회피,받는치명타확률감소,0.08,순풍 중첩당 급소 회피 +8%(받는 치명타 확률 -8%p).,,archer_tailwind,,,,,,TRUE
 archer_tailwind_multi,순풍: 연타,멀티히트피해증가,0.06,순풍 중첩당 연타(다단) 대미지 +6%.,,archer_tailwind,,,,,,TRUE
-archer_multi_shot,다발 사격,없음,0,타격 40회마다 기본 공격이 다발 사격으로 강화되어 화살 5발을 쏜다. 로그 표시용으로 걸었다가 바로 해제한다.,,,,,,,,
+archer_multi_shot,다발 사격,약점확정|연타확정,0,타격 40회마다 기본 공격이 다발 사격으로 강화되어 화살 5발을 쏜다. 다섯 발 모두 약점(+30%)·연타(연타 피해 증가 적용)로 적중한다. 로그 표시를 겸해 걸었다가 바로 해제한다.,,,,,,,,
 """",
     };
 }

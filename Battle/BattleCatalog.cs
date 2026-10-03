@@ -217,6 +217,9 @@ public sealed class BattleCatalog
             if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
             if (effect.ConditionType is "상태효과유형보유" or "상태효과유형미보유" && (effect.ConditionId is null || !statusMap.Values.Any(x => x.HasEffectType(effect.ConditionId)))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 효과유형 조건 '{effect.ConditionId}'을(를) 가진 상태가 없습니다.");
             if (effect.NumericReferenceId is { } referenceId && !resourceMap.ContainsKey(referenceId)) throw new InvalidDataException($"{sheet} '{effect.Id}'의 수치 참조 자원이 올바르지 않습니다.");
+            // 피해적중·적중횟수는 같은 효과 묶음의 앞선 피해 행 결과를 읽는다. 조건부피해증가는 피해 전에 판정하므로 쓸 수 없다.
+            if (effect.ConditionType == "피해적중" && effect.Type == "조건부피해증가") throw new InvalidDataException($"{sheet} '{effect.Id}'의 조건부피해증가에는 피해적중 조건을 쓸 수 없습니다.");
+            if (effect.NumericReferenceMode == "적중횟수" && (effect.Type != "추가피해" || effect.NumericReferenceId is not null)) throw new InvalidDataException($"{sheet} '{effect.Id}'의 수치참조방식 적중횟수는 수치참조ID 없이 추가피해에만 쓸 수 있습니다.");
         }
         foreach (var effect in effectMap.Values.SelectMany(x => x))
         {

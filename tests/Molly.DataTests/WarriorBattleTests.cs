@@ -17,6 +17,7 @@ internal static class WarriorBattleTests
         FightingSpiritTests(data);
         QuakeTests(data);
         BladeImpactTests(data);
+        SmashHitSpiritTests(data);
     }
 
     private static void GuardTests(BattleDataSnapshot data)
@@ -83,19 +84,48 @@ internal static class WarriorBattleTests
             "블레이드 임팩트 동안에는 강화 스킬을 써도 투지가 다시 최고조로 채워진다");
     }
 
+    private static void SmashHitSpiritTests(BattleDataSnapshot data)
+    {
+        // 강타 적중 투지 1(패시브 투지)은 피해가 실제로 적중했을 때만 준다(GitHub Issue #16). 스킬 자체의 투지 생성은 빗나가도 얻는다.
+        foreach (var (skill, name, gain) in new[] { ("blade_smash", "블레이드 스매시", 15), ("thrust", "찌르기", 10) })
+        {
+            var hit = Turns(Duel(data, [skill], maxActions: 1))[0];
+            Assert(hit.Skill == name && hit.Resources.Contains($"투지 +{gain} (현재 {gain})") && hit.Resources.Contains($"투지 +1 (현재 {gain + 1})"),
+                $"{name}가 적중하면 투지 {gain}에 강타 적중 1을 더 얻는다");
+            var evaded = Duel(data, [skill], maxActions: 1, evade: true);
+            var missed = Turns(evaded)[0];
+            Assert(missed.Skill == name && missed.Hits == 0 && evaded.Events.Any(x => x.Type == "AttackEvaded" && x.Actor == "A")
+                && missed.Resources.Where(x => x.StartsWith("투지 ", StringComparison.Ordinal)).SequenceEqual([$"투지 +{gain} (현재 {gain})"]),
+                $"{name}가 모두 빗나가면 스킬 투지 {gain}만 얻고 강타 적중 1은 없다");
+        }
+        // 투지 49 경계: 파생 전용 퀘이크·아마란스 킥을 바로 쓰게 해, 빗나가면 49에 머물러 다음 스킬이 강화되지 않는지 본다.
+        foreach (var (skill, name, subject) in new[] { ("quake", "퀘이크", "퀘이크가"), ("amaranth_kick", "아마란스 킥", "아마란스 킥이") })
+        {
+            var hit = Turns(Duel(data, [skill], maxActions: 1, initial: [("warrior_spirit", 49)], standalone: [skill]))[0];
+            Assert(hit.Skill == name && hit.Resources.Contains("투지 +1 (현재 50)"), $"투지 49에서 {subject} 적중하면 강타 적중 1로 최고조(50)가 된다");
+            var missed = Turns(Duel(data, [skill], maxActions: 1, initial: [("warrior_spirit", 49)], standalone: [skill], evade: true))[0];
+            Assert(missed.Skill == name && missed.Hits == 0 && !missed.Resources.Any(x => x.StartsWith("투지", StringComparison.Ordinal)),
+                $"투지 49에서 {subject} 빗나가면 투지를 얻지 못해 최고조가 되지 않는다");
+        }
+    }
+
     private sealed record Turn(string Skill, int Damage, IReadOnlyList<string> Resources, IReadOnlyList<string> Statuses, int Hits, bool Broken);
 
-    private static BattleResult Duel(BattleDataSnapshot data, string[] skills, int maxActions = 12, double random = .9, (string Id, int Value)[]? initial = null, (string Id, string Value)[]? rules = null, string[]? withoutPassives = null)
+    /// <param name="evade">true이면 상대(B)가 회피 확률 100% 상태로 시작해 전사의 모든 공격을 피한다(경갑 제작과 같은 회피확률 상태).</param>
+    /// <param name="standalone">파생 전용 스킬을 일반 스킬처럼 후보에 올려 바로 쓰게 한다(퀘이크·아마란스 킥 단독 검사용).</param>
+    private static BattleResult Duel(BattleDataSnapshot data, string[] skills, int maxActions = 12, double random = .9, (string Id, int Value)[]? initial = null, (string Id, string Value)[]? rules = null, string[]? withoutPassives = null, bool evade = false, string[]? standalone = null)
     {
         var ruleMap = data.Rules.ToDictionary(x => x.Key, x => x.Value);
         foreach (var (id, value) in new[] { ("base_max_hp", "10000000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", maxActions.ToString()) }.Concat(rules ?? [])) ruleMap[id] = ruleMap[id] with { Value = value };
         var resources = data.Resources.ToDictionary(x => x.Key, x => x.Value);
         foreach (var (id, value) in initial ?? []) resources[id] = resources[id] with { InitialValue = value };
+        var evasion = TestEvasion.Add(data);
         var snapshot = new BattleDataSnapshot
         {
             Rules = ruleMap,
-            Classes = new Dictionary<string, BattleClass> { ["warrior"] = data.Classes["warrior"] with { SkillIds = skills, PassiveIds = data.Classes["warrior"].PassiveIds.Except(withoutPassives ?? []).ToArray() }, ["idle"] = new("idle", "대상", Array.Empty<string>()) },
-            Skills = data.Skills, Passives = data.Passives, Resources = resources, Statuses = data.Statuses, Derivations = data.Derivations, LoadedAt = data.LoadedAt
+            Classes = new Dictionary<string, BattleClass> { ["warrior"] = data.Classes["warrior"] with { SkillIds = skills, PassiveIds = data.Classes["warrior"].PassiveIds.Except(withoutPassives ?? []).ToArray() }, ["idle"] = new("idle", "대상", Array.Empty<string>(), PassiveIds: evade ? [TestEvasion.PassiveId] : null) },
+            Skills = data.Skills.ToDictionary(x => x.Key, x => standalone?.Contains(x.Key) == true ? x.Value with { Kind = "일반" } : x.Value),
+            Passives = evasion.Passives, Resources = resources, Statuses = evasion.Statuses, Derivations = data.Derivations, LoadedAt = data.LoadedAt
         };
         // 전사가 항상 먼저 행동하도록 첫 난수(선공 판정)는 0으로 준다.
         return new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", "warrior", 100, 0, 0), new CharacterBattleSnapshot(2, "B", "idle", 100, 0, 0), snapshot, new FirstThenConstantRandom(random));
@@ -179,12 +209,13 @@ cs_04,consecutive_slash,4,피해,상대,,2962,6,1,0,,0,,"투지 최고조 원본
 cs_05,consecutive_slash,5,자원증가,자신,,15,1,1,0,warrior_spirit,0,,투지 생성 5×3,,,,,,,,
 bs_01,blade_smash,1,피해,상대,,8386,1,1,0,,0,,"원본 15,247",,,,,,,,
 bs_02,blade_smash,2,브레이크피해,상대,,1,1,1,0,,0,,브레이크 대미지 1칸(넘어짐),,,,,,,,
-bs_03,blade_smash,3,자원증가,자신,,16,1,1,0,warrior_spirit,0,,투지 생성 15 + 강타 적중 1,,,,,,,,
+bs_03,blade_smash,3,자원증가,자신,,15,1,1,0,warrior_spirit,0,,투지 생성 15. 강타 적중 1은 bs_04,,,,,,,,
+bs_04,blade_smash,4,자원증가,자신,,1,1,1,0,warrior_spirit,0,,강타 적중 투지 1. 피해가 모두 빗나가면 없음(피해적중),,피해적중,,,,,,
 qk_01,quake,1,브레이크익스텐드,상대,,0,1,1,0,break_extended,0,,브레이크 익스텐드: 익스텐드 상태로 바꾸고 행동 불가를 브레이크 지속만큼 더함,,,,,,,,
 qk_02,quake,2,피해,상대,,10821,1,1,0,,0,,"원본 19,674. 익스텐드 뒤에 맞아 무방비 130%가 붙는다",,,,,,,,
 qk_03,quake,3,상태효과,상대,,0,1,1,3,warrior_quake_vuln,1,,"[시너지] 받는 대미지 증가 10%, 15초→3턴",,,,,,,,
 qk_04,quake,4,상태효과,자신,,0,1,1,3,warrior_quake_power,1,,"무방비 대미지 증가 40%, 15초→3턴",,,,,,,,
-qk_05,quake,5,자원증가,자신,,1,1,1,0,warrior_spirit,0,,강타 적중 투지 1,,,,,,,,
+qk_05,quake,5,자원증가,자신,,1,1,1,0,warrior_spirit,0,,강타 적중 투지 1. 피해가 모두 빗나가면 없음(피해적중),,피해적중,,,,,,
 sb_01,shield_bash,1,자원설정,자신,,1,1,1,0,warrior_spirit_active,0,,투지 최고조(50)면 이번 사용을 강화한다. 강화 판정용 내부 표식,자신,자원보유,warrior_spirit,>=,50,,,
 sb_02,shield_bash,2,자원소모,자신,,0,1,1,0,warrior_spirit,0,,강화 공격에 투지를 모두 쓴다. 이후 행의 투지 생성은 새로 쌓인다,자신,자원보유,warrior_spirit,>=,50,,전부,
 sb_03,shield_bash,3,피해,상대,,7085,1,1,0,,0,,"원본 12,881",자신,자원보유,warrior_spirit_active,<=,0,,,
@@ -200,13 +231,14 @@ ak_03,amaranth_kick,3,브레이크피해,상대,,1,1,1,0,,0,,브레이크 대미
 ak_04,amaranth_kick,4,상태효과,자신,,0,1,1,1,warrior_break_immune,1,,브레이크 면역 5초→1턴,,,,,,,,
 ak_05,amaranth_kick,5,상태효과,자신,,0,1,1,2,warrior_guard,1,,"가드 10초→2턴, 확률 50%",,,,,,,,
 ak_06,amaranth_kick,6,자원소모,자신,,0,1,1,0,warrior_counter_ready,0,,카운터 어택 발동 시 1회,,,,,,,전부,
-ak_07,amaranth_kick,7,자원증가,자신,,1,1,1,0,warrior_spirit,0,,강타 적중 투지 1,,,,,,,,
+ak_07,amaranth_kick,7,자원증가,자신,,1,1,1,0,warrior_spirit,0,,강타 적중 투지 1. 피해가 모두 빗나가면 없음(피해적중),,피해적중,,,,,,
 th_01,thrust,1,자원설정,자신,,1,1,1,0,warrior_spirit_active,0,,투지 최고조(50)면 이번 사용을 강화한다. 강화 판정용 내부 표식,자신,자원보유,warrior_spirit,>=,50,,,
 th_02,thrust,2,자원소모,자신,,0,1,1,0,warrior_spirit,0,,강화 공격에 투지를 모두 쓴다. 이후 행의 투지 생성은 새로 쌓인다,자신,자원보유,warrior_spirit,>=,50,,전부,
 th_03,thrust,3,조건부피해증가,상대,,50,1,1,0,,0,,브레이크된 적에게 도약 공격 시 대미지 +50%,상대,상태효과유형보유,브레이크,,,,,
 th_04,thrust,4,피해,상대,,9017,1,1,0,,0,,"원본 16,395",자신,자원보유,warrior_spirit_active,<=,0,,,
 th_05,thrust,5,피해,상대,,13526,1,1,0,,0,,"투지 최고조 원본 24,592",자신,자원보유,warrior_spirit_active,>=,1,,,
-th_06,thrust,6,자원증가,자신,,11,1,1,0,warrior_spirit,0,,투지 생성 10 + 강타 적중 1,,,,,,,,
+th_06,thrust,6,자원증가,자신,,10,1,1,0,warrior_spirit,0,,투지 생성 10. 강타 적중 1은 th_07,,,,,,,,
+th_07,thrust,7,자원증가,자신,,1,1,1,0,warrior_spirit,0,,강타 적중 투지 1. 피해가 모두 빗나가면 없음(피해적중),,피해적중,,,,,,
 fs_01,battlefield_shout,1,피해,상대,,4959,1,1,0,,0,,"원본 9,017",,,,,,,,
 fs_02,battlefield_shout,2,상태효과,자신,,0,1,1,2,warrior_taunt,1,,도발 8초→2턴,,,,,,,,
 fs_03,battlefield_shout,3,상태효과,자신,,0,1,1,5,warrior_shout_power,1,,"[시너지] 대미지 증가 10%, 25초→5턴",,,,,,,,
