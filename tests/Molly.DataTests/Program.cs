@@ -605,6 +605,7 @@ WarriorBattleTests.Run();
 ArcherBattleTests.Run();
 MageBattleTests.Run();
 GreatswordWarriorBattleTests.Run();
+DualBladeBattleTests.Run();
 BardBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
@@ -1745,6 +1746,20 @@ BattleDataSnapshot DefenseSnapshot(bool withStatus) => new()
 };
 Check(DamageBy(Duel(DefenseSnapshot(false)), "B").SequenceEqual(new int?[] { 32 }) && DamageBy(Duel(DefenseSnapshot(true)), "B").SequenceEqual(new int?[] { 2 }),
     "방어력증가 1.5는 방어력 20을 50으로 늘려 일반 공격 52의 피해를 32에서 2로 줄인다");
+
+// 방어무시(듀얼블레이드 스플릿 슬래시): 공격하는 쪽이 가진 값만큼 상대 방어력을 무시한다. 중첩자원ID로 중첩당 값을 곱한다.
+BattleDataSnapshot PierceSnapshot(int stacks) => new()
+{
+    Rules = RulesWith(("base_max_hp", "1000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "2"), ("base_defense", "20")),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "방어 무시", Array.Empty<string>(), PassiveIds: ["test_pierce"]), ["idle"] = idleClass },
+    Passives = new Dictionary<string, BattlePassive> { ["test_pierce"] = new("test_pierce", true, [new BattleEffect("tpi_01", 1, "방어무시", "자신", 0, 1, 1, 0, "test_pierce_power", 0, null, null, null, null, null, null, null, null, 1d, "전투시작")]) },
+    Resources = new Dictionary<string, BattleResource> { ["test_pierce_stack"] = new("test_pierce_stack", "방어력 무시", "자원", 4, stacks, 0, "가산") },
+    Statuses = new Dictionary<string, BattleStatus> { ["test_pierce_power"] = new("test_pierce_power", "방어력 무시", "방어무시", 0.25, "", StackResourceId: "test_pierce_stack") },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+Check(DamageBy(Duel(PierceSnapshot(0)), "A").SequenceEqual(new int?[] { 32 }) && DamageBy(Duel(PierceSnapshot(2)), "A").SequenceEqual(new int?[] { 42 })
+    && DamageBy(Duel(PierceSnapshot(4)), "A").SequenceEqual(new int?[] { 52 }) && DamageBy(Duel(PierceSnapshot(4)), "B").SequenceEqual(new int?[] { 32 }),
+    "방어무시는 공격하는 쪽의 피해에만 상대 방어력 20을 중첩당 25%씩 무시한다(32 → 42 → 52)");
 
 // 중첩방식=선점(음유시인 악상): 같은 분류의 선점 자원을 이미 가지고 있으면 새 자원을 얻지 못하고, 먼저 얻은 자원이 소모되면 다시 얻을 수 있다.
 var firstComeResources = new Dictionary<string, BattleResource>

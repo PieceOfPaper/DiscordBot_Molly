@@ -904,7 +904,8 @@ public sealed class BattleEngine
                 events.Add(new("AttackGuarded", actor.Name, target.Name));
             }
             // 약점 노출의 "방어도 무시 50%"는 이 타격에 반영되는 상대 방어력만 줄인다.
-            var defenseIgnore = Math.Clamp(target.StatusValue("받는방어무시"), 0d, 1d);
+            // 듀얼블레이드 스플릿 슬래시의 "적의 근접 방어를 무시"는 공격하는 쪽이 가진 방어무시로 더한다.
+            var defenseIgnore = Math.Clamp(target.StatusValue("받는방어무시") + actor.StatusValue("방어무시"), 0d, 1d);
             var amount = Math.Max(1, baseDamage - target.EffectiveDefense * (1d - defenseIgnore) * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
             var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + (classSkillAttack ? actor.StatusValue("다음스킬치명타확률증가") : 0d) + target.StatusValue("받는치명타확률증가") - target.StatusValue("받는치명타확률감소")) * criticalChanceMultiplier, 0d, 1d);
             var critical = random.NextDouble() < criticalChance;
