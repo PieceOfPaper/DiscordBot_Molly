@@ -763,6 +763,9 @@ public sealed class BattleEngine
             events.Add(new("BreakImmune", actor.Name, target.Name));
             return;
         }
+        // 마법사 마나 실드의 "브레이크 피해를 받을 경우 종료"처럼 브레이크 피해를 받은 쪽(target) 관점에서 반응한다. 게이지가 실제로 오를 때만 발동한다.
+        FirePassiveTrigger(target, actor, "브레이크피격시", null, null, random, rules, events);
+        if (target.Hp <= 0 || actor.Hp <= 0) return;
         target.BreakGauge = Math.Min(rules.BreakGaugeMaximum, target.BreakGauge + amount);
         events.Add(new("BreakGaugeChanged", actor.Name, target.Name, target.BreakGauge, rules.BreakGaugeMaximum.ToString()));
         if (target.BreakGauge < rules.BreakGaugeMaximum) return;

@@ -603,6 +603,7 @@ IceMageBattleTests.Run();
 FireMageBattleTests.Run();
 WarriorBattleTests.Run();
 ArcherBattleTests.Run();
+MageBattleTests.Run();
 BardBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
@@ -1699,6 +1700,22 @@ var critReceived = Duel(critReceivedSnapshot);
 Check(critReceived.Events.Count(x => x.Type == "CriticalHit") == 2 && critReceived.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A" && x.Detail == "받은 치명타 +1 (현재 1)") == 1
     && !critReceived.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "받은 치명타 +1 (현재 2)"),
     "치명타피격시는 상대의 치명타에 맞았을 때만 발동하고, 자기가 낸 치명타에는 발동하지 않는다");
+
+// 브레이크피격시(마법사 마나 실드): 브레이크 피해를 받아 게이지가 오를 때 맞은 쪽 관점에서 발동한다. 이미 브레이크 상태라 게이지가 막히면 발동하지 않는다.
+var breakReceivedSnapshot = new BattleDataSnapshot
+{
+    Rules = RulesWith(("base_max_hp", "100000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "4"), ("break_gauge_maximum", "1"), ("minimum_skill_cooldown", "1")),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "블링크", Array.Empty<string>(), PassiveIds: ["test_break_received"]), ["b"] = new("b", "브레이커", ["breaker"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["breaker"] = new("breaker", "넘어뜨리기", "일반", null, true, 1, 0, 1, 1, [Fx("brk_1", 1, "브레이크피해", "상대", 1)]) },
+    Passives = new Dictionary<string, BattlePassive> { ["test_break_received"] = new("test_break_received", true, [new BattleEffect("tbr_01", 1, "자원증가", "자신", 1, 1, 1, 0, "breaks_taken", 0, null, null, null, null, null, null, null, null, 1d, "브레이크피격시")]) },
+    Resources = new Dictionary<string, BattleResource> { ["breaks_taken"] = new("breaks_taken", "받은 브레이크 피해", "중첩", 0, 0, 0, "가산") },
+    Statuses = new Dictionary<string, BattleStatus> { ["break_broken"] = new("break_broken", "브레이크", "브레이크", 0, "") },
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var breakReceived = Duel(breakReceivedSnapshot, classB: "b");
+Check(breakReceived.Events.Count(x => x.Type == "BreakActivated") == 1 && breakReceived.Events.Any(x => x.Type == "BreakGaugeBlocked")
+    && breakReceived.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A") == 1 && breakReceived.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "받은 브레이크 피해 +1 (현재 1)"),
+    "브레이크피격시는 브레이크 피해로 게이지가 오를 때 맞은 쪽에서 발동하고, 이미 브레이크라 막힌 피해에는 발동하지 않는다");
 
 // 중첩방식=선점(음유시인 악상): 같은 분류의 선점 자원을 이미 가지고 있으면 새 자원을 얻지 못하고, 먼저 얻은 자원이 소모되면 다시 얻을 수 있다.
 var firstComeResources = new Dictionary<string, BattleResource>
