@@ -199,7 +199,7 @@ public sealed class BattleCatalog
         foreach (var status in statusMap.Values)
             if (status.StackResourceId is { } stackResourceId && !resourceMap.ContainsKey(stackResourceId))
                 throw new InvalidDataException($"배틀상태효과 '{status.Id}'의 중첩자원ID가 존재하지 않는 자원 ID '{stackResourceId}'를 참조합니다.");
-        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "스킬적중완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시", "추가타적중시", "기본공격적중시", "가드시", "치명타피격시", "브레이크피격시"], StringComparer.Ordinal);
+        var passiveTriggers = new HashSet<string>(["전투시작", "자원획득시", "자원최대치도달시", "자원소진시", "브레이크발생시", "스킬사용완료시", "스킬적중완료시", "치명타적중시", "치명타미적중시", "피격시", "회복적용시", "추가타적중시", "기본공격적중시", "가드시", "치명타피격시", "브레이크피격시", "체력소모시"], StringComparer.Ordinal);
         void ValidateEffect(BattleEffect effect, string sheet)
         {
             if (effect.Type is "자원설정" or "자원증가" or "자원소모")

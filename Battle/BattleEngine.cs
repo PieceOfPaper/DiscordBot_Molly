@@ -33,6 +33,7 @@ public sealed class BattleEngine
             var periodic = actor.TickPeriodicEffects(rules, events, damage => AbsorbShield(actor, target, damage, random, rules, events));
             if (periodic.Damaged && actor.Hp > 0 || periodic.Healed) events.Add(new("HpStatus", actor.Name, Detail: HpStatus(actor)));
             if (actor.Hp <= 0) break;
+            FireHpLoss(actor, target, random, rules, events);
             // 턴당자원증가(힐러 라이프 링크 연결 중 빛의 결정체)는 행동을 잃는 턴에도 턴 시작마다 쌓인다.
             foreach (var (resourceId, amount) in actor.TurnResourceGains()) AddResource(actor, target, resourceId, amount, random, rules, events);
             var actionBroken = actor.HasStatusEffect("브레이크");
@@ -571,8 +572,9 @@ public sealed class BattleEngine
                 var detonated = receiver.DetonatePeriodicDamage(detonatedStatusId, effect.FixedValue / 100d, rules);
                 if (detonated <= 0) break;
                 events.Add(new("StatusDetonated", actor.Name, receiver.Name, detonated, receiver.StatusDefinitions.GetValueOrDefault(detonatedStatusId)?.Name ?? detonatedStatusId));
-                receiver.Hp = Math.Max(0, receiver.Hp - AbsorbShield(receiver, actor, detonated, random, rules, events));
+                receiver.LoseHp(AbsorbShield(receiver, actor, detonated, random, rules, events));
                 if (receiver.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, receiver.Name));
+                FireHpLoss(receiver, actor, random, rules, events);
                 resolution.TargetDamaged = true;
                 break;
             }
@@ -721,8 +723,19 @@ public sealed class BattleEngine
     {
         var damage = Math.Max(1, amount);
         events.Add(new("AdditionalDamage", actor.Name, target.Name, damage));
-        target.Hp = Math.Max(0, target.Hp - AbsorbShield(target, actor, damage, random, rules, events));
+        target.LoseHp(AbsorbShield(target, actor, damage, random, rules, events));
         if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
+        FireHpLoss(target, actor, random, rules, events);
+    }
+
+    /// <summary>
+    /// 대검전사 보복의 "체력을 일정량 소모할 때마다"에 반응한다. 피해로 잃은 체력을 누적해 최대 체력의 10%를 넘길 때마다 체력소모시 패시브를 한 번 발동한다.
+    /// 한 번에 25%를 잃으면 두 번 발동하고 남은 5%는 다음 피해에 이어 센다. 보호막이 흡수한 피해는 체력을 잃지 않았으므로 세지 않는다.
+    /// </summary>
+    private static void FireHpLoss(Fighter owner, Fighter opponent, IBattleRandom random, Rules rules, List<BattleEvent> events)
+    {
+        for (var steps = owner.TakeHpLossSteps(); steps > 0 && owner.Hp > 0 && opponent.Hp > 0; steps--)
+            FirePassiveTrigger(owner, opponent, "체력소모시", null, null, random, rules, events);
     }
 
     /// <summary>
@@ -892,7 +905,7 @@ public sealed class BattleEngine
             }
             // 약점 노출의 "방어도 무시 50%"는 이 타격에 반영되는 상대 방어력만 줄인다.
             var defenseIgnore = Math.Clamp(target.StatusValue("받는방어무시"), 0d, 1d);
-            var amount = Math.Max(1, baseDamage - target.Defense * (1d - defenseIgnore) * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
+            var amount = Math.Max(1, baseDamage - target.EffectiveDefense * (1d - defenseIgnore) * rules.DefenseCoefficient) * outgoing * incoming * (rules.DamageVarianceMin + random.NextDouble() * (rules.DamageVarianceMax - rules.DamageVarianceMin));
             var criticalChance = Math.Clamp((rules.CriticalChance + actor.StatusValue("치명타확률증가") + (classSkillAttack ? actor.StatusValue("다음스킬치명타확률증가") : 0d) + target.StatusValue("받는치명타확률증가") - target.StatusValue("받는치명타확률감소")) * criticalChanceMultiplier, 0d, 1d);
             var critical = random.NextDouble() < criticalChance;
             // 약점 노출은 "첫 스킬 공격"에만 적용된다. 다단 스킬도 첫 타격이 판정된 순간 소모되어 나머지 타격에는 적용되지 않는다.
@@ -910,7 +923,7 @@ public sealed class BattleEngine
             var damage = Math.Max(1, (int)Math.Round(amount));
             damaged = true;
             events.Add(new("DamageDealt", actor.Name, target.Name, damage));
-            target.Hp = Math.Max(0, target.Hp - AbsorbShield(target, actor, damage, random, rules, events));
+            target.LoseHp(AbsorbShield(target, actor, damage, random, rules, events));
             if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
             // 궁수 순풍의 "피격 시 급소 회피가 발동하지 않을 경우"처럼 치명타를 맞은 쪽(target) 관점에서 반응한다. 치명타 타격마다 발동한다.
             if (critical && target.Hp > 0 && actor.Hp > 0) FirePassiveTrigger(target, actor, "치명타피격시", sourceSkill?.Id, null, random, rules, events);
@@ -919,7 +932,7 @@ public sealed class BattleEngine
                 // 추가타는 이미 확정된 피해의 일부만 더하고, 치명타 판정을 따로 하지 않습니다.
                 var additionalDamage = Math.Max(1, (int)Math.Round(damage * rules.AdditionalHitDamageRatio));
                 events.Add(new("AdditionalHit", actor.Name, target.Name, additionalDamage));
-                target.Hp = Math.Max(0, target.Hp - AbsorbShield(target, actor, additionalDamage, random, rules, events));
+                target.LoseHp(AbsorbShield(target, actor, additionalDamage, random, rules, events));
                 if (target.Hp == 0) events.Add(new("CharacterDefeated", actor.Name, target.Name));
                 // 힐러 소생의 "공격이 추가타로 적중하면"에 반응한다. 대상스킬ID를 지정하면 그 스킬의 추가타에만 반응한다.
                 if (target.Hp > 0 && actor.Hp > 0) FirePassiveTrigger(actor, target, "추가타적중시", sourceSkill?.Id, null, random, rules, events);
@@ -929,6 +942,7 @@ public sealed class BattleEngine
         }
         // 선수필승처럼 "상대에게 먼저 공격받았는지"에 반응하는 패시브를 피격자 관점에서 발동한다.
         if (damaged && target.Hp > 0) FirePassiveTrigger(target, actor, "피격시", sourceSkill?.Id, null, random, rules, events);
+        FireHpLoss(target, actor, random, rules, events);
         return damaged;
     }
 
@@ -954,6 +968,25 @@ public sealed class BattleEngine
         // 상대가 건 상태(디버프·지속 피해·브레이크). 약초 채집·천옷 제작이 제거하는 "해로운 상태"의 기준이다.
         public HashSet<string> HarmfulStatuses { get; } = new(StringComparer.Ordinal);
         public int BreakGauge;
+        // 피해로 잃은 체력 가운데 아직 체력소모시 발동으로 세지 않은 양(최대 체력의 10% 단위로 센다).
+        private int hpLossBank;
+        /// <summary>피해로 체력을 잃는다. 실제로 깎인 양을 체력소모시 판정용으로 누적한다.</summary>
+        public void LoseHp(int amount)
+        {
+            var before = Hp;
+            Hp = Math.Max(0, Hp - amount);
+            hpLossBank += before - Hp;
+        }
+        /// <summary>누적된 잃은 체력에서 최대 체력 10% 단위의 개수를 꺼낸다. 남은 양은 다음 피해에 이어 센다.</summary>
+        public int TakeHpLossSteps()
+        {
+            var threshold = Math.Max(1, (int)Math.Ceiling(MaxHp * .1));
+            var steps = hpLossBank / threshold;
+            hpLossBank -= steps * threshold;
+            return steps;
+        }
+        /// <summary>대검전사 불굴의 방어력 증가(방어력증가 상태 합계)를 반영한 방어력.</summary>
+        public double EffectiveDefense => Defense * (1d + StatusValue("방어력증가"));
         // 브레이크로 잃을 행동을 모두 잃었으면 true. 브레이크 상태는 다음 자기 행동이 시작될 때까지 남는다.
         private bool breakActionsSpent;
         public string? PendingSkillId;
@@ -1155,11 +1188,13 @@ public sealed class BattleEngine
                 var incoming = Math.Max(.1d, 1d + StatusValue("받는피해증가") - StatusValue("받는피해감소"));
                 // 체력비례지속피해증폭(힐러 쇠약): 틱 직전 HP 비율에 비례해 이 지속 피해만 키운다. 값 1이면 체력이 가득할 때 ×2.
                 var hpScaling = StatusDefinitions.GetValueOrDefault(statusId) is { } periodicStatus && periodicStatus.HasEffectType("체력비례지속피해증폭") ? 1d + periodicStatus.ValueOf("체력비례지속피해증폭") * Hp / MaxHp : 1d;
-                var amount = Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount - Defense * rules.DefenseCoefficient) * incoming * hpScaling));
+                // 잃은체력비례지속피해증폭(대검전사 뭉개진 상처): 반대로 잃은 체력 비율에 비례해 키운다. 값 1.43이면 체력 30%에서 ×2(최대 대미지 적용 체력)다.
+                if (StatusDefinitions.GetValueOrDefault(statusId) is { } woundStatus && woundStatus.HasEffectType("잃은체력비례지속피해증폭")) hpScaling *= 1d + woundStatus.ValueOf("잃은체력비례지속피해증폭") * (MaxHp - Hp) / MaxHp;
+                var amount = Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount - EffectiveDefense * rules.DefenseCoefficient) * incoming * hpScaling));
                 damaged = true;
                 var name = StatusDefinitions.GetValueOrDefault(statusId)?.Name ?? periodic.Message;
                 events.Add(new("StatusDamage", periodic.SourceName, Name, amount, name));
-                Hp = Math.Max(0, Hp - absorbShield(amount));
+                LoseHp(absorbShield(amount));
                 if (Hp == 0) events.Add(new("CharacterDefeated", periodic.SourceName, Name));
             }
             return (damaged, healed);
@@ -1173,7 +1208,7 @@ public sealed class BattleEngine
             if (!Statuses.TryGetValue(statusId, out var remainingTicks) || remainingTicks <= 0 || !PeriodicEffects.TryGetValue(statusId, out var periodic) || periodic.Heal) return 0;
             RemoveStatus(statusId);
             var incoming = Math.Max(.1d, 1d + StatusValue("받는피해증가") - StatusValue("받는피해감소"));
-            return Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount * remainingTicks - Defense * rules.DefenseCoefficient) * incoming * (1d + bonus)));
+            return Math.Max(1, (int)Math.Round(Math.Max(1, periodic.BaseAmount * remainingTicks - EffectiveDefense * rules.DefenseCoefficient) * incoming * (1d + bonus)));
         }
         private IEnumerable<string> BreakStatusIds() => Statuses.Keys.Where(id => StatusDefinitions.TryGetValue(id, out var status) && status.HasEffectType("브레이크")).ToArray();
         /// <summary>브레이크로 행동을 잃었다. 남은 지속턴이 0이면(잃을 행동을 모두 잃었으면) 브레이크를 다음 자기 행동 시작까지 남긴다.</summary>

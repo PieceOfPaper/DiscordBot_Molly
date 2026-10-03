@@ -604,6 +604,7 @@ FireMageBattleTests.Run();
 WarriorBattleTests.Run();
 ArcherBattleTests.Run();
 MageBattleTests.Run();
+GreatswordWarriorBattleTests.Run();
 BardBattleTests.Run();
 LifeSkillBattleTests.Run();
 SkillAiBattleTests.Run();
@@ -1716,6 +1717,34 @@ var breakReceived = Duel(breakReceivedSnapshot, classB: "b");
 Check(breakReceived.Events.Count(x => x.Type == "BreakActivated") == 1 && breakReceived.Events.Any(x => x.Type == "BreakGaugeBlocked")
     && breakReceived.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A") == 1 && breakReceived.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "받은 브레이크 피해 +1 (현재 1)"),
     "브레이크피격시는 브레이크 피해로 게이지가 오를 때 맞은 쪽에서 발동하고, 이미 브레이크라 막힌 피해에는 발동하지 않는다");
+
+// 체력소모시(대검전사 보복): 피해로 잃은 체력을 누적해 최대 체력의 10%마다 한 번씩 발동한다. 한 번에 35%를 잃으면 세 번 발동하고 남은 5%는 다음 피해에 이어 센다.
+var hpLossSnapshot = new BattleDataSnapshot
+{
+    Rules = RulesWith(("base_max_hp", "100"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "4"), ("normal_attack_multiplier", "0.1"), ("minimum_skill_cooldown", "1")),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "보복", Array.Empty<string>(), PassiveIds: ["test_hp_loss"]), ["b"] = new("b", "강타", ["smash"]) },
+    Skills = new Dictionary<string, BattleSkill> { ["smash"] = new("smash", "강타", "일반", null, true, 1, 0, 1, 1, [Fx("smash_1", 1, "피해", "상대", 35)]) },
+    Passives = new Dictionary<string, BattlePassive> { ["test_hp_loss"] = new("test_hp_loss", true, [new BattleEffect("thl_01", 1, "자원증가", "자신", 1, 1, 1, 0, "hp_lost_steps", 0, null, null, null, null, null, null, null, null, 1d, "체력소모시")]) },
+    Resources = new Dictionary<string, BattleResource> { ["hp_lost_steps"] = new("hp_lost_steps", "체력 소모", "중첩", 0, 0, 0, "가산") },
+    Statuses = new Dictionary<string, BattleStatus>(),
+    LoadedAt = DateTimeOffset.UtcNow
+};
+var hpLoss = Duel(hpLossSnapshot, classB: "b");
+Check(hpLoss.FighterAHp == 30 && hpLoss.Events.Count(x => x.Type == "ResourceChanged" && x.Actor == "A") == 7 && hpLoss.Events.Any(x => x.Type == "ResourceChanged" && x.Detail == "체력 소모 +1 (현재 7)"),
+    "체력소모시는 잃은 체력 10%마다 발동하고(35 → 3회), 남은 양을 다음 피해에 이어 센다(70 → 7회)");
+
+// 방어력증가(대검전사 불굴): 보유자의 방어력에 1 + 값을 곱해 받는 피해에서 더 많이 뺀다.
+Dictionary<string, BattleStatus> defenseStatuses = new() { ["test_defense"] = new("test_defense", "불굴", "방어력증가", 1.5, "") };
+BattleDataSnapshot DefenseSnapshot(bool withStatus) => new()
+{
+    Rules = RulesWith(("base_max_hp", "1000"), ("max_surprise_events_per_actor", "0"), ("max_major_actions", "2"), ("base_defense", "20")),
+    Classes = new Dictionary<string, BattleClass> { ["a"] = new("a", "불굴", Array.Empty<string>(), PassiveIds: withStatus ? ["test_defense_up"] : []), ["idle"] = idleClass },
+    Passives = new Dictionary<string, BattlePassive> { ["test_defense_up"] = new("test_defense_up", true, [new BattleEffect("tdu_01", 1, "방어력증가", "자신", 0, 1, 1, 0, "test_defense", 0, null, null, null, null, null, null, null, null, 1d, "전투시작")]) },
+    Statuses = defenseStatuses,
+    LoadedAt = DateTimeOffset.UtcNow
+};
+Check(DamageBy(Duel(DefenseSnapshot(false)), "B").SequenceEqual(new int?[] { 32 }) && DamageBy(Duel(DefenseSnapshot(true)), "B").SequenceEqual(new int?[] { 2 }),
+    "방어력증가 1.5는 방어력 20을 50으로 늘려 일반 공격 52의 피해를 32에서 2로 줄인다");
 
 // 중첩방식=선점(음유시인 악상): 같은 분류의 선점 자원을 이미 가지고 있으면 새 자원을 얻지 못하고, 먼저 얻은 자원이 소모되면 다시 얻을 수 있다.
 var firstComeResources = new Dictionary<string, BattleResource>
