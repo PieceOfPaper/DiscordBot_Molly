@@ -11,6 +11,7 @@
 - [마물 퇴치 증표 기획서](docs/currency/monster-hunt-token.md)
 - [출석 기획서](docs/attendance/README.md)
 - [배틀 예측 기획서](docs/battle/prediction.md)
+- [레이드 기획서](docs/raid/README.md) — 기획 초안, 구현 보류
 - [거래소 시세 기능 기획서](docs/market-price-monitoring.md)
 
 ## 핵심 기능
