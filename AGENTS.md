@@ -44,6 +44,7 @@
 - KeywordMarket/: 검색어로 찾은 거래소 아이템 전체를 추적하는 /상자시세모니터링·/패키지시세모니터링(시세 변동·신규·사라짐) 판정·저장·정각 수집. 정각 일정은 Market/MarketSchedule 공용.
 - Currency/: 서버별 놀이 재화 `마물 퇴치 증표`의 잔액·원장 저장소(MollyTokenStore), `증표규칙` 시트(TokenRuleCatalog), 표기·이모지(MollyToken). 증표를 주고받는 기능은 이 저장소만 쓴다.
 - Attendance/: 서버별 출석부(/출석부등록·/출석부해제) 저장·출석일 계산(오전 6시 KST 고정)·메시지 갱신·매일 초기화. 출석 기록과 증표 지급은 한 트랜잭션.
+- MagicResistance/: `/마도저항확인`의 룬다 어비스 난이도별 필요 마도저항·마도 압력 기준값(MagicResistanceCatalog)과 피해 증감 추정식(MagicResistanceCalculator). 기준값·출처는 `docs/magic-resistance.md`.
 - Prediction/: `/배틀` 승부 예측(BattlePredictionStore) 베팅·마감·정산·재시작 무효 처리와 공동 배당 계산. 증표는 정산할 때만 차감·배당한다.
 
 ## 구현 원칙
