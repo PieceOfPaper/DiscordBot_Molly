@@ -594,6 +594,7 @@ await QuizFlowTests.RunAsync();
 await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
+await HaeyeonCostTests.RunAsync();
 await KeywordMarketTests.RunAsync();
 MarketTrendTests.Run();
 MagicResistanceTests.Run();

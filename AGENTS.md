@@ -41,6 +41,7 @@
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
 - Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세모니터링 판정·저장·정각 수집.
+- HaeyeonCost/: /해연비용계산의 장비 성장 수치·부위 매핑(HaeyeonCostRules), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
 - KeywordMarket/: 검색어로 찾은 거래소 아이템 전체를 추적하는 /상자시세모니터링·/패키지시세모니터링(시세 변동·신규·사라짐) 판정·저장·정각 수집. 정각 일정은 Market/MarketSchedule 공용.
 - Currency/: 서버별 놀이 재화 `마물 퇴치 증표`의 잔액·원장 저장소(MollyTokenStore), `증표규칙` 시트(TokenRuleCatalog), 표기·이모지(MollyToken). 증표를 주고받는 기능은 이 저장소만 쓴다.
 - Attendance/: 서버별 출석부(/출석부등록·/출석부해제) 저장·출석일 계산(오전 6시 KST 고정)·메시지 갱신·매일 초기화. 출석 기록과 증표 지급은 한 트랜잭션.
