@@ -151,15 +151,15 @@ internal static class HaeyeonCostTests
                && embed.Description.Contains("예상 추가 비용: **약 164,000데카**"), "현재·목표·도달 저항과 예상 비용을 쉼표로 표시");
         Assert(embed.Fields[0].Value == "• 무기 2개\n• 반지 20개" && embed.Fields[1].Value == "• 무기 12,000데카\n• 반지 7,000데카",
             "추가 구매 수량과 적용 평균 단가를 줄 목록으로 표시(표 미사용)");
-        Assert(text.Contains(HaeyeonCostCommand.EstimateNotice) && text.Contains(HaeyeonCostCommand.PremiseNotice)
+        Assert(text.Contains(HaeyeonCostCommand.OrderNotice) && text.Contains(HaeyeonCostCommand.EstimateNotice) && text.Contains(HaeyeonCostCommand.PremiseNotice)
                && text.Contains("시세 수집: 2026-10-19 22:00 KST") && embed.Footer.Value.Text.Contains("모비라이프 제공") && !text.Contains("⚠️"),
-            "응답에 추정 전제·시세 수집 시각(KST)·모비라이프 출처 포함");
+            "응답에 맞추는 순서 기준·추정 전제·시세 수집 시각(KST)·모비라이프 출처 포함");
         var stale = HaeyeonCostCommand.Build(7_200, 7_800, Crafting(), TestLatest(), "모비라이프 제공", s_Now.AddHours(2)).Embed!;
         Assert(stale.Fields.Any(f => f.Value.Contains("시세 수집: 2026-10-19 22:00 KST · ⚠️ 최근 수집에 실패해 이전 시세를 사용했어요")),
             "최근 정각 수집을 놓친 이전 시세면 수집 시각과 오래된 시세임을 표시");
 
         var done = HaeyeonCostCommand.Build(7_802, 7_500, Crafting(), null, "모비라이프 제공", s_Now).Embed!;
-        Assert(done.Description.Contains("추가 비용은 0데카"), "목표가 현재 이하면 시세 없이도 0데카");
+        Assert(done.Description.Contains("추가 비용은 0데카") && done.Description.Contains(HaeyeonCostCommand.OrderNotice), "목표가 현재 이하면 시세 없이도 0데카");
         Assert(HaeyeonCostCommand.Build(7_100, 7_800, Crafting(), TestLatest(), "모비라이프 제공", s_Now).Message is { } range
                && range.Contains("7,200~10,000") && range.Contains("10성 룬"), "범위 밖이면 지원 범위와 계산 전제를 안내");
         Assert(HaeyeonCostCommand.Build(7_210, 7_800, Crafting(), TestLatest(), "모비라이프 제공", s_Now).Message is { } grid

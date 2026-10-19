@@ -11,6 +11,7 @@ public sealed class HaeyeonCostCommand : InteractionModuleBase<SocketInteraction
 {
     public const string Title = "해연 비용 계산";
     public const string EstimateNotice = "현재 부위별 상태는 비용 효율을 고려한 성장 경로로 추정합니다.";
+    public const string OrderNotice = "반지 → 무기 → 방어구·목걸이 순서로 맞추는 것을 기준으로 합니다.";
     public const string PremiseNotice = "10성 룬 전체·초기 해연 세팅 기준이며 실제 장비 상태와 매물에 따라 비용이 달라질 수 있습니다.";
     public const string PremiseDetail =
         "10성 룬 10개(저항 3,000)와 무기·방어구 5부위·목걸이·반지 2개에 최초 수치 해연을 적용한 7,200에서 출발해요. " +
@@ -47,7 +48,7 @@ public sealed class HaeyeonCostCommand : InteractionModuleBase<SocketInteraction
 
         if (target <= current)
             return new(null, Base()
-                .WithDescription($"현재 {N(current)} → 목표 {N(target)}\n\n이미 목표에 도달해 **추가 비용은 0데카**예요.\n\n{EstimateNotice}\n{PremiseNotice}")
+                .WithDescription($"현재 {N(current)} → 목표 {N(target)}\n\n이미 목표에 도달해 **추가 비용은 0데카**예요.\n\n{OrderNotice}\n{EstimateNotice}\n{PremiseNotice}")
                 .Build());
 
         if (latest is null)
@@ -67,7 +68,7 @@ public sealed class HaeyeonCostCommand : InteractionModuleBase<SocketInteraction
             .WithDescription($"현재 {N(current)} → 목표 {N(target)}\n예상 도달 저항: {N(plan.ReachedResistance)}\n\n예상 추가 비용: **약 {N(plan.Cost)}데카**")
             .AddField("추가 구매·감정", string.Join("\n", bought.Select(x => $"• {HaeyeonCostRules.Name(x)} {plan.Purchases[x]}개")))
             .AddField("적용 평균 단가", string.Join("\n", bought.Select(x => $"• {HaeyeonCostRules.Name(x)} {N(prices.Prices[x].Average)}데카")))
-            .AddField("계산 전제", $"{EstimateNotice}\n{PremiseNotice}\n\n{collected}")
+            .AddField("계산 전제", $"{OrderNotice}\n{EstimateNotice}\n{PremiseNotice}\n\n{collected}")
             .WithFooter($"몰리 • 해연 비용 계산 • 데이터: {attribution}")
             .WithTimestamp(latest.CollectedAtUtc)
             .Build());
