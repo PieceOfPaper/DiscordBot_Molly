@@ -104,9 +104,9 @@ public sealed class OfficialNewsDeliveryWorker
             await m_Store.ReleaseAsync(delivery.Id, "discord_not_ready", m_UtcNow(), ct).ConfigureAwait(false);
             return;
         }
-        if (!await m_Store.IsSubscriptionCurrentAsync(delivery.GuildId, delivery.Board, delivery.ChannelId, ct).ConfigureAwait(false))
+        if (!await m_Store.IsSubscriptionCurrentAsync(delivery.GuildId, delivery.Board, delivery.ChannelId, delivery.Generation, ct).ConfigureAwait(false))
         {
-            // 해제·채널 교체 뒤에는 이전 작업을 보내지 않고, 새 채널로 소급 전송하지도 않는다.
+            // 해제·채널 교체·해제 후 재등록 뒤에는 이전 작업을 보내지 않고, 새 채널로 소급 전송하지도 않는다.
             await m_Store.MarkSkippedAsync(delivery.Id, "subscription_changed", m_UtcNow(), ct).ConfigureAwait(false);
             m_Log($"구독이 해제·변경돼 건너뜀: {target}");
             return;
@@ -121,7 +121,8 @@ public sealed class OfficialNewsDeliveryWorker
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(SendTimeout);
-            var messageId = await m_Sender.SendAsync(delivery.ChannelId, OfficialNewsMessages.Build(board, delivery.Event), timeout.Token).ConfigureAwait(false);
+            var message = board == NewsBoards.Maintenance ? MaintenanceMessages.Build(delivery.Event) : OfficialNewsMessages.Build(board, delivery.Event);
+            var messageId = await m_Sender.SendAsync(delivery.ChannelId, message, timeout.Token).ConfigureAwait(false);
             await m_Store.MarkSentAsync(delivery.Id, messageId, m_UtcNow(), ct).ConfigureAwait(false);
             return;
         }

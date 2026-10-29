@@ -212,6 +212,9 @@ class Program
         if (cancelledPredictions > 0) Console.WriteLine($"[배틀 예측] 재시작으로 정산되지 않은 예측 {cancelledPredictions}개를 무효 처리했습니다.");
         var newsStore = new OfficialNewsStore();
         await newsStore.InitializeAsync(appCts.Token);
+        // 점검 알림 분리 전 공지 구독으로 만든 미발송 점검 글 작업은 일반 공지 채널로 보내지 않는다(worker 시작 전).
+        var skippedMaintenance = await newsStore.SkipLegacyMaintenanceNoticeDeliveriesAsync(DateTimeOffset.UtcNow, appCts.Token);
+        if (skippedMaintenance > 0) Console.WriteLine($"[공식소식] 점검 알림 분리: 공지 채널로 보내려던 미발송 점검 글 작업 {skippedMaintenance}개를 건너뜀(maintenance_split)");
         var newsSender = new DiscordOfficialNewsSender(m_Client);
         var newsWorker = new OfficialNewsDeliveryWorker(newsStore, newsSender);
         // 기본은 켜짐. 잘못된 값이면 켜진 것으로 보고 알린다.

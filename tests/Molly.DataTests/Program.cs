@@ -629,6 +629,7 @@ await CurrencyTests.RunAsync();
 await AttendanceTests.RunAsync();
 await PredictionTests.RunAsync();
 await OfficialNewsTests.RunAsync();
+await MaintenanceAlertTests.RunAsync();
 await MollyStatusTests.RunAsync();
 var battleRules = new Dictionary<string, BattleRule>
 {

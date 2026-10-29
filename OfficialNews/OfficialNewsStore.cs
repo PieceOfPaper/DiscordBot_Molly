@@ -3,15 +3,21 @@ using Microsoft.Data.Sqlite;
 
 namespace Molly.OfficialNews;
 
-/// <summary>서버·게시판별 구독. 해제해도 행은 남기고 Enabled만 끈다.</summary>
-public sealed record NewsSubscription(ulong GuildId, string Board, ulong ChannelId, bool Enabled, DateTimeOffset UpdatedAt);
+/// <summary>
+/// 서버·알림 종류(게시판 넷과 점검)별 구독. 해제해도 행은 남기고 Enabled만 끈다.
+/// Generation은 해제 뒤 재등록·채널 교체 때마다 늘어, 같은 채널로 다시 등록해도 이전 구독으로 만든 대기 작업이 살아나지 않게 한다.
+/// </summary>
+public sealed record NewsSubscription(ulong GuildId, string Board, ulong ChannelId, bool Enabled, DateTimeOffset UpdatedAt, long Generation = 0);
 
 public enum NewsReceiveStatus { Created, Duplicate }
 
 public sealed record NewsReceiveResult(NewsReceiveStatus Status, int DeliveryCount);
 
-/// <summary>발송 worker가 가져간 작업 하나. ChannelId는 작업을 만들 때의 구독 채널이다.</summary>
-public sealed record NewsDelivery(long Id, ulong GuildId, string Board, ulong ChannelId, int Attempts, NewsEvent Event);
+/// <summary>발송 worker가 가져간 작업 하나. Board는 알림 종류, ChannelId·Generation은 작업을 만들 때의 구독이다.</summary>
+public sealed record NewsDelivery(long Id, ulong GuildId, string Board, ulong ChannelId, int Attempts, NewsEvent Event, long Generation = 0);
+
+/// <summary>한 번의 목록 확인 결과 저장. MaintenanceEvents는 이번에 새로 만든 점검 알림 이벤트다.</summary>
+public sealed record NewsCheckRecord(int Deliveries, IReadOnlyList<NewsEvent> MaintenanceEvents);
 
 public sealed record NewsDeliverySummary(int Waiting, int Failed, DateTimeOffset? LastSentAt);
 
@@ -31,9 +37,11 @@ public static class NewsDeliveryStatus
 }
 
 /// <summary>
-/// 공식 소식 구독(official_news_subscriptions)·발견한 글(official_news_events)·발송 작업(official_news_deliveries)·
-/// 게시판 수집 상태(official_news_board_states)·이미 본 글(official_news_seen_posts).
-/// 새 글 기록, 그 순간 활성 구독의 발송 작업 생성, 본 글 표시는 한 트랜잭션이고, event_id·(event_id, guild_id) 고유 제약으로 같은 글을 다시 보내지 않는다.
+/// 공식 소식 구독(official_news_subscriptions)·발견한 글과 점검 변화(official_news_events)·발송 작업(official_news_deliveries)·
+/// 게시판 수집 상태(official_news_board_states)·이미 본 글(official_news_seen_posts)·공지 글의 제목·말머리 비교 기준(official_news_post_states).
+/// 새 글·점검 변화 기록, 그 순간 활성 구독의 발송 작업 생성, 본 글 표시, 비교 기준 갱신은 한 트랜잭션이고,
+/// event_id·(event_id, guild_id) 고유 제약으로 같은 이벤트를 다시 보내지 않는다.
+/// 구독·발송 작업의 board 열은 알림 종류다(게시판 ID 넷과 점검 `maintenance`). 점검 이벤트의 board는 원본 게시판(notice)이다.
 /// </summary>
 public sealed class OfficialNewsStore
 {
@@ -106,10 +114,61 @@ public sealed class OfficialNewsStore
                     seen_at_utc TEXT NOT NULL,
                     PRIMARY KEY (board, post_id)
                 );
+                CREATE TABLE IF NOT EXISTS official_news_post_states (
+                    board TEXT NOT NULL,
+                    post_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    category TEXT NULL,
+                    maintenance INTEGER NOT NULL,
+                    revision INTEGER NOT NULL,
+                    first_seen_at_utc TEXT NOT NULL,
+                    last_seen_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (board, post_id)
+                );
                 """;
             await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
+        // 점검 알림 도입 전 DB: 기존 행은 그대로 두고 빈 열만 더한다. 기존 구독·작업의 세대는 0으로 서로 맞는다.
+        await AddColumnIfMissingAsync(connection, transaction, "official_news_subscriptions", "generation", "INTEGER NOT NULL DEFAULT 0", ct).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, transaction, "official_news_deliveries", "subscription_generation", "INTEGER NOT NULL DEFAULT 0", ct).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, transaction, "official_news_events", "kind", "TEXT NULL", ct).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, transaction, "official_news_events", "previous_title", "TEXT NULL", ct).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, transaction, "official_news_events", "previous_category", "TEXT NULL", ct).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, transaction, "official_news_events", "revision", "INTEGER NULL", ct).ConfigureAwait(false);
         await transaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    private static async Task AddColumnIfMissingAsync(SqliteConnection connection, SqliteTransaction transaction, string table, string column, string definition, CancellationToken ct)
+    {
+        await using (var info = connection.CreateCommand())
+        {
+            info.Transaction = transaction;
+            info.CommandText = $"SELECT 1 FROM pragma_table_info('{table}') WHERE name = $column;";
+            info.Parameters.AddWithValue("$column", column);
+            if (await info.ExecuteScalarAsync(ct).ConfigureAwait(false) is not null) return;
+        }
+        await using var alter = connection.CreateCommand();
+        alter.Transaction = transaction;
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition};";
+        await alter.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 점검 알림 분리 전 공지 구독으로 만든 점검 글 작업 중 아직 보내지 않은 것을 skipped(`maintenance_split`)로 바꾼다.
+    /// 근거는 새 글을 기록할 때 저장한 말머리가 `점검`인 것뿐이다. 말머리가 없거나 다른 글은 일반 공지로 두고, 보낸 기록은 바꾸지 않는다.
+    /// 점검 구독으로 옮기거나 소급하지 않는다. 시작할 때 worker보다 먼저 호출하며 다시 호출해도 같은 결과다.
+    /// </summary>
+    public async Task<int> SkipLegacyMaintenanceNoticeDeliveriesAsync(DateTimeOffset nowUtc, CancellationToken ct = default)
+    {
+        await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE official_news_deliveries SET status = 'skipped', lease_until_utc = NULL, last_error_code = 'maintenance_split', updated_at_utc = $now
+            WHERE board = 'notice' AND status IN ('pending', 'sending')
+              AND event_id IN (SELECT event_id FROM official_news_events WHERE board = 'notice' AND kind IS NULL AND category = '점검');
+            """;
+        command.Parameters.AddWithValue("$now", Format(nowUtc));
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     // ── 구독 ──────────────────────────────────────────────
@@ -126,7 +185,9 @@ public sealed class OfficialNewsStore
             command.CommandText = """
                 INSERT INTO official_news_subscriptions (guild_id, board, channel_id, enabled, created_at_utc, updated_at_utc)
                 VALUES ($guildId, $board, $channelId, 1, $now, $now)
-                ON CONFLICT(guild_id, board) DO UPDATE SET channel_id = excluded.channel_id, enabled = 1, updated_at_utc = excluded.updated_at_utc;
+                ON CONFLICT(guild_id, board) DO UPDATE SET
+                    generation = CASE WHEN enabled = 1 AND channel_id = excluded.channel_id THEN generation ELSE generation + 1 END,
+                    channel_id = excluded.channel_id, enabled = 1, updated_at_utc = excluded.updated_at_utc;
                 """;
             command.Parameters.AddWithValue("$guildId", checked((long)guildId));
             command.Parameters.AddWithValue("$board", board);
@@ -164,11 +225,11 @@ public sealed class OfficialNewsStore
         return await ReadSubscriptionAsync(connection, null, guildId, board, ct).ConfigureAwait(false);
     }
 
-    /// <summary>발송 직전 확인: 작업을 만든 채널이 지금도 켜진 구독 채널인지.</summary>
-    public async Task<bool> IsSubscriptionCurrentAsync(ulong guildId, string board, ulong channelId, CancellationToken ct = default)
+    /// <summary>발송 직전 확인: 작업을 만든 구독(채널·세대)이 지금도 켜진 구독인지. 해제 후 같은 채널로 재등록했으면 세대가 달라 false.</summary>
+    public async Task<bool> IsSubscriptionCurrentAsync(ulong guildId, string board, ulong channelId, long generation = 0, CancellationToken ct = default)
     {
         var subscription = await GetSubscriptionAsync(guildId, board, ct).ConfigureAwait(false);
-        return subscription is { Enabled: true } && subscription.ChannelId == channelId;
+        return subscription is { Enabled: true } && subscription.ChannelId == channelId && subscription.Generation == generation;
     }
 
     // ── 수집 상태 ─────────────────────────────────────────
@@ -187,7 +248,11 @@ public sealed class OfficialNewsStore
     }
 
     /// <summary>처음 확인한 목록의 글을 본 것으로만 기록하고 발송 작업은 만들지 않는다. 이미 기준이 있으면 아무것도 바꾸지 않고 false.</summary>
-    public async Task<bool> BaselineBoardAsync(string board, IReadOnlyCollection<long> postIds, DateTimeOffset nowUtc, CancellationToken ct = default)
+    public Task<bool> BaselineBoardAsync(string board, IReadOnlyCollection<long> postIds, DateTimeOffset nowUtc, CancellationToken ct = default) =>
+        BaselineBoardAsync(board, postIds, [], nowUtc, ct);
+
+    /// <summary>첫 확인 기준과 함께 글별 제목·말머리 비교 기준(trackedCards)을 같은 트랜잭션에 만든다. 점검 알림도 만들지 않는다.</summary>
+    public async Task<bool> BaselineBoardAsync(string board, IReadOnlyCollection<long> postIds, IReadOnlyList<NewsListCard> trackedCards, DateTimeOffset nowUtc, CancellationToken ct = default)
     {
         if (postIds.Count == 0) throw new ArgumentException("기준으로 삼을 글이 없습니다.", nameof(postIds));
         await using var connection = await OpenAsync(ct).ConfigureAwait(false);
@@ -209,6 +274,11 @@ public sealed class OfficialNewsStore
             }
         }
         await MarkSeenAsync(connection, transaction, board, postIds, nowUtc, ct).ConfigureAwait(false);
+        foreach (var card in trackedCards)
+        {
+            var result = MaintenanceRules.Evaluate(null, card, isNew: false);
+            await WritePostStateAsync(connection, transaction, board, result.Next, nowUtc, ct).ConfigureAwait(false);
+        }
         await transaction.CommitAsync(ct).ConfigureAwait(false);
         return true;
     }
@@ -233,7 +303,21 @@ public sealed class OfficialNewsStore
     /// 새로 발견한 글들을 기록하고 각 글마다 그 순간 켜진 구독의 발송 작업을 만들며, 본 글로 표시하고 확인 성공을 남긴다. 모두 한 트랜잭션이다.
     /// 만든 발송 작업 수를 돌려준다.
     /// </summary>
-    public async Task<int> RecordDiscoveredAsync(string board, IReadOnlyList<NewsEvent> discovered, DateTimeOffset nowUtc, CancellationToken ct = default)
+    public async Task<int> RecordDiscoveredAsync(string board, IReadOnlyList<NewsEvent> discovered, DateTimeOffset nowUtc, CancellationToken ct = default) =>
+        (await RecordCheckAsync(board, discovered, discovered.Select(n => long.Parse(n.PostId, CultureInfo.InvariantCulture)).ToList(), [], nowUtc, ct).ConfigureAwait(false)).Deliveries;
+
+    /// <summary>
+    /// 한 번의 목록 확인 결과를 한 트랜잭션으로 저장한다.
+    /// <list type="number">
+    /// <item>새 글 알림(discovered)을 기록하고 그 게시판 구독의 발송 작업을 만든다.</item>
+    /// <item>newPostIds(새 글 판정을 통과한 모든 글, 점검 글 포함)를 본 글로 표시한다.</item>
+    /// <item>observedCards(이번에 목록에서 본 글, 중복 없음)를 저장된 제목·말머리와 비교해 비교 기준을 갱신하고, 점검 변화는 점검 구독의 발송 작업으로 만든다.</item>
+    /// <item>확인 성공을 남긴다. 구독이 없어도 비교 기준은 갱신한다.</item>
+    /// </list>
+    /// 중간에 실패하면 모두 되돌려 마지막 정상 기준을 유지한다.
+    /// </summary>
+    public async Task<NewsCheckRecord> RecordCheckAsync(string board, IReadOnlyList<NewsEvent> discovered, IReadOnlyCollection<long> newPostIds,
+        IReadOnlyList<NewsListCard> observedCards, DateTimeOffset nowUtc, CancellationToken ct = default)
     {
         await using var connection = await OpenAsync(ct).ConfigureAwait(false);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
@@ -241,12 +325,80 @@ public sealed class OfficialNewsStore
         foreach (var news in discovered)
         {
             if (news.Board != board) throw new ArgumentException("다른 게시판의 글이 섞였습니다.", nameof(discovered));
-            deliveries += (await ReceiveCoreAsync(connection, transaction, news, nowUtc, ct).ConfigureAwait(false)).DeliveryCount;
+            deliveries += (await ReceiveCoreAsync(connection, transaction, news, board, nowUtc, ct).ConfigureAwait(false)).DeliveryCount;
         }
-        await MarkSeenAsync(connection, transaction, board, discovered.Select(n => long.Parse(n.PostId, CultureInfo.InvariantCulture)).ToList(), nowUtc, ct).ConfigureAwait(false);
+
+        var maintenanceEvents = new List<NewsEvent>();
+        var newIds = newPostIds.ToHashSet();
+        foreach (var card in observedCards.DistinctBy(c => c.PostId))
+        {
+            var previous = await ReadPostStateAsync(connection, transaction, board, card.PostId, ct).ConfigureAwait(false);
+            var result = MaintenanceRules.Evaluate(previous, card, newIds.Contains(card.PostId));
+            if (result.Changed)
+                await WritePostStateAsync(connection, transaction, board, result.Next, nowUtc, ct).ConfigureAwait(false);
+            else
+                await TouchPostStateAsync(connection, transaction, board, card.PostId, nowUtc, ct).ConfigureAwait(false);
+            if (result.Kind is null) continue;
+            var change = MaintenanceRules.ToEvent(previous, result, card, nowUtc);
+            var received = await ReceiveCoreAsync(connection, transaction, change, NewsBoards.Maintenance.Id, nowUtc, ct).ConfigureAwait(false);
+            if (received.Status == NewsReceiveStatus.Created) maintenanceEvents.Add(change);
+            deliveries += received.DeliveryCount;
+        }
+
+        await MarkSeenAsync(connection, transaction, board, newIds, nowUtc, ct).ConfigureAwait(false);
         await UpdateCheckAsync(connection, transaction, board, nowUtc, null, ct).ConfigureAwait(false);
         await transaction.CommitAsync(ct).ConfigureAwait(false);
-        return deliveries;
+        return new NewsCheckRecord(deliveries, maintenanceEvents);
+    }
+
+    /// <summary>글의 제목·말머리 비교 기준. 없으면 null.</summary>
+    public async Task<NewsPostState?> GetPostStateAsync(string board, long postId, CancellationToken ct = default)
+    {
+        await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+        return await ReadPostStateAsync(connection, null, board, postId, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<NewsPostState?> ReadPostStateAsync(SqliteConnection connection, SqliteTransaction? transaction, string board, long postId, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT title, category, maintenance, revision FROM official_news_post_states WHERE board = $board AND post_id = $postId;";
+        command.Parameters.AddWithValue("$board", board);
+        command.Parameters.AddWithValue("$postId", postId);
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
+        return new NewsPostState(postId, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetInt64(2) != 0, reader.GetInt32(3));
+    }
+
+    private static async Task WritePostStateAsync(SqliteConnection connection, SqliteTransaction transaction, string board, NewsPostState state, DateTimeOffset nowUtc, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO official_news_post_states (board, post_id, title, category, maintenance, revision, first_seen_at_utc, last_seen_at_utc)
+            VALUES ($board, $postId, $title, $category, $maintenance, $revision, $now, $now)
+            ON CONFLICT(board, post_id) DO UPDATE SET title = excluded.title, category = excluded.category,
+                maintenance = MAX(maintenance, excluded.maintenance), revision = excluded.revision, last_seen_at_utc = excluded.last_seen_at_utc;
+            """;
+        command.Parameters.AddWithValue("$board", board);
+        command.Parameters.AddWithValue("$postId", state.PostId);
+        command.Parameters.AddWithValue("$title", state.Title);
+        command.Parameters.AddWithValue("$category", (object?)state.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue("$maintenance", state.Maintenance ? 1 : 0);
+        command.Parameters.AddWithValue("$revision", state.Revision);
+        command.Parameters.AddWithValue("$now", Format(nowUtc));
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    private static async Task TouchPostStateAsync(SqliteConnection connection, SqliteTransaction transaction, string board, long postId, DateTimeOffset nowUtc, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE official_news_post_states SET last_seen_at_utc = $now WHERE board = $board AND post_id = $postId;";
+        command.Parameters.AddWithValue("$board", board);
+        command.Parameters.AddWithValue("$postId", postId);
+        command.Parameters.AddWithValue("$now", Format(nowUtc));
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>확인 실패를 남긴다. 기준·본 글은 바꾸지 않으므로 다음 확인에서 놓친 글을 다시 찾는다.</summary>
@@ -294,19 +446,23 @@ public sealed class OfficialNewsStore
     {
         await using var connection = await OpenAsync(ct).ConfigureAwait(false);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
-        var result = await ReceiveCoreAsync(connection, transaction, news, receivedAtUtc, ct).ConfigureAwait(false);
+        var result = await ReceiveCoreAsync(connection, transaction, news, news.Kind is null ? news.Board : NewsBoards.Maintenance.Id, receivedAtUtc, ct).ConfigureAwait(false);
         await transaction.CommitAsync(ct).ConfigureAwait(false);
         return result;
     }
 
-    private static async Task<NewsReceiveResult> ReceiveCoreAsync(SqliteConnection connection, SqliteTransaction transaction, NewsEvent news, DateTimeOffset receivedAtUtc, CancellationToken ct)
+    /// <param name="alert">발송 작업을 만들 구독의 알림 종류. 새 글은 그 게시판, 점검 변화는 `maintenance`다.</param>
+    private static async Task<NewsReceiveResult> ReceiveCoreAsync(SqliteConnection connection, SqliteTransaction transaction, NewsEvent news, string alert,
+        DateTimeOffset receivedAtUtc, CancellationToken ct)
     {
         await using (var insert = connection.CreateCommand())
         {
             insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO official_news_events (event_id, board, post_id, title, url, category, thumbnail_url, detected_at, received_at_utc)
-                VALUES ($eventId, $board, $postId, $title, $url, $category, $thumbnailUrl, $detectedAt, $receivedAt)
+                INSERT INTO official_news_events (event_id, board, post_id, title, url, category, thumbnail_url, detected_at, received_at_utc,
+                    kind, previous_title, previous_category, revision)
+                VALUES ($eventId, $board, $postId, $title, $url, $category, $thumbnailUrl, $detectedAt, $receivedAt,
+                    $kind, $previousTitle, $previousCategory, $revision)
                 ON CONFLICT(event_id) DO NOTHING;
                 """;
             insert.Parameters.AddWithValue("$eventId", news.EventId);
@@ -318,6 +474,10 @@ public sealed class OfficialNewsStore
             insert.Parameters.AddWithValue("$thumbnailUrl", (object?)news.ThumbnailUrl ?? DBNull.Value);
             insert.Parameters.AddWithValue("$detectedAt", news.DetectedAt.ToString("O", CultureInfo.InvariantCulture));
             insert.Parameters.AddWithValue("$receivedAt", Format(receivedAtUtc));
+            insert.Parameters.AddWithValue("$kind", (object?)news.Kind ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$previousTitle", (object?)news.PreviousTitle ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$previousCategory", (object?)news.PreviousCategory ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$revision", (object?)news.Revision ?? DBNull.Value);
             if (await insert.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0)
                 return new(NewsReceiveStatus.Duplicate, 0);
         }
@@ -327,13 +487,13 @@ public sealed class OfficialNewsStore
         {
             fanOut.Transaction = transaction;
             fanOut.CommandText = """
-                INSERT INTO official_news_deliveries (event_id, guild_id, board, channel_id, status, attempts, next_attempt_at_utc, created_at_utc, updated_at_utc)
-                SELECT $eventId, guild_id, board, channel_id, 'pending', 0, $now, $now, $now
-                FROM official_news_subscriptions WHERE board = $board AND enabled = 1
+                INSERT INTO official_news_deliveries (event_id, guild_id, board, channel_id, subscription_generation, status, attempts, next_attempt_at_utc, created_at_utc, updated_at_utc)
+                SELECT $eventId, guild_id, board, channel_id, generation, 'pending', 0, $now, $now, $now
+                FROM official_news_subscriptions WHERE board = $alert AND enabled = 1
                 ON CONFLICT(event_id, guild_id) DO NOTHING;
                 """;
             fanOut.Parameters.AddWithValue("$eventId", news.EventId);
-            fanOut.Parameters.AddWithValue("$board", news.Board);
+            fanOut.Parameters.AddWithValue("$alert", alert);
             fanOut.Parameters.AddWithValue("$now", Format(receivedAtUtc));
             deliveries = await fanOut.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
@@ -344,7 +504,7 @@ public sealed class OfficialNewsStore
     {
         await using var connection = await OpenAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT event_id, board, post_id, title, url, category, thumbnail_url, detected_at FROM official_news_events WHERE event_id = $eventId;";
+        command.CommandText = $"SELECT {EventColumns} FROM official_news_events WHERE event_id = $eventId;";
         command.Parameters.AddWithValue("$eventId", eventId);
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false) ? ReadEvent(reader, 0) : null;
@@ -376,7 +536,8 @@ public sealed class OfficialNewsStore
             select.Transaction = transaction;
             select.CommandText = """
                 SELECT e.event_id, e.board, e.post_id, e.title, e.url, e.category, e.thumbnail_url, e.detected_at,
-                       d.id, d.guild_id, d.board, d.channel_id, d.attempts
+                       e.kind, e.previous_title, e.previous_category, e.revision,
+                       d.id, d.guild_id, d.board, d.channel_id, d.attempts, d.subscription_generation
                 FROM official_news_deliveries d JOIN official_news_events e ON e.event_id = d.event_id
                 WHERE (d.status = 'pending' AND d.next_attempt_at_utc <= $now)
                    OR (d.status = 'sending' AND d.lease_until_utc <= $now)
@@ -386,8 +547,11 @@ public sealed class OfficialNewsStore
             select.Parameters.AddWithValue("$limit", limit);
             await using var reader = await select.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
-                claimed.Add(new NewsDelivery(reader.GetInt64(8), checked((ulong)reader.GetInt64(9)), reader.GetString(10),
-                    checked((ulong)reader.GetInt64(11)), reader.GetInt32(12), ReadEvent(reader, 0)));
+            {
+                const int d = EventColumnCount;
+                claimed.Add(new NewsDelivery(reader.GetInt64(d), checked((ulong)reader.GetInt64(d + 1)), reader.GetString(d + 2),
+                    checked((ulong)reader.GetInt64(d + 3)), reader.GetInt32(d + 4), ReadEvent(reader, 0), reader.GetInt64(d + 5)));
+            }
         }
         foreach (var delivery in claimed)
         {
@@ -510,18 +674,23 @@ public sealed class OfficialNewsStore
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT channel_id, enabled, updated_at_utc FROM official_news_subscriptions WHERE guild_id = $guildId AND board = $board;";
+        command.CommandText = "SELECT channel_id, enabled, updated_at_utc, generation FROM official_news_subscriptions WHERE guild_id = $guildId AND board = $board;";
         command.Parameters.AddWithValue("$guildId", checked((long)guildId));
         command.Parameters.AddWithValue("$board", board);
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         if (!await reader.ReadAsync(ct).ConfigureAwait(false)) return null;
-        return new NewsSubscription(guildId, board, checked((ulong)reader.GetInt64(0)), reader.GetInt64(1) != 0, Parse(reader.GetString(2)));
+        return new NewsSubscription(guildId, board, checked((ulong)reader.GetInt64(0)), reader.GetInt64(1) != 0, Parse(reader.GetString(2)), reader.GetInt64(3));
     }
+
+    private const string EventColumns = "event_id, board, post_id, title, url, category, thumbnail_url, detected_at, kind, previous_title, previous_category, revision";
+    private const int EventColumnCount = 12;
 
     private static NewsEvent ReadEvent(SqliteDataReader reader, int offset) => new(
         reader.GetString(offset), reader.GetString(offset + 1), reader.GetString(offset + 2), reader.GetString(offset + 3), reader.GetString(offset + 4),
         reader.IsDBNull(offset + 5) ? null : reader.GetString(offset + 5), reader.IsDBNull(offset + 6) ? null : reader.GetString(offset + 6),
-        Parse(reader.GetString(offset + 7)));
+        Parse(reader.GetString(offset + 7)),
+        reader.IsDBNull(offset + 8) ? null : reader.GetString(offset + 8), reader.IsDBNull(offset + 9) ? null : reader.GetString(offset + 9),
+        reader.IsDBNull(offset + 10) ? null : reader.GetString(offset + 10), reader.IsDBNull(offset + 11) ? null : reader.GetInt32(offset + 11));
 
     // 모든 UTC 시각을 같은 왕복 형식으로 저장해 문자열 비교가 시간 순서와 같게 한다.
     private static string Format(DateTimeOffset value) => value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);

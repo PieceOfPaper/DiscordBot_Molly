@@ -38,6 +38,7 @@
 | 대상 | 수집 상태 | 서버 설정 | 전송 상태 |
 | --- | --- | --- | --- |
 | 공지·업데이트·이벤트·에린 노트 | `molly_job_status`(`news:{board}`) + `official_news_board_states.last_success_at_utc`(병합) | `official_news_subscriptions` | `official_news_deliveries`에서 도출(새로 저장하지 않음) |
+| 점검(`/점검알림`) | 공지 줄을 함께 씀(별도 수집이 아니라 따로 두지 않음) | `official_news_subscriptions`(`maintenance`) | `official_news_deliveries`(`maintenance`)에서 도출 |
 | 이벤트 마감 | `molly_job_status`(`event_list`) + 메모리의 마지막 목록(`MobiEventService.LastSnapshot`) | `event_expire_alert_settings`(채널·몇 시간 전) | `molly_alert_delivery_status`(`event_expire`) |
 | 해연·상자·패키지 시세 | `molly_job_status`(`market:{id}`) + 각 시세 저장소의 마지막 수집 시각(병합) | 각 시세 채널 표(채널·등락률) | `molly_alert_delivery_status`(`market:{id}`) |
 

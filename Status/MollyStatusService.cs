@@ -36,7 +36,7 @@ public sealed class MollyStatusService(
         var alerts = new List<AlertEntry>();
         var collections = new List<CollectionLine>();
 
-        foreach (var board in NewsBoards.All)
+        foreach (var board in NewsBoards.Subscribable)
             alerts.Add(await SafeAlertAsync(board.Name, () => NewsAlertAsync(guildId, board, checkChannel, ct)).ConfigureAwait(false));
         alerts.Add(await SafeAlertAsync("이벤트 마감", () => EventExpireAlertAsync(guildId, checkChannel, ct)).ConfigureAwait(false));
         alerts.Add(await SafeAlertAsync("해연 시세", () => HaeyeonAlertAsync(guildId, checkChannel, ct)).ConfigureAwait(false));
@@ -44,8 +44,10 @@ public sealed class MollyStatusService(
         alerts.Add(await SafeAlertAsync($"{package.Definition.DisplayName} 시세", () => KeywordAlertAsync(package, guildId, checkChannel, ct)).ConfigureAwait(false));
         bool Uses(string alertName) => alerts.Any(x => x.Name == alertName && x.Registered);
 
+        // 점검 알림은 공지 목록 수집을 함께 쓰므로 수집 상태를 따로 두지 않고 공지 줄에 합친다.
         foreach (var board in NewsBoards.All)
-            collections.Add(await SafeCollectionAsync(NewsSection, board.Name, Uses(board.Name), StatusJobs.NewsSchedule, now,
+            collections.Add(await SafeCollectionAsync(NewsSection, board.Name,
+                NewsBoards.Subscribable.Any(alert => alert.SourceBoard == board.Id && Uses(alert.Name)), StatusJobs.NewsSchedule, now,
                 () => NewsInputAsync(board, ct)).ConfigureAwait(false));
         collections.Add(await SafeCollectionAsync(NewsSection, "이벤트 마감용 목록", Uses("이벤트 마감"), StatusJobs.EventListSchedule, now,
             () => EventListInputAsync(ct)).ConfigureAwait(false));

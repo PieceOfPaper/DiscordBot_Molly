@@ -7,6 +7,7 @@ public sealed class OfficialNewsFetchException(string message) : Exception(messa
 /// <summary>
 /// 공식 소식 네 게시판의 목록 첫 페이지를 주기적으로 HTTP로 읽어 새 글을 찾는다. 봇 전체에서 한 번만 수집하고 서버별 구독은 발송 작업으로 나눈다.
 /// 처음 보는 게시판은 지금 목록을 기준으로만 기록하고 보내지 않는다. 확인에 실패하면 상태를 진행하지 않고 다음 주기에 다시 찾는다.
+/// 공지 게시판은 같은 목록으로 점검 글의 등록·제목 변경·완료도 판정한다(<see cref="MaintenanceRules"/>). 점검 글은 일반 공지 새 글로 보내지 않는다.
 /// 목록은 이벤트 수집과 같은 HTTP 경로로 받는다(랭킹과 달리 브라우저 보안 검사가 없다).
 /// </summary>
 public sealed class OfficialNewsCollector
@@ -91,17 +92,21 @@ public sealed class OfficialNewsCollector
     {
         var page = await FetchAsync(board, 1, "", "", ct).ConfigureAwait(false);
         var now = m_UtcNow();
+        var tracks = MaintenanceRules.Tracks(board);
         var state = await m_Store.GetBoardStateAsync(board.Id, ct).ConfigureAwait(false);
         if (state is null)
         {
-            if (await m_Store.BaselineBoardAsync(board.Id, page.Cards.Select(c => c.PostId).ToList(), now, ct).ConfigureAwait(false))
+            if (await m_Store.BaselineBoardAsync(board.Id, page.Cards.Select(c => c.PostId).ToList(), tracks ? page.Cards : [], now, ct).ConfigureAwait(false))
                 m_Log($"{board.Name} 첫 확인: 지금 목록의 글 {page.Cards.Count}개를 기준으로 기록(보내지 않음)");
             return 0;
         }
 
         var discovered = new List<NewsListCard>();
+        // 이미 본 글이 있는 페이지도 모두 제목·말머리를 비교한다. 같은 글이 여러 페이지·카드로 와도 처음 것 하나만 본다.
+        var observed = new List<NewsListCard>();
         for (var pageNo = 1; ; pageNo++)
         {
+            if (tracks) observed.AddRange(page.Cards.Where(c => observed.All(o => o.PostId != c.PostId)));
             // 기준보다 오래된 글은 목록 위로 다시 올라와도 새 글이 아니다.
             var candidates = page.Cards.Where(c => c.PostId > state.FloorPostId && discovered.All(d => d.PostId != c.PostId)).ToList();
             var seen = await m_Store.GetSeenPostIdsAsync(board.Id, candidates.Select(c => c.PostId), ct).ConfigureAwait(false);
@@ -118,12 +123,20 @@ public sealed class OfficialNewsCollector
             page = await FetchAsync(board, pageNo + 1, page.BlockStartNo, page.BlockStartKey, ct).ConfigureAwait(false);
         }
 
-        var events = discovered.OrderBy(c => c.PostId).Select(c => ToEvent(board, c, now)).ToList();
-        var deliveries = await m_Store.RecordDiscoveredAsync(board.Id, events, now, ct).ConfigureAwait(false);
+        // 점검 글(처음부터 완료된 점검 안내 포함)은 일반 공지 새 글로 보내지 않는다. 본 글 표시는 함께 한다.
+        var events = discovered.Where(c => !tracks || !MaintenanceRules.IsMaintenancePost(c.Title, c.Category))
+            .OrderBy(c => c.PostId).Select(c => ToEvent(board, c, now)).ToList();
+        var record = await m_Store.RecordCheckAsync(board.Id, events, discovered.Select(c => c.PostId).ToList(), observed, now, ct).ConfigureAwait(false);
         if (events.Count > 0)
-            m_Log($"{board.Name} 새 글 {events.Count}개 발견, 발송 작업 {deliveries}개: {string.Join(", ", events.Select(e => e.PostId))}");
-        if (deliveries > 0) m_OnDeliveriesCreated();
-        return events.Count;
+            m_Log($"{board.Name} 새 글 {events.Count}개 발견: {string.Join(", ", events.Select(e => e.PostId))}");
+        if (discovered.Count > events.Count)
+            m_Log($"{board.Name} 새 점검 글 {discovered.Count - events.Count}개는 공지 알림에서 제외: {string.Join(", ", discovered.Select(c => c.PostId).Except(events.Select(e => long.Parse(e.PostId, System.Globalization.CultureInfo.InvariantCulture))))}");
+        foreach (var change in record.MaintenanceEvents)
+            m_Log($"점검 알림 {change.Kind} 글 {change.PostId} 변경 {change.Revision}");
+        if (events.Count > 0 || record.MaintenanceEvents.Count > 0)
+            m_Log($"{board.Name} 확인: 발송 작업 {record.Deliveries}개");
+        if (record.Deliveries > 0) m_OnDeliveriesCreated();
+        return discovered.Count;
     }
 
     /// <summary>게시판 목록 첫 페이지를 지금 바로 읽는다. 상태는 바꾸지 않는다(구독 명령의 테스트 출력용).</summary>

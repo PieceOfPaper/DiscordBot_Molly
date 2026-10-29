@@ -48,7 +48,7 @@
 - MagicResistance/: `/마도저항확인`의 룬다 어비스 난이도별 필요 마도저항·마도 압력 기준값(MagicResistanceCatalog)과 피해 증감 추정식(MagicResistanceCalculator). 기준값·출처는 `docs/magic-resistance.md`.
 - Prediction/: `/배틀` 승부 예측(BattlePredictionStore) 베팅·마감·정산·재시작 무효 처리와 공동 배당 계산. 증표는 정산할 때만 차감·배당한다.
 - Status/: `/몰리상태`의 수집 작업별 상태·서버별 전송 상태 저장(MollyStatusStore), 실행 시작 시각·진행 중 작업과 기록 창구(MollyStatusTracker), 수집 상태 판정(CollectionStatusJudge)·응답 문구(MollyStatusReport)·상태 수집(MollyStatusService). 각 작업은 성공·실패 지점에서 트래커에 기록하고, 조회는 외부 API를 호출하지 않는다. 기획은 `docs/molly-status.md`.
-- OfficialNews/: 공식 소식(공지·업데이트·이벤트·에린 노트) 목록 파싱(OfficialNewsParser)·10분 주기 HTTP 수집과 새 글 판정(OfficialNewsCollector)·구독/글/발송 작업/수집 상태 저장(OfficialNewsStore)·단일 발송 worker(OfficialNewsDeliveryWorker). 목록은 이벤트 수집과 같은 HTTP 경로로 읽고 브라우저를 쓰지 않는다(브라우저가 필요한 것은 Cloudflare 검사가 있는 랭킹뿐). 기획은 `docs/official-news.md`.
+- OfficialNews/: 공식 소식(공지·업데이트·이벤트·에린 노트) 목록 파싱(OfficialNewsParser)·10분 주기 HTTP 수집과 새 글 판정(OfficialNewsCollector)·구독/글/발송 작업/수집 상태/공지 글 비교 기준 저장(OfficialNewsStore)·단일 발송 worker(OfficialNewsDeliveryWorker). `/점검알림`은 게시판이 아닌 공지 안의 알림 종류(`NewsBoards.Maintenance`, 수집 대상 아님)로, 같은 공지 목록에서 점검 글 분류·제목/말머리 변화 판정(MaintenanceRules)과 Embed(MaintenanceMessages)를 쓴다. 목록은 이벤트 수집과 같은 HTTP 경로로 읽고 브라우저를 쓰지 않는다(브라우저가 필요한 것은 Cloudflare 검사가 있는 랭킹뿐). 기획은 `docs/official-news.md`.
 
 ## 구현 원칙
 - 사용자에게 보여주는 명령과 안내는 한국어로 작성한다.

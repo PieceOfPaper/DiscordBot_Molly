@@ -376,6 +376,18 @@ internal static class MollyStatusTests
 
         await store.SetSubscriptionAsync(Guild, "notice", ChOther, now);
         Assert(await store.GetDeliveryHealthAsync(Guild, "notice", ChOther) == (null, null, null), "채널을 바꾸면 이전 채널의 기록을 현재 설정 결과로 보지 않음");
+
+        // 점검 알림은 같은 발송 작업 표에서 알림 종류 `maintenance`로 따로 읽는다.
+        await store.SetSubscriptionAsync(Guild, "maintenance", ChNews, now);
+        sender.Fail = new NewsDeliveryException("discord_403_50013", true, "Missing Permissions");
+        now = now.AddMinutes(1);
+        await store.ReceiveAsync(new NewsEvent(NewsBoards.MaintenanceEventIdFor(9, 0, MaintenanceEventKinds.Created), "notice", "9", "점검", "https://example.invalid",
+            "점검", null, now, MaintenanceEventKinds.Created, Revision: 0), now);
+        await worker.ProcessDueAsync(default);
+        var maintenance = await store.GetDeliveryHealthAsync(Guild, "maintenance", ChNews);
+        Assert(maintenance.LastFailureAt == now && StatusErrorKinds.FromNewsDeliveryCode(maintenance.LastErrorCode) == StatusErrorKinds.Permission
+               && await store.GetDeliveryHealthAsync(Guild, "notice", ChOther) == (null, null, null), "점검 알림 전송 실패는 점검 알림에만 기록");
+        sender.Fail = null;
     }
 
     private static async Task GatherTestsAsync(string databasePath)
@@ -469,6 +481,18 @@ internal static class MollyStatusTests
         var failingInput = await service.GatherAsync(Guild, (_, _) => throw new InvalidOperationException("boom"));
         Assert(failingInput.Alerts.Single(x => x.Name == "공지").Check.Kind == ChannelCheckKind.CheckFailed && failingInput.Collections.Count == 8,
             "채널 확인이 실패해도 나머지 상태는 모음");
+
+        // 점검 알림: 공지 목록 수집 상태를 함께 쓰고(별도 수집 줄 없음), 등록 채널·전송 상태는 따로 보여준다.
+        await newsStore.DisableSubscriptionAsync(Guild, "notice", now);
+        await newsStore.SetSubscriptionAsync(Guild, "maintenance", ChNews, now);
+        var postsBefore = await newsStore.GetPostStateAsync("notice", 1);
+        var maintenanceInput = await service.GatherAsync(Guild, Check);
+        var maintenanceText = string.Join("\n", MollyStatusReport.Build(maintenanceInput).Pages);
+        Assert(maintenanceInput.Alerts.Single(x => x.Name == "점검") is { ChannelId: ChNews, Check.Kind: ChannelCheckKind.Ok, Delivery: not null }
+               && !maintenanceInput.Alerts.Single(x => x.Name == "공지").Registered && maintenanceInput.Collections.Count == 8
+               && maintenanceInput.Collections.Single(x => x.Name == "공지").UsedByThisServer && maintenanceText.Contains($"점검 → <#{ChNews}>")
+               && pages.Requests == 0 && await newsStore.GetPostStateAsync("notice", 1) == postsBefore,
+            "점검 알림 등록 채널·전송 상태 표시, 공지 수집 상태 공통 사용, 조회는 공식 홈페이지·감지 기록을 건드리지 않음");
     }
 
     private static CollectionState? State(StatusReportInput input, string name) => input.Collections.Single(x => x.Name == name).View?.State;

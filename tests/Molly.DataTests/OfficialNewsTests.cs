@@ -36,7 +36,7 @@ internal static class OfficialNewsTests
 
     // ── 목록 HTML 샘플: 2026-10 실제 공지·이벤트 목록(서버 렌더링 HTML)에서 카드·배너·페이지 구조만 줄여 옮김 ──
 
-    private static string Card(long id, string title, string? type = null, string path = "Notice") => $"""
+    internal static string Card(long id, string title, string? type = null, string path = "Notice") => $"""
                 <li class="item " data-mm-listitem="" data-threadid="{id}">
                     <div class="order_1">
                             {(type is null ? "" : $"<div class=\"type\"><span>{type}</span></div>")}
@@ -58,7 +58,7 @@ internal static class OfficialNewsTests
                 </li>
     """;
 
-    private static string EventCard(long id, string title, string image) => $"""
+    internal static string EventCard(long id, string title, string image) => $"""
                 <li class="item " data-mm-listitem data-threadid="{id}">
                     <div class="thumbnail">
                         <img src="{image}" onerror="this.src='https://lwi.nexon.com/m_mabinogim/brand/community/thumb.png'" alt="이벤트섬네일" />
@@ -85,7 +85,7 @@ internal static class OfficialNewsTests
                 </li>
     """;
 
-    private static string Page(int totalCount, IEnumerable<string> cards, string banners = "", string blockStartKey = "253402300799,9223372036854775807") => $"""
+    internal static string Page(int totalCount, IEnumerable<string> cards, string banners = "", string blockStartKey = "253402300799,9223372036854775807") => $"""
         <html lang="ko"><body>
         <nav><ul class="outer"><li><a href="/News/Notice" class="on new ">에린 소식</a><ul><li><a href="/News/Notice">공지사항</a></li></ul></li></ul></nav>
         <section class="sticky_banner_wrap"><ul class="swiper-wrapper">{banners}</ul></section>
@@ -99,7 +99,7 @@ internal static class OfficialNewsTests
         </body></html>
         """;
 
-    private const string BlockedPage = "<html><head><title>Object moved</title></head><body><h2>Object moved to <a href=\"/en/Main\">here</a>.</h2></body></html>";
+    internal const string BlockedPage = "<html><head><title>Object moved</title></head><body><h2>Object moved to <a href=\"/en/Main\">here</a>.</h2></body></html>";
 
     private static void ParserTests()
     {
@@ -246,21 +246,25 @@ internal static class OfficialNewsTests
         var now = new DateTimeOffset(2026, 10, 28, 3, 0, 0, TimeSpan.Zero).AddYears(10); // 앞 테스트의 실제 시각 작업보다 늦게 둔다
         var sender = new FakeNewsSender();
         var worker = new OfficialNewsDeliveryWorker(store, sender, () => now, _ => { });
+        // 1001은 앞 테스트에서 공지 구독을 해제 후 같은 채널로 재등록하기 전에 만든 작업이라 보내지 않는다(구독 세대).
+        await store.ReceiveAsync(Sample(postId: 1002, title: "10/29(목) 정기점검 안내 (06:00 ~ 10:00)"), now);
 
         // Discord 연결 전에는 시도 횟수를 쓰지 않고 대기로 돌린다.
         sender.IsReady = false;
         await worker.ProcessDueAsync(default);
-        Assert((await store.GetDeliveriesAsync("mabinogi-mobile:notice:1001:created")).All(d => d is { Status: "pending", Attempts: 0 }) && sender.Sent.Count == 0,
+        Assert((await store.GetDeliveriesAsync("mabinogi-mobile:notice:1002:created")).All(d => d is { Status: "pending", Attempts: 0 }) && sender.Sent.Count == 0,
             "Discord가 준비되지 않으면 보내지 않고 시도 횟수도 늘리지 않음");
 
         // 일부 서버 실패: B는 일시 실패, A는 성공
         sender.IsReady = true;
         sender.Fail = channel => channel == Ch9 ? new NewsDeliveryException("discord_503", false, "일시 장애") : null;
         while (await worker.ProcessDueAsync(default) > 0) { }
-        var notice = await store.GetDeliveriesAsync("mabinogi-mobile:notice:1001:created");
+        var notice = await store.GetDeliveriesAsync("mabinogi-mobile:notice:1002:created");
         Assert(notice[0] is { GuildId: GuildA, Status: "sent", Attempts: 1, MessageId: not null } && notice[1] is { GuildId: GuildB, Status: "pending", Attempts: 1, ErrorCode: "discord_503" },
             "한 서버의 일시 실패가 다른 서버 성공을 막지 않고 실패 대상만 재시도 대기");
         var sentToCh1 = sender.Sent.Where(s => s.ChannelId == Ch1).Select(s => s.Embed.Author!.Value.Name).ToList();
+        Assert((await store.GetDeliveriesAsync("mabinogi-mobile:notice:1001:created")).All(d => d is { Status: "skipped", ErrorCode: "subscription_changed" }),
+            "해제 후 같은 채널로 재등록하기 전에 만든 대기 작업은 보내지 않음");
         Assert(sentToCh1.Contains("📢 공식 공지") && sentToCh1.Contains("🛠️ 업데이트") && sentToCh1.Contains("📝 에린 노트")
             && sender.Sent.Single(s => s.ChannelId == Ch2).Embed.Author!.Value.Name == "🎉 이벤트", "같은 채널의 공지·업데이트·에린 노트가 구분되는 Embed로 발송");
         Assert(sender.Sent.Single(s => s.ChannelId == Ch1 && s.Embed.Author!.Value.Name == "📢 공식 공지").Embed.Fields.Any(f => f is { Name: "분류", Value: "점검" }),
@@ -271,7 +275,7 @@ internal static class OfficialNewsTests
         now += OfficialNewsDeliveryWorker.BackoffFor(1);
         sender.Fail = _ => null;
         while (await worker.ProcessDueAsync(default) > 0) { }
-        Assert((await store.GetDeliveriesAsync("mabinogi-mobile:notice:1001:created"))[1] is { Status: "sent", Attempts: 2 }, "1분 뒤 실패 대상만 다시 보내 성공");
+        Assert((await store.GetDeliveriesAsync("mabinogi-mobile:notice:1002:created"))[1] is { Status: "sent", Attempts: 2 }, "1분 뒤 실패 대상만 다시 보내 성공");
         Assert(OfficialNewsDeliveryWorker.BackoffFor(1) == TimeSpan.FromMinutes(1) && OfficialNewsDeliveryWorker.BackoffFor(2) == TimeSpan.FromMinutes(5)
             && OfficialNewsDeliveryWorker.BackoffFor(3) == TimeSpan.FromMinutes(15) && OfficialNewsDeliveryWorker.BackoffFor(9) == TimeSpan.FromMinutes(60), "재시도 간격 1→5→15→60분 상한");
 
@@ -391,12 +395,14 @@ internal static class OfficialNewsTests
         var n104 = await store.GetEventAsync(NewsBoards.EventIdFor("notice", 104));
         var n105 = await store.GetEventAsync(NewsBoards.EventIdFor("notice", 105));
         var e302 = await store.GetEventAsync(NewsBoards.EventIdFor("events", 302));
-        Assert(n104 is { Title: "새 점검 공지", Category: "점검", Url: "https://mabinogimobile.nexon.com/News/Notice/104", ThumbnailUrl: null } && n104.DetectedAt == now
-            && n105 is { Title: "새 공지 & 둘째", ThumbnailUrl: "https://cdn.example.com/banner105.png" }, "공지 새 글: 제목·분류·원문 링크·발견 시각·배너 이미지");
+        Assert(n105 is { Title: "새 공지 & 둘째", Category: "안내", Url: "https://mabinogimobile.nexon.com/News/Notice/105", ThumbnailUrl: "https://cdn.example.com/banner105.png" }
+            && n105.DetectedAt == now, "공지 새 글: 제목·분류·원문 링크·발견 시각·배너 이미지");
+        Assert(n104 is null && await store.GetEventAsync(NewsBoards.MaintenanceEventIdFor(104, 0, MaintenanceEventKinds.Created)) is { Kind: "created", Title: "새 점검 공지" }
+            && (await store.GetSeenPostIdsAsync("notice", [104])).Contains(104), "말머리 점검인 새 글은 공지 알림이 아닌 점검 알림 이벤트로 기록하고 본 글로 표시");
         Assert(e302 is { Category: null, ThumbnailUrl: "https://cdn.example.com/e302.png", Url: "https://mabinogimobile.nexon.com/News/Events/302" },
             "이벤트 새 글: 진행중 같은 상태는 분류로 보내지 않고 썸네일 사용");
         Assert(await store.GetEventAsync(NewsBoards.EventIdFor("notice", 99)) is null, "기준보다 오래된 글이 목록 위로 올라와도 보내지 않음");
-        Assert((await store.GetDeliveriesAsync(NewsBoards.EventIdFor("notice", 104))).Select(d => (d.GuildId, d.ChannelId)).SequenceEqual([(GuildA, Ch1)])
+        Assert((await store.GetDeliveriesAsync(NewsBoards.EventIdFor("notice", 105))).Select(d => (d.GuildId, d.ChannelId)).SequenceEqual([(GuildA, Ch1)])
             && (await store.GetDeliveriesAsync(NewsBoards.EventIdFor("events", 302))).Select(d => d.ChannelId).SequenceEqual([Ch2]), "게시판별 구독 채널로 발송 작업");
 
         // 3) 같은 목록을 다시 확인해도 다시 보내지 않는다.
@@ -447,7 +453,7 @@ internal static class OfficialNewsTests
             "재시작 후에도 기준을 유지하고 새 글만 찾음");
     }
 
-    private sealed class FakePageSource : IMobiEventPageSource
+    internal sealed class FakePageSource : IMobiEventPageSource
     {
         public Dictionary<string, string> Pages { get; } = [];
         public List<string> Requested { get; } = [];
@@ -468,7 +474,7 @@ internal static class OfficialNewsTests
         Console.WriteLine("PASS " + name);
     }
 
-    private sealed class FakeNewsSender : IOfficialNewsSender
+    internal sealed class FakeNewsSender : IOfficialNewsSender
     {
         private ulong m_NextId = 1000;
         public bool IsReady { get; set; } = true;
