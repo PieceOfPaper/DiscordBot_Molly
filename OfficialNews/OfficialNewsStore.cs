@@ -440,6 +440,35 @@ public sealed class OfficialNewsStore
         return new NewsDeliverySummary(reader.GetInt32(0), reader.GetInt32(1), reader.IsDBNull(2) ? null : Parse(reader.GetString(2)));
     }
 
+    /// <summary>
+    /// /몰리상태용: 서버·게시판의 지정 채널로 보낸 마지막 성공 시각과 마지막 실패(영구 실패 또는 재시도 대기 중인 실패)의 시각·오류 코드.
+    /// 발송 작업 표를 그대로 읽으며 따로 저장하지 않는다. 실패 시각은 작업을 마지막으로 갱신한 시각이다.
+    /// </summary>
+    public async Task<(DateTimeOffset? LastSentAt, DateTimeOffset? LastFailureAt, string? LastErrorCode)> GetDeliveryHealthAsync(
+        ulong guildId, string board, ulong channelId, CancellationToken ct = default)
+    {
+        await using var connection = await OpenAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                (SELECT MAX(updated_at_utc) FROM official_news_deliveries
+                 WHERE guild_id = $guildId AND board = $board AND channel_id = $channelId AND status = 'sent'),
+                f.updated_at_utc, f.last_error_code
+            FROM (SELECT 1) LEFT JOIN (
+                SELECT updated_at_utc, last_error_code FROM official_news_deliveries
+                WHERE guild_id = $guildId AND board = $board AND channel_id = $channelId
+                  AND (status = 'failed' OR (status IN ('pending', 'sending') AND attempts > 0 AND last_error_code IS NOT NULL AND last_error_code <> 'discord_not_ready'))
+                ORDER BY updated_at_utc DESC LIMIT 1) f;
+            """;
+        command.Parameters.AddWithValue("$guildId", checked((long)guildId));
+        command.Parameters.AddWithValue("$board", board);
+        command.Parameters.AddWithValue("$channelId", checked((long)channelId));
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        await reader.ReadAsync(ct).ConfigureAwait(false);
+        return (reader.IsDBNull(0) ? null : Parse(reader.GetString(0)), reader.IsDBNull(1) ? null : Parse(reader.GetString(1)),
+            reader.IsDBNull(2) ? null : reader.GetString(2));
+    }
+
     /// <summary>테스트·운영 확인용: 이벤트의 서버별 발송 상태.</summary>
     public async Task<IReadOnlyList<(ulong GuildId, ulong ChannelId, string Status, int Attempts, ulong? MessageId, string? ErrorCode)>> GetDeliveriesAsync(
         string eventId, CancellationToken ct = default)

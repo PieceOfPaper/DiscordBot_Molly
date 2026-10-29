@@ -1,4 +1,5 @@
 using System.Net;
+using Molly.Status;
 
 // 이벤트 목록 HTML 한 페이지를 받아오는 경로. 기본은 HTTP, 막히면 Playwright로 대체합니다.
 public interface IMobiEventPageSource
@@ -62,6 +63,9 @@ public sealed class MobiEventService
 
     public MobiEventSnapshot? LastSnapshot => m_Snapshot;
 
+    /// <summary>/몰리상태에 수집 결과를 남길 곳. 시작할 때 한 번 지정하며, 없으면 기록하지 않는다.</summary>
+    public MollyStatusTracker? Status { get; set; }
+
     /// <summary>
     /// 진행중 이벤트 목록. 캐시가 유효하면 그대로, 아니면 새로 수집합니다.
     /// 수집에 실패하면 마지막 정상 데이터를 IsStale=true로 돌려주고, 정상 데이터가 한 번도 없으면 null입니다.
@@ -117,24 +121,43 @@ public sealed class MobiEventService
     private async Task<bool> RefreshCoreAsync(CancellationToken ct)
     {
         m_LastAttemptUtc = m_UtcNow();
+        var status = Status;
+        var run = status?.Begin(StatusJobs.EventList);
+        bool ok;
+        string? errorKind;
+        try { (ok, errorKind) = await RefreshSourcesAsync(ct); }
+        catch
+        {
+            // 호출자가 취소한 시도는 결과 없이 진행 표시만 지웁니다.
+            if (run is not null) status!.Abandon(run);
+            throw;
+        }
+        if (run is not null) await status!.CompleteAsync(run, ok, errorKind);
+        return ok;
+    }
 
+    // 실패하면 /몰리상태에 남길 오류 분류도 돌려줍니다(대체 경로까지 시도했으면 대체 경로의 오류).
+    private async Task<(bool Ok, string? ErrorKind)> RefreshSourcesAsync(CancellationToken ct)
+    {
+        string errorKind;
         try
         {
             m_Snapshot = await CollectAsync(m_Primary, ct);
             m_Log($"{m_Primary.Name}로 이벤트 {m_Snapshot.Events.Count}건 갱신");
-            return true;
+            return (true, null);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
+            errorKind = StatusErrorKinds.ClassifyCollection(ex);
             m_Log($"{m_Primary.Name} 수집 실패: {ex.GetType().Name}: {ex.Message}");
         }
 
         if (m_FallbackFactory == null)
-            return false;
+            return (false, errorKind);
         if (m_UtcNow() < m_FallbackBlockedUntilUtc)
         {
             m_Log($"대체 수집은 {m_FallbackBlockedUntilUtc:HH:mm:ss}(UTC)까지 보류, 마지막 정상 데이터를 유지");
-            return false;
+            return (false, errorKind);
         }
 
         var fallback = m_FallbackFactory();
@@ -142,13 +165,13 @@ public sealed class MobiEventService
         {
             m_Snapshot = await CollectAsync(fallback, ct);
             m_Log($"{fallback.Name}로 이벤트 {m_Snapshot.Events.Count}건 갱신 (대체 경로)");
-            return true;
+            return (true, null);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             m_FallbackBlockedUntilUtc = m_UtcNow() + m_FallbackCooldown;
             m_Log($"{fallback.Name} 수집 실패, 마지막 정상 데이터를 유지: {ex.GetType().Name}: {ex.Message}");
-            return false;
+            return (false, StatusErrorKinds.ClassifyCollection(ex));
         }
         finally
         {

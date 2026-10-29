@@ -19,6 +19,7 @@ using Molly.Currency;
 using Molly.Attendance;
 using Molly.Prediction;
 using Molly.OfficialNews;
+using Molly.Status;
 
 class Program
 {
@@ -53,6 +54,9 @@ class Program
     public KeywordMarketMonitor PackageMarket { get; private set; } = null!;
     // 공식 소식(공지·업데이트·이벤트·에린 노트) 수집·발송. 공식 홈페이지 확인에 실패해도 다른 기능은 정상 동작합니다.
     public OfficialNewsService OfficialNews { get; private set; } = null!;
+    // /몰리상태: 수집·전송 작업이 남긴 상태를 모아 보여줍니다. 이번 실행 시작 시각과 진행 중 작업은 메모리에만 둡니다.
+    public MollyStatusService Status { get; private set; } = null!;
+    private readonly DateTimeOffset m_StartedAtUtc = DateTimeOffset.UtcNow;
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -178,6 +182,11 @@ class Program
         _ = MobiRankBrowser.WarmUpAsync(appCts.Token);
 
         MollyDataPaths.Configure(m_Config);
+        var statusStore = new MollyStatusStore();
+        await statusStore.InitializeAsync(appCts.Token);
+        var statusTracker = new MollyStatusTracker(statusStore, m_StartedAtUtc);
+        MobiEventService.Shared.Status = statusTracker;
+        MobiEventExpireAlert.Status = statusTracker;
         MobiLifeOptions mobiLifeOptions;
         try { mobiLifeOptions = MobiLifeOptions.FromConfiguration(m_Config); }
         catch (ArgumentException ex)
@@ -214,7 +223,7 @@ class Program
             newsEnabled = true;
         }
         OfficialNews = new OfficialNewsService(newsStore, newsWorker,
-            new OfficialNewsCollector(newsStore, new MobiEventHttpSource(), newsWorker.Signal), newsSender, newsEnabled);
+            new OfficialNewsCollector(newsStore, new MobiEventHttpSource(), newsWorker.Signal, status: statusTracker), newsSender, newsEnabled);
 
         using var runeHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;
@@ -262,9 +271,11 @@ class Program
                 await Crafting.EnsureFreshAsync(TimeSpan.FromMinutes(10), ct);
                 return HaeyeonMarketRules.SelectRecipes(Crafting.Current);
             },
-            new MobiLifeMarketPriceSource(MobiLife), haeyeonStore, new DiscordHaeyeonAlertSender(m_Client));
-        BoxMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Box, appCts.Token);
-        PackageMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Package, appCts.Token);
+            new MobiLifeMarketPriceSource(MobiLife), haeyeonStore, new DiscordHaeyeonAlertSender(m_Client), status: statusTracker);
+        BoxMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Box, statusTracker, appCts.Token);
+        PackageMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Package, statusTracker, appCts.Token);
+        Status = new MollyStatusService(statusTracker, OfficialNews, MobiEventService.Shared, MobiEventExpireAlert.Storage, MobiLife,
+            HaeyeonMarket, BoxMarket, PackageMarket);
         try
         {
             try
@@ -323,10 +334,10 @@ class Program
         }
     }
 
-    private async Task<KeywordMarketMonitor> CreateKeywordMarketAsync(KeywordMarketDefinition definition, CancellationToken ct)
+    private async Task<KeywordMarketMonitor> CreateKeywordMarketAsync(KeywordMarketDefinition definition, MollyStatusTracker status, CancellationToken ct)
     {
         var store = new KeywordMarketStore(definition.Id);
         await store.InitializeAsync(ct);
-        return new KeywordMarketMonitor(definition, new MobiLifeMarketPriceSource(MobiLife), store, new DiscordKeywordAlertSender(m_Client));
+        return new KeywordMarketMonitor(definition, new MobiLifeMarketPriceSource(MobiLife), store, new DiscordKeywordAlertSender(m_Client), status: status);
     }
 }

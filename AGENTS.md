@@ -47,6 +47,7 @@
 - Attendance/: 서버별 출석부(/출석부등록·/출석부해제) 저장·출석일 계산(오전 6시 KST 고정)·메시지 갱신·매일 초기화. 출석 기록과 증표 지급은 한 트랜잭션.
 - MagicResistance/: `/마도저항확인`의 룬다 어비스 난이도별 필요 마도저항·마도 압력 기준값(MagicResistanceCatalog)과 피해 증감 추정식(MagicResistanceCalculator). 기준값·출처는 `docs/magic-resistance.md`.
 - Prediction/: `/배틀` 승부 예측(BattlePredictionStore) 베팅·마감·정산·재시작 무효 처리와 공동 배당 계산. 증표는 정산할 때만 차감·배당한다.
+- Status/: `/몰리상태`의 수집 작업별 상태·서버별 전송 상태 저장(MollyStatusStore), 실행 시작 시각·진행 중 작업과 기록 창구(MollyStatusTracker), 수집 상태 판정(CollectionStatusJudge)·응답 문구(MollyStatusReport)·상태 수집(MollyStatusService). 각 작업은 성공·실패 지점에서 트래커에 기록하고, 조회는 외부 API를 호출하지 않는다. 기획은 `docs/molly-status.md`.
 - OfficialNews/: 공식 소식(공지·업데이트·이벤트·에린 노트) 목록 파싱(OfficialNewsParser)·10분 주기 HTTP 수집과 새 글 판정(OfficialNewsCollector)·구독/글/발송 작업/수집 상태 저장(OfficialNewsStore)·단일 발송 worker(OfficialNewsDeliveryWorker). 목록은 이벤트 수집과 같은 HTTP 경로로 읽고 브라우저를 쓰지 않는다(브라우저가 필요한 것은 Cloudflare 검사가 있는 랭킹뿐). 기획은 `docs/official-news.md`.
 
 ## 구현 원칙

@@ -23,7 +23,8 @@ public sealed class HelpCommand : InteractionModuleBase<SocketInteractionContext
         [Choice("마도저항", "마도저항")]
         [Choice("해연시세", "해연시세")]
         [Choice("상자·패키지시세", "상자·패키지시세")]
-        [Choice("출석·가방", "출석·가방")] string? topic = null)
+        [Choice("출석·가방", "출석·가방")]
+        [Choice("몰리상태", "몰리상태")] string? topic = null)
     {
         var embed = topic is null ? BuildOverview() : HelpCatalog.FindTopic(topic) is { } found ? BuildTopic(found) : null;
         if (embed is null)

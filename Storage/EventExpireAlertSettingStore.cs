@@ -105,6 +105,21 @@ public sealed class EventExpireAlertSettingStore
         finally { m_Gate.Release(); }
     }
 
+    /// <summary>마감 알림을 켠 서버가 하나라도 있는지. 없으면 이벤트 목록을 주기적으로 다시 읽지 않는다.</summary>
+    public async Task<bool> AnyEnabledAsync(CancellationToken ct = default)
+    {
+        await m_Gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await using var connection = OpenConnection();
+            await connection.OpenAsync(ct).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT EXISTS (SELECT 1 FROM event_expire_alert_settings WHERE enabled = 1);";
+            return Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture) != 0;
+        }
+        finally { m_Gate.Release(); }
+    }
+
     private SqliteConnection OpenConnection() => new(new SqliteConnectionStringBuilder { DataSource = m_DatabasePath, Mode = SqliteOpenMode.ReadWriteCreate }.ToString());
 
     private static async Task ExecuteAsync(SqliteConnection connection, string sql, CancellationToken ct)

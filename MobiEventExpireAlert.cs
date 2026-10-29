@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Discord;
+using Molly.Status;
 
 public sealed class EventExpireAlertSetting
 {
@@ -37,6 +38,9 @@ public static class MobiEventExpireAlert
     public static readonly TimeSpan UpdateInterval = TimeSpan.FromMinutes(10);
 
     public static EventExpireAlertSettingStore Storage => s_ExpireAlertSettingStorage;
+
+    /// <summary>/몰리상태에 서버별 전송 결과를 남길 곳. 시작할 때 한 번 지정하며, 없으면 기록하지 않는다.</summary>
+    public static MollyStatusTracker? Status { get; set; }
 
     public static Task InitializeStorageAsync(CancellationToken ct = default)
         => s_ExpireAlertSettingStorage.InitializeAsync(ct);
@@ -213,16 +217,24 @@ public static class MobiEventExpireAlert
             if (cancellationToken.IsCancellationRequested)
                 return;
 
-            var ch = await Program.instance.client.GetChannelAsync(info.setting.ChannelId).ConfigureAwait(false);
+            IChannel? ch;
+            try { ch = await Program.instance.client.GetChannelAsync(info.setting.ChannelId).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                await RecordDeliveryAsync(guildId, info.setting.ChannelId, StatusErrorKinds.ClassifyDelivery(ex)).ConfigureAwait(false);
+                throw;
+            }
             if (ch is null)
             {
                 Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - not found channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
+                await RecordDeliveryAsync(guildId, info.setting.ChannelId, StatusErrorKinds.ChannelMissing).ConfigureAwait(false);
                 return;
             }
         
             if (ch is not IMessageChannel)
             {
                 Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - is not message channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
+                await RecordDeliveryAsync(guildId, info.setting.ChannelId, StatusErrorKinds.NotMessageChannel).ConfigureAwait(false);
                 return;
             }
 
@@ -241,8 +253,15 @@ public static class MobiEventExpireAlert
                 if (!string.IsNullOrWhiteSpace(result.thumbnailUrl))
                     eb.WithImageUrl(result.thumbnailUrl);
 
-                await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build());
+                try { await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build()); }
+                catch (Exception ex)
+                {
+                    await RecordDeliveryAsync(guildId, info.setting.ChannelId, StatusErrorKinds.ClassifyDelivery(ex)).ConfigureAwait(false);
+                    throw;
+                }
             }
+            if (Status is { } status)
+                await status.RecordDeliveryAsync(guildId, StatusAlerts.EventExpire, info.setting.ChannelId, true).ConfigureAwait(false);
 
             info.setting.LastAlertAtKst = MobiTime.now;
             await s_ExpireAlertSettingStorage.SaveAsync(guildId, info.setting).ConfigureAwait(false);
@@ -252,6 +271,9 @@ public static class MobiEventExpireAlert
             s_ScheduleGate.Release();
         }
     }
+
+    private static Task RecordDeliveryAsync(ulong guildId, ulong channelId, string errorKind) =>
+        Status?.RecordDeliveryAsync(guildId, StatusAlerts.EventExpire, channelId, false, errorKind) ?? Task.CompletedTask;
 
     private static string FormatRemaining(TimeSpan remaining)
     {

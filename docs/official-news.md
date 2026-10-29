@@ -141,6 +141,8 @@ sqlite3 /var/lib/molly/database/molly.sqlite \
 
 DB 경로는 실제 `MOLLY_DATA_DIR`·`MollyDatabase__Path`에 맞춘다. 서버 운영자는 `/…알림` 확인에서 보내지 못한 알림 수를 볼 수 있다.
 
+서버 운영자는 `/몰리상태`로 네 게시판의 최근 확인 결과·마지막 시도·마지막 성공과 이 서버의 등록 채널·권한·전송 상태를 함께 볼 수 있다([몰리 상태 기획서](molly-status.md)).
+
 ### 백업·롤백
 
 - 배포 전 [수동 백업 절차](lightsail-manual-backup.md)로 DB를 백업한다.

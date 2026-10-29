@@ -1,5 +1,6 @@
 using System.Globalization;
 using Molly.Market;
+using Molly.Status;
 
 namespace Molly.MobiLife;
 
@@ -25,18 +26,18 @@ public sealed class MobiLifeMarketPriceSource(MobiLifeApiClient client) : IMarke
                 new("limit", PageSize.ToString(CultureInfo.InvariantCulture)),
                 new("offset", (page * PageSize).ToString(CultureInfo.InvariantCulture)),
             ], ct);
-            if (!result.IsSuccess) return MarketPriceSearchResult.Fail(result.UserMessage);
-            if (result.Value!.Data is null) return MarketPriceSearchResult.Fail("모비라이프 시세 응답 형식이 예상과 다릅니다.");
+            if (!result.IsSuccess) return MarketPriceSearchResult.Fail(result.UserMessage, FailureKind(result.Status));
+            if (result.Value!.Data is null) return MarketPriceSearchResult.Fail("모비라이프 시세 응답 형식이 예상과 다릅니다.", StatusErrorKinds.Parse);
 
             foreach (var item in result.Value.Data)
             {
                 if (string.IsNullOrWhiteSpace(item.Name) ||
                     !DateTimeOffset.TryParse(item.LastVersion, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var pricedAt))
-                    return MarketPriceSearchResult.Fail("모비라이프 시세 응답 형식이 예상과 다릅니다.");
+                    return MarketPriceSearchResult.Fail("모비라이프 시세 응답 형식이 예상과 다릅니다.", StatusErrorKinds.Parse);
                 // 값이 말이 안 되는 아이템(예: 매물 수 -1)은 원본 쪽 일시적 오류로 보고 통신 오류처럼 이번 검색을 실패시킵니다.
                 // 호출자는 회차를 건너뛰고 다시 시도합니다. 어느 값이 이상한지 로그에서 알 수 있게 메시지에 남깁니다.
                 if (InvalidValue(item) is { } invalid)
-                    return MarketPriceSearchResult.Fail($"모비라이프 시세 데이터가 일시적으로 비정상입니다({item.Name.Trim()} {invalid}).");
+                    return MarketPriceSearchResult.Fail($"모비라이프 시세 데이터가 일시적으로 비정상입니다({item.Name.Trim()} {invalid}).", StatusErrorKinds.Parse);
                 prices.Add(new MarketPrice(item.KindId, item.Name.Trim(), item.ParentCategory, item.MinPrice, item.TotalCount, item.IsSoldOut, pricedAt.ToUniversalTime(),
                     item.PctChange1h, item.PctChange24h, item.PctChange7d, item.CountChange24h));
             }
@@ -45,6 +46,15 @@ public sealed class MobiLifeMarketPriceSource(MobiLifeApiClient client) : IMarke
         // 마지막 페이지까지 가득 찼다면 결과가 잘렸을 수 있습니다. 필요한 이름이 빠졌는지는 호출자가 확인합니다.
         return new MarketPriceSearchResult(prices) { IsTruncated = true };
     }
+
+    private static string FailureKind(MobiLifeStatus status) => status switch
+    {
+        MobiLifeStatus.Unauthorized => StatusErrorKinds.Auth,
+        MobiLifeStatus.RateLimited => StatusErrorKinds.RateLimited,
+        MobiLifeStatus.NotConfigured or MobiLifeStatus.Disabled => StatusErrorKinds.NotConfigured,
+        MobiLifeStatus.InvalidResponse => StatusErrorKinds.Parse,
+        _ => StatusErrorKinds.Unavailable,
+    };
 
     // 비정상 값이 있으면 "필드=값"을, 없으면 null을 돌려줍니다.
     // 가격 등락은 퍼센트 단위로 봅니다. 가격은 100%보다 더 내릴 수 없으므로 그보다 작으면 이상입니다. 급등은 실제로 일어날 수 있어 상한은 두지 않습니다.

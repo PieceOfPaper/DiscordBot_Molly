@@ -3,6 +3,7 @@ using System.Text;
 using Discord;
 using Molly.Crafting;
 using Molly.Market;
+using Molly.Status;
 
 namespace Molly.HaeyeonMarket;
 
@@ -12,7 +13,8 @@ public interface IHaeyeonAlertSender
     Task SendAsync(HaeyeonMonitorChannel channel, IReadOnlyList<Embed> embeds, CancellationToken ct);
 }
 
-public sealed record HaeyeonRunResult(bool Success, string Message);
+// ErrorKind는 실패 분류(StatusErrorKinds)로 /몰리상태에 남깁니다.
+public sealed record HaeyeonRunResult(bool Success, string Message, string? ErrorKind = null);
 
 /// <summary>
 /// 해연 제작 아이템·재료 시세를 매 정각 수집해 저장하고, 변동·유불리 전환 시 등록된 채널에 알립니다.
@@ -25,6 +27,7 @@ public sealed class HaeyeonMarketMonitor
     private readonly IHaeyeonAlertSender m_Sender;
     private readonly Func<DateTimeOffset> m_UtcNow;
     private readonly Action<string> m_Log;
+    private readonly MollyStatusTracker? m_Status;
     private readonly SemaphoreSlim m_RunGate = new(1, 1);
 
     public HaeyeonMarketMonitor(
@@ -33,9 +36,11 @@ public sealed class HaeyeonMarketMonitor
         HaeyeonMarketStore store,
         IHaeyeonAlertSender sender,
         Func<DateTimeOffset>? utcNow = null,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        MollyStatusTracker? status = null)
     {
         m_Recipes = recipes;
+        m_Status = status;
         m_Source = source;
         Store = store;
         m_Sender = sender;
@@ -86,17 +91,25 @@ public sealed class HaeyeonMarketMonitor
     public async Task<HaeyeonRunResult> CollectAsync(CancellationToken ct)
     {
         await m_RunGate.WaitAsync(ct).ConfigureAwait(false);
+        var run = m_Status?.Begin(StatusJobs.Market(StatusJobs.HaeyeonMonitorId));
         try
         {
             var result = await CollectLockedAsync(ct).ConfigureAwait(false);
             m_Log(result.Message);
+            if (run is not null) await m_Status!.CompleteAsync(run, result.Success, result.ErrorKind).ConfigureAwait(false);
             return result;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            if (run is not null) m_Status!.Abandon(run);
+            throw;
+        }
         catch (Exception ex)
         {
             m_Log($"수집 실패: {ex}");
-            return new HaeyeonRunResult(false, $"수집 실패: {ex.Message}");
+            var result = new HaeyeonRunResult(false, $"수집 실패: {ex.Message}", StatusErrorKinds.ClassifyCollection(ex));
+            if (run is not null) await m_Status!.CompleteAsync(run, false, result.ErrorKind).ConfigureAwait(false);
+            return result;
         }
         finally { m_RunGate.Release(); }
     }
@@ -105,7 +118,7 @@ public sealed class HaeyeonMarketMonitor
     {
         var collectedAt = m_UtcNow();
         var recipes = await m_Recipes(ct).ConfigureAwait(false);
-        if (recipes.Count == 0) return new HaeyeonRunResult(false, "제작 시트에 해연 아이템이 없어 수집하지 않았습니다.");
+        if (recipes.Count == 0) return new HaeyeonRunResult(false, "제작 시트에 해연 아이템이 없어 수집하지 않았습니다.", StatusErrorKinds.SourceData);
         var tracked = HaeyeonMarketEvaluator.TrackedNames(recipes);
 
         // 검색어 중 하나라도 실패하면 일부 시세만으로 잘못 알리지 않도록 이번 회차 전체를 건너뜁니다.
@@ -113,7 +126,8 @@ public sealed class HaeyeonMarketMonitor
         foreach (var keyword in HaeyeonMarketRules.SearchKeywords)
         {
             var search = await m_Source.SearchAsync(keyword, null, ct).ConfigureAwait(false);
-            if (!search.IsSuccess) return new HaeyeonRunResult(false, $"'{keyword}' 시세 조회 실패로 이번 회차를 건너뜁니다: {search.FailureMessage}");
+            if (!search.IsSuccess)
+                return new HaeyeonRunResult(false, $"'{keyword}' 시세 조회 실패로 이번 회차를 건너뜁니다: {search.FailureMessage}", search.FailureKind ?? StatusErrorKinds.Unavailable);
             foreach (var price in search.Prices!)
                 if (tracked.ContainsKey(price.Name)) prices.TryAdd(price.Name, price);
         }
@@ -146,9 +160,17 @@ public sealed class HaeyeonMarketMonitor
             {
                 await m_Sender.SendAsync(channel, HaeyeonMarketMessages.BuildAlertEmbeds(evaluation, collectedAt, m_Source.Attribution), ct).ConfigureAwait(false);
                 sent++;
+                if (m_Status is not null)
+                    await m_Status.RecordDeliveryAsync(channel.GuildId, StatusAlerts.Market(StatusJobs.HaeyeonMonitorId), channel.ChannelId, true).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}"); }
+            catch (Exception ex)
+            {
+                m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}");
+                if (m_Status is not null)
+                    await m_Status.RecordDeliveryAsync(channel.GuildId, StatusAlerts.Market(StatusJobs.HaeyeonMonitorId), channel.ChannelId, false,
+                        StatusErrorKinds.ClassifyDelivery(ex)).ConfigureAwait(false);
+            }
         }
 
         await Store.SaveRunAsync(collectedAt,

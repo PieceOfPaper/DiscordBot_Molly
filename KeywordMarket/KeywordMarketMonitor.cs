@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using Discord;
 using Molly.Market;
+using Molly.Status;
 
 namespace Molly.KeywordMarket;
 
@@ -11,7 +12,8 @@ public interface IKeywordAlertSender
     Task SendAsync(KeywordMonitorChannel channel, IReadOnlyList<Embed> embeds, CancellationToken ct);
 }
 
-public sealed record KeywordRunResult(bool Success, string Message);
+// ErrorKind는 실패 분류(StatusErrorKinds)로 /몰리상태에 남깁니다.
+public sealed record KeywordRunResult(bool Success, string Message, string? ErrorKind = null);
 
 /// <summary>
 /// 검색어로 찾은 거래소 아이템 전체의 시세를 매 정각 수집해 저장하고, 시세 변동·신규 아이템·사라진 아이템을 등록된 채널에 알립니다.
@@ -23,6 +25,7 @@ public sealed class KeywordMarketMonitor
     private readonly IKeywordAlertSender m_Sender;
     private readonly Func<DateTimeOffset> m_UtcNow;
     private readonly Action<string> m_Log;
+    private readonly MollyStatusTracker? m_Status;
     private readonly SemaphoreSlim m_RunGate = new(1, 1);
 
     public KeywordMarketMonitor(
@@ -31,9 +34,11 @@ public sealed class KeywordMarketMonitor
         KeywordMarketStore store,
         IKeywordAlertSender sender,
         Func<DateTimeOffset>? utcNow = null,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        MollyStatusTracker? status = null)
     {
         Definition = definition;
+        m_Status = status;
         m_Source = source;
         Store = store;
         m_Sender = sender;
@@ -84,17 +89,25 @@ public sealed class KeywordMarketMonitor
     public async Task<KeywordRunResult> CollectAsync(CancellationToken ct)
     {
         await m_RunGate.WaitAsync(ct).ConfigureAwait(false);
+        var run = m_Status?.Begin(StatusJobs.Market(Definition.Id));
         try
         {
             var result = await CollectLockedAsync(ct).ConfigureAwait(false);
             m_Log(result.Message);
+            if (run is not null) await m_Status!.CompleteAsync(run, result.Success, result.ErrorKind).ConfigureAwait(false);
             return result;
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            if (run is not null) m_Status!.Abandon(run);
+            throw;
+        }
         catch (Exception ex)
         {
             m_Log($"수집 실패: {ex}");
-            return new KeywordRunResult(false, $"수집 실패: {ex.Message}");
+            var result = new KeywordRunResult(false, $"수집 실패: {ex.Message}", StatusErrorKinds.ClassifyCollection(ex));
+            if (run is not null) await m_Status!.CompleteAsync(run, false, result.ErrorKind).ConfigureAwait(false);
+            return result;
         }
         finally { m_RunGate.Release(); }
     }
@@ -103,13 +116,14 @@ public sealed class KeywordMarketMonitor
     {
         var collectedAt = m_UtcNow();
         var search = await m_Source.SearchAsync(Definition.Keyword, Definition.Category, ct).ConfigureAwait(false);
-        if (!search.IsSuccess) return new KeywordRunResult(false, $"{Definition.SearchDescription} 시세 조회 실패로 이번 회차를 건너뜁니다: {search.FailureMessage}");
+        if (!search.IsSuccess)
+            return new KeywordRunResult(false, $"{Definition.SearchDescription} 시세 조회 실패로 이번 회차를 건너뜁니다: {search.FailureMessage}", search.FailureKind ?? StatusErrorKinds.Unavailable);
 
         var prices = search.Prices!;
         var previous = await Store.LoadStatesAsync(ct).ConfigureAwait(false);
         // 추적하던 아이템이 있는데 결과가 통째로 비면 검색어·분류 이름 변경이나 API 이상일 가능성이 커서 모두 사라짐으로 알리지 않습니다.
         if (prices.Count == 0 && previous.Count > 0)
-            return new KeywordRunResult(false, $"{Definition.SearchDescription} 검색 결과가 0건이라 이번 회차를 건너뜁니다(분류·검색어 이름 변경 가능성 확인).");
+            return new KeywordRunResult(false, $"{Definition.SearchDescription} 검색 결과가 0건이라 이번 회차를 건너뜁니다(분류·검색어 이름 변경 가능성 확인).", StatusErrorKinds.EmptyResult);
         if (search.IsTruncated)
             m_Log($"검색 결과가 페이지 제한에 걸려 잘렸을 수 있어 이번 회차는 사라진 아이템을 판단하지 않습니다({prices.Count}건).");
 
@@ -138,9 +152,17 @@ public sealed class KeywordMarketMonitor
             {
                 await m_Sender.SendAsync(channel, KeywordMarketMessages.BuildAlertEmbeds(Definition, evaluation, collectedAt, m_Source.Attribution), ct).ConfigureAwait(false);
                 sent++;
+                if (m_Status is not null)
+                    await m_Status.RecordDeliveryAsync(channel.GuildId, StatusAlerts.Market(Definition.Id), channel.ChannelId, true).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}"); }
+            catch (Exception ex)
+            {
+                m_Log($"알림 전송 실패 (guild:{channel.GuildId}, channel:{channel.ChannelId}): {ex.Message}");
+                if (m_Status is not null)
+                    await m_Status.RecordDeliveryAsync(channel.GuildId, StatusAlerts.Market(Definition.Id), channel.ChannelId, false,
+                        StatusErrorKinds.ClassifyDelivery(ex)).ConfigureAwait(false);
+            }
         }
 
         await Store.SaveRunAsync(collectedAt, prices, items.States.Values, guildBaselines,

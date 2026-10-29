@@ -1,3 +1,5 @@
+using Molly.Status;
+
 namespace Molly.OfficialNews;
 
 public sealed class OfficialNewsFetchException(string message) : Exception(message);
@@ -20,13 +22,15 @@ public sealed class OfficialNewsCollector
     private readonly Action m_OnDeliveriesCreated;
     private readonly Func<DateTimeOffset> m_UtcNow;
     private readonly Action<string> m_Log;
+    private readonly MollyStatusTracker? m_Status;
     private readonly Dictionary<string, int> m_ConsecutiveFailures = [];
     private int m_Started;
 
     public OfficialNewsCollector(OfficialNewsStore store, IMobiEventPageSource source, Action onDeliveriesCreated,
-        Func<DateTimeOffset>? utcNow = null, Action<string>? log = null)
+        Func<DateTimeOffset>? utcNow = null, Action<string>? log = null, MollyStatusTracker? status = null)
     {
         m_Store = store;
+        m_Status = status;
         m_Source = source;
         m_OnDeliveriesCreated = onDeliveriesCreated;
         m_UtcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -60,15 +64,19 @@ public sealed class OfficialNewsCollector
 
     public async Task<int> CheckBoardAsync(NewsBoard board, CancellationToken ct)
     {
+        // /몰리상태용 확인 결과. 첫 기준을 잡기 전의 실패도 여기에 남는다.
+        var run = m_Status?.Begin(StatusJobs.News(board));
         try
         {
             var found = await CheckBoardCoreAsync(board, ct).ConfigureAwait(false);
+            if (run is not null) await m_Status!.CompleteAsync(run, true, null).ConfigureAwait(false);
             if (m_ConsecutiveFailures.Remove(board.Id, out var failures))
                 m_Log($"{board.Name} 목록 확인 복구 (연속 실패 {failures}번 뒤)");
             return found;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
+            if (run is not null) await m_Status!.CompleteAsync(run, false, StatusErrorKinds.ClassifyCollection(ex)).ConfigureAwait(false);
             var failures = m_ConsecutiveFailures[board.Id] = m_ConsecutiveFailures.GetValueOrDefault(board.Id) + 1;
             var error = ex is OfficialNewsFetchException or MobiEventFetchException ? ex.Message : $"{ex.GetType().Name}: {ex.Message}";
             if (failures % FailureLogEvery == 1)

@@ -11,7 +11,9 @@ public sealed record MarketPriceSearchResult(IReadOnlyList<MarketPrice>? Prices,
     public bool IsSuccess => Prices is not null;
     // 페이지 수 제한에 걸려 결과가 잘렸을 수 있음. 목록에서 빠진 아이템을 '사라짐'으로 판단하면 안 됩니다.
     public bool IsTruncated { get; init; }
-    public static MarketPriceSearchResult Fail(string message) => new(null, message);
+    // 실패 분류(Molly.Status.StatusErrorKinds). /몰리상태에 원인을 짧게 보여줄 때 씁니다.
+    public string? FailureKind { get; init; }
+    public static MarketPriceSearchResult Fail(string message, string? kind = null) => new(null, message) { FailureKind = kind };
 }
 
 public interface IMarketPriceSource

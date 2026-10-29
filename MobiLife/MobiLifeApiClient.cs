@@ -89,6 +89,9 @@ public sealed class MobiLifeApiClient : IDisposable
     }
 
     public bool IsConfigured => m_Options.Enabled && m_Options.HasApiKey;
+    // /몰리상태에서 의도적인 비활성화(MobiLife:Enabled=false)와 필수 설정 누락(키 없음)을 구분할 때 씁니다.
+    public bool IsEnabled => m_Options.Enabled;
+    public bool HasApiKey => m_Options.HasApiKey;
 
     // 지금 호출하면 네트워크까지 갈 수 있는 상태인지. 명령 목록 노출 여부 판단 등에 사용합니다.
     public bool IsAvailable
