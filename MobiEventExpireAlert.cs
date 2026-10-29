@@ -30,6 +30,11 @@ public static class MobiEventExpireAlert
     
     private static Task? s_UpdateTask;
     private static CancellationTokenSource? s_UpdateTaskCancellationTokenSource;
+    // 주기 갱신과 등록·해제·테스트 명령이 같은 서버의 알림 예약을 동시에 바꾸지 않게 한다.
+    private static readonly SemaphoreSlim s_ScheduleGate = new(1, 1);
+
+    /// <summary>진행 중 이벤트 목록을 다시 읽어 서버별 마감 알림 예약을 고치는 주기. 목록은 MobiEventService가 1분간 캐시한다.</summary>
+    public static readonly TimeSpan UpdateInterval = TimeSpan.FromMinutes(10);
 
     public static EventExpireAlertSettingStore Storage => s_ExpireAlertSettingStorage;
 
@@ -49,32 +54,21 @@ public static class MobiEventExpireAlert
         s_UpdateTask = Task.Run(async () =>
         {
             var token = s_UpdateTaskCancellationTokenSource!.Token;
+            Console.WriteLine($"[MobiEventExpireAlert] {UpdateInterval.TotalMinutes:0}분마다 이벤트 목록을 다시 확인해 마감 알림 예약을 갱신합니다.");
             while (!token.IsCancellationRequested)
             {
-                var nowKst = MobiTime.now;
-                var nextRunKst = GetNextUpdateTimeKst(nowKst);
-                var delay = nextRunKst - nowKst;
-                if (delay < TimeSpan.Zero)
-                    delay = TimeSpan.Zero;
-
-                Console.WriteLine($"[MobiEventExpireAlert] Next update at {nextRunKst:yyyy-MM-dd HH:mm:ss} (KST)");
-
                 try
                 {
-                    await Task.Delay(delay, token).ConfigureAwait(false);
+                    await Task.Delay(UpdateInterval, token).ConfigureAwait(false);
                 }
                 catch (TaskCanceledException)
                 {
                     break;
                 }
 
-                if (token.IsCancellationRequested)
-                    break;
-
                 try
                 {
                     await RegistEventExpireAlertAll().ConfigureAwait(false);
-                    Console.WriteLine("[MobiEventExpireAlert] Update completed");
                 }
                 catch (Exception ex)
                 {
@@ -84,26 +78,21 @@ public static class MobiEventExpireAlert
         }, s_UpdateTaskCancellationTokenSource.Token);
     }
 
-    private static DateTime GetNextUpdateTimeKst(DateTime nowKst)
-    {
-        var today = nowKst.Date;
-        var nine = today.AddHours(9);
-        var twentyOne = today.AddHours(21);
-
-        if (nowKst < nine)
-            return nine;
-        if (nowKst < twentyOne)
-            return twentyOne;
-        return today.AddDays(1).AddHours(9);
-    }
-
     public static async Task<EventExpireAlertSetting?> LoadSetting(ulong guildId)
         => await s_ExpireAlertSettingStorage.LoadAsync(guildId).ConfigureAwait(false);
     
     public static async Task RegistEventExpireAlert(ulong guildId, EventExpireAlertSetting setting)
     {
-        await s_ExpireAlertSettingStorage.SaveAsync(guildId, setting).ConfigureAwait(false);
-        await ProcessRegistEventExpireAlert(guildId, setting);
+        await s_ScheduleGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await s_ExpireAlertSettingStorage.SaveAsync(guildId, setting).ConfigureAwait(false);
+            await ProcessRegistEventExpireAlert(guildId, setting);
+        }
+        finally
+        {
+            s_ScheduleGate.Release();
+        }
     }
 
     public static async Task RegistEventExpireAlertAll()
@@ -111,13 +100,34 @@ public static class MobiEventExpireAlert
         var list = await s_ExpireAlertSettingStorage.GetAllGuildIdsAsync().ConfigureAwait(false);
         foreach (var guildId in list)
         {
-            var setting = await s_ExpireAlertSettingStorage.LoadAsync(guildId);
-            if (setting != null)
-                await ProcessRegistEventExpireAlert(guildId, setting);
+            await s_ScheduleGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var setting = await s_ExpireAlertSettingStorage.LoadAsync(guildId);
+                if (setting != null)
+                    await ProcessRegistEventExpireAlert(guildId, setting);
+            }
+            finally
+            {
+                s_ScheduleGate.Release();
+            }
         }
     }
 
     public static async Task TestSendEventExpireAlerts(ulong guildId)
+    {
+        await s_ScheduleGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await TestSendEventExpireAlertsCore(guildId);
+        }
+        finally
+        {
+            s_ScheduleGate.Release();
+        }
+    }
+
+    private static async Task TestSendEventExpireAlertsCore(ulong guildId)
     {
         if (s_EventExpireAlertInfos.ContainsKey(guildId) == false)
             return;
@@ -196,39 +206,51 @@ public static class MobiEventExpireAlert
         if (timeSpan > TimeSpan.Zero)
             await Task.Delay(timeSpan, cancellationToken);
         
-        var ch = await Program.instance.client.GetChannelAsync(info.setting.ChannelId).ConfigureAwait(false);
-        if (ch is null)
+        // 발송·기록 중에는 주기 갱신이 예약을 다시 만들지 못하게 한다. 갱신이 먼저 이 예약을 취소했다면 새 예약이 보낸다(중복 발송 방지).
+        await s_ScheduleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
         {
-            Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - not found channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
-            return;
-        }
+            if (cancellationToken.IsCancellationRequested)
+                return;
+
+            var ch = await Program.instance.client.GetChannelAsync(info.setting.ChannelId).ConfigureAwait(false);
+            if (ch is null)
+            {
+                Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - not found channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
+                return;
+            }
         
-        if (ch is not IMessageChannel)
-        {
-            Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - is not message channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
-            return;
+            if (ch is not IMessageChannel)
+            {
+                Console.WriteLine($"[MobiEventExpireAlert] SendEventExpireAlertMessage - is not message channel (guildId:{guildId}, channelId:{info.setting.ChannelId})");
+                return;
+            }
+
+            foreach (var result in info.results)
+            {
+                var remainingText = FormatRemaining(result.end - MobiTime.now);
+                var eb = new EmbedBuilder()
+                    .WithTitle($"⏰ 이벤트 마감 알림 - {result.eventName}")
+                    .WithDescription($"이벤트 종료까지 {remainingText} 남았습니다.\n종료 시간: {result.end:yyyy-MM-dd HH:mm:ss}")
+                    .WithColor(Color.Orange)
+                    .WithFooter("몰리 • 이벤트 마감 알림")
+                    .WithCurrentTimestamp();
+
+                if (!string.IsNullOrWhiteSpace(result.url))
+                    eb.WithUrl(result.url);
+                if (!string.IsNullOrWhiteSpace(result.thumbnailUrl))
+                    eb.WithImageUrl(result.thumbnailUrl);
+
+                await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build());
+            }
+
+            info.setting.LastAlertAtKst = MobiTime.now;
+            await s_ExpireAlertSettingStorage.SaveAsync(guildId, info.setting).ConfigureAwait(false);
         }
-
-        foreach (var result in info.results)
+        finally
         {
-            var remainingText = FormatRemaining(result.end - MobiTime.now);
-            var eb = new EmbedBuilder()
-                .WithTitle($"⏰ 이벤트 마감 알림 - {result.eventName}")
-                .WithDescription($"이벤트 종료까지 {remainingText} 남았습니다.\n종료 시간: {result.end:yyyy-MM-dd HH:mm:ss}")
-                .WithColor(Color.Orange)
-                .WithFooter("몰리 • 이벤트 마감 알림")
-                .WithCurrentTimestamp();
-
-            if (!string.IsNullOrWhiteSpace(result.url))
-                eb.WithUrl(result.url);
-            if (!string.IsNullOrWhiteSpace(result.thumbnailUrl))
-                eb.WithImageUrl(result.thumbnailUrl);
-
-            await ((IMessageChannel)ch).SendMessageAsync(embed: eb.Build());
+            s_ScheduleGate.Release();
         }
-
-        info.setting.LastAlertAtKst = MobiTime.now;
-        await s_ExpireAlertSettingStorage.SaveAsync(guildId, info.setting).ConfigureAwait(false);
     }
 
     private static string FormatRemaining(TimeSpan remaining)

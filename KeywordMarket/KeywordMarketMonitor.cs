@@ -15,7 +15,7 @@ public sealed record KeywordRunResult(bool Success, string Message);
 
 /// <summary>
 /// 검색어로 찾은 거래소 아이템 전체의 시세를 매 정각 수집해 저장하고, 시세 변동·신규 아이템·사라진 아이템을 등록된 채널에 알립니다.
-/// 시세 변동은 길드별 등락률·과거시세로 판정하며, 알림을 보낸 뒤 과거시세 상태를 갱신합니다. 일정은 /해연시세모니터링과 같습니다(MarketSchedule).
+/// 시세 변동은 길드별 등락률·과거시세로 판정하며, 알림을 보낸 뒤 과거시세 상태를 갱신합니다. 일정은 /해연시세알림과 같습니다(MarketSchedule).
 /// </summary>
 public sealed class KeywordMarketMonitor
 {

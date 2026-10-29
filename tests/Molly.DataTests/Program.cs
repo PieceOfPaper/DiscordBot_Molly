@@ -45,6 +45,19 @@ if (args.Length == 1 && args[0] is "--event-live" or "--event-live-browser")
         Console.WriteLine($"{(e.isPerma ? "마감미정" : e.end.ToString("yyyy-MM-dd HH:mm"))} | {e.eventName}");
     return;
 }
+if (args.SequenceEqual(new[] { "--news-live" }))
+{
+    // 공식 소식 네 게시판의 첫 페이지를 실제 사이트에서 HTTP로 읽어 파서 결과만 출력합니다(요청 4회, DB 저장·Discord 전송 없음, CI 미사용).
+    var newsSource = new MobiEventHttpSource();
+    foreach (var board in Molly.OfficialNews.NewsBoards.All)
+    {
+        var page = Molly.OfficialNews.OfficialNewsParser.ParseListPage(await newsSource.FetchPageAsync(board.ListUrl, default));
+        Console.WriteLine($"[{board.Name}] totalCount={page.TotalCount}, 글 {page.Cards.Count}개, 이미지 {page.Cards.Count(c => c.ThumbnailUrl is not null)}개");
+        foreach (var card in page.Cards)
+            Console.WriteLine($"  {card.PostId} | {(board.ShowsCategory ? card.Category ?? "-" : "-")} | {card.Title} | {(card.ThumbnailUrl is null ? "" : "이미지")}");
+    }
+    return;
+}
 if (args.SequenceEqual(new[] { "--mobilife-live" }))
 {
     // 설정된 모비라이프 API 키로 분류 목록 한 번만 조회합니다(요청 1회, Discord 미사용, CI 미사용).
@@ -615,6 +628,7 @@ await ClassIconTests.RunAsync();
 await CurrencyTests.RunAsync();
 await AttendanceTests.RunAsync();
 await PredictionTests.RunAsync();
+await OfficialNewsTests.RunAsync();
 var battleRules = new Dictionary<string, BattleRule>
 {
     ["base_max_hp"] = new("base_max_hp", "전투능력치", "number", "100", ""), ["base_attack"] = new("base_attack", "전투능력치", "number", "40", ""), ["base_defense"] = new("base_defense", "전투능력치", "number", "0", ""),

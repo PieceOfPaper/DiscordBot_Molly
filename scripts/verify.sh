@@ -17,6 +17,8 @@ class_icon_count=$(find artifacts/publish/assets/class_icons -name '*.png' -size
 [[ "$class_icon_count" -eq 21 ]] || { echo "Missing publish class icons: $class_icon_count/21" >&2; exit 1; }
 class_emoji_count=$(find artifacts/publish/assets/class_emojis -name '*.png' -size +0 | wc -l | tr -d ' ')
 [[ "$class_emoji_count" -eq 21 ]] || { echo "Missing publish class emojis: $class_emoji_count/21" >&2; exit 1; }
+news_image_count=$(find artifacts/publish/assets/official_news -name '*.png' -size +0 | wc -l | tr -d ' ')
+[[ "$news_image_count" -eq 6 ]] || { echo "Missing publish official news images: $news_image_count/6" >&2; exit 1; }
 test -s artifacts/publish/DiscordBot_Molly.dll
 test -s artifacts/publish/playwright.ps1
 echo "Build, offline data tests, publish and required assets verified."

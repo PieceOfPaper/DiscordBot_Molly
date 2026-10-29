@@ -18,6 +18,7 @@ using Molly.KeywordMarket;
 using Molly.Currency;
 using Molly.Attendance;
 using Molly.Prediction;
+using Molly.OfficialNews;
 
 class Program
 {
@@ -50,6 +51,8 @@ class Program
     public HaeyeonMarketMonitor HaeyeonMarket { get; private set; } = null!;
     public KeywordMarketMonitor BoxMarket { get; private set; } = null!;
     public KeywordMarketMonitor PackageMarket { get; private set; } = null!;
+    // 공식 소식(공지·업데이트·이벤트·에린 노트) 수집·발송. 공식 홈페이지 확인에 실패해도 다른 기능은 정상 동작합니다.
+    public OfficialNewsService OfficialNews { get; private set; } = null!;
     
     private readonly IConfiguration m_Config;
     private readonly InteractionService m_InteractionService;
@@ -96,6 +99,8 @@ class Program
         };
         m_Client.Ready += async () =>
         {
+            // 재연결되면 연결이 끊긴 동안 쌓인 공식 소식 발송 작업을 바로 처리합니다.
+            OfficialNews?.Worker.Signal();
             // 멤버 목록의 봇 이름 아래에 도움말 명령을 표시합니다.
             await m_Client.SetCustomStatusAsync("/도움말");
 
@@ -196,6 +201,20 @@ class Program
         // 재시작으로 끊긴 배틀의 예측은 무효다. 증표는 정산할 때만 움직이므로 되돌릴 것이 없다.
         var cancelledPredictions = await Predictions.CancelUnsettledAsync(DateTimeOffset.UtcNow, appCts.Token);
         if (cancelledPredictions > 0) Console.WriteLine($"[배틀 예측] 재시작으로 정산되지 않은 예측 {cancelledPredictions}개를 무효 처리했습니다.");
+        var newsStore = new OfficialNewsStore();
+        await newsStore.InitializeAsync(appCts.Token);
+        var newsSender = new DiscordOfficialNewsSender(m_Client);
+        var newsWorker = new OfficialNewsDeliveryWorker(newsStore, newsSender);
+        // 기본은 켜짐. 잘못된 값이면 켜진 것으로 보고 알린다.
+        var newsEnabledText = m_Config["OfficialNews:Enabled"];
+        var newsEnabled = true;
+        if (!string.IsNullOrWhiteSpace(newsEnabledText) && !bool.TryParse(newsEnabledText, out newsEnabled))
+        {
+            Console.WriteLine("[공식소식] OfficialNews:Enabled는 true 또는 false여야 합니다. 수집을 켠 채로 시작합니다.");
+            newsEnabled = true;
+        }
+        OfficialNews = new OfficialNewsService(newsStore, newsWorker,
+            new OfficialNewsCollector(newsStore, new MobiEventHttpSource(), newsWorker.Signal), newsSender, newsEnabled);
 
         using var runeHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;
@@ -285,6 +304,8 @@ class Program
             _ = HaeyeonMarket.RunAsync(appCts.Token);
             _ = BoxMarket.RunAsync(appCts.Token);
             _ = PackageMarket.RunAsync(appCts.Token);
+            // 공식 소식은 10분마다 HTTP로 목록을 확인해 새 글을 DB에 기록하고, 발송 worker가 Discord 연결 상태를 보며 따로 보냅니다.
+            OfficialNews.Start(appCts.Token);
             try
             {
                 await Task.Delay(Timeout.Infinite, appCts.Token);

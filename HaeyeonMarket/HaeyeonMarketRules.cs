@@ -2,7 +2,7 @@ using Molly.Crafting;
 
 namespace Molly.HaeyeonMarket;
 
-/// <summary>/해연시세모니터링의 조절 가능한 기준값. 값을 바꾸면 다음 정각 갱신부터 적용됩니다.</summary>
+/// <summary>/해연시세알림의 조절 가능한 기준값. 값을 바꾸면 다음 정각 갱신부터 적용됩니다.</summary>
 public static class HaeyeonMarketRules
 {
     // 제작 시트에서 이 이름으로 시작하는 아이템만 추적합니다.
@@ -14,11 +14,11 @@ public static class HaeyeonMarketRules
     // 시세를 조회하지 않고 0으로 계산하는 무가치한 재료.
     public static readonly IReadOnlySet<string> WorthlessMaterials = new HashSet<string>(StringComparer.Ordinal) { "세공된 페리도트ZZ" };
 
-    // 과거시세 대비 이 비율 이상 변동하면 알립니다(0.10 = 10%). 서버가 /해연시세모니터링에서 등락률을 정하지 않으면 이 기본값을 씁니다.
+    // 과거시세 대비 이 비율 이상 변동하면 알립니다(0.10 = 10%). 서버가 /해연시세알림에서 등락률을 정하지 않으면 이 기본값을 씁니다.
     public const decimal ProductChangeThreshold = 0.10m;
     public const decimal MaterialChangeThreshold = 0.20m;
 
-    // /해연시세모니터링 등락률 옵션 범위(%).
+    // /해연시세알림 등락률 옵션 범위(%).
     public const int MinChangePercent = 1;
     public const int MaxChangePercent = 100;
 

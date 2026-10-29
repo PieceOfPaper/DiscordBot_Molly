@@ -40,13 +40,14 @@
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
-- Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세모니터링 판정·저장·정각 수집.
+- Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.
 - HaeyeonCost/: /해연비용계산의 장비 성장 수치·부위 매핑(HaeyeonCostRules), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
-- KeywordMarket/: 검색어로 찾은 거래소 아이템 전체를 추적하는 /상자시세모니터링·/패키지시세모니터링(시세 변동·신규·사라짐) 판정·저장·정각 수집. 정각 일정은 Market/MarketSchedule 공용.
+- KeywordMarket/: 검색어로 찾은 거래소 아이템 전체를 추적하는 /상자시세알림·/패키지시세알림(시세 변동·신규·사라짐) 판정·저장·정각 수집. 정각 일정은 Market/MarketSchedule 공용.
 - Currency/: 서버별 놀이 재화 `마물 퇴치 증표`의 잔액·원장 저장소(MollyTokenStore), `증표규칙` 시트(TokenRuleCatalog), 표기·이모지(MollyToken). 증표를 주고받는 기능은 이 저장소만 쓴다.
 - Attendance/: 서버별 출석부(/출석부등록·/출석부해제) 저장·출석일 계산(오전 6시 KST 고정)·메시지 갱신·매일 초기화. 출석 기록과 증표 지급은 한 트랜잭션.
 - MagicResistance/: `/마도저항확인`의 룬다 어비스 난이도별 필요 마도저항·마도 압력 기준값(MagicResistanceCatalog)과 피해 증감 추정식(MagicResistanceCalculator). 기준값·출처는 `docs/magic-resistance.md`.
 - Prediction/: `/배틀` 승부 예측(BattlePredictionStore) 베팅·마감·정산·재시작 무효 처리와 공동 배당 계산. 증표는 정산할 때만 차감·배당한다.
+- OfficialNews/: 공식 소식(공지·업데이트·이벤트·에린 노트) 목록 파싱(OfficialNewsParser)·10분 주기 HTTP 수집과 새 글 판정(OfficialNewsCollector)·구독/글/발송 작업/수집 상태 저장(OfficialNewsStore)·단일 발송 worker(OfficialNewsDeliveryWorker). 목록은 이벤트 수집과 같은 HTTP 경로로 읽고 브라우저를 쓰지 않는다(브라우저가 필요한 것은 Cloudflare 검사가 있는 랭킹뿐). 기획은 `docs/official-news.md`.
 
 ## 구현 원칙
 - 사용자에게 보여주는 명령과 안내는 한국어로 작성한다.

@@ -77,8 +77,18 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
         }
     }
     
-    [SlashCommand("이벤트마감알림등록", "이 채널로 이벤트 마감 알림을 받도록 등록합니다.")]
-    public async Task Command_RegistEventExpireAlert([Summary("시간", "마감 몇 시간 전에 알림할지 (기본 24)")] int? hours = null)
+    private const string ExpireActionSummary = "등록: 이 채널로 받기 · 확인: 현재 설정 · 해제: 끄기 · 테스트: 알림 하나 보내기 (기본 확인)";
+
+    [DefaultMemberPermissions(GuildPermission.ManageGuild)]
+    [SlashCommand("이벤트마감알림", "진행 중인 이벤트의 마감 임박 알림을 등록·확인·해제·테스트합니다.")]
+    public async Task Command_EventExpireAlert(
+        [Summary("작업", ExpireActionSummary)]
+        [Choice(OfficialNewsCommand.Register, OfficialNewsCommand.Register)]
+        [Choice(OfficialNewsCommand.Check, OfficialNewsCommand.Check)]
+        [Choice(OfficialNewsCommand.Unregister, OfficialNewsCommand.Unregister)]
+        [Choice(OfficialNewsCommand.Test, OfficialNewsCommand.Test)]
+        string action = OfficialNewsCommand.Check,
+        [Summary("시간", "등록할 때 마감 몇 시간 전에 알릴지 (1~240, 기본 24)")] int? hours = null)
     {
         var guildId = Context.Interaction.GuildId;
         if (guildId is null)
@@ -86,7 +96,32 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
             await RespondAsync("DM에서는 사용할 수 없어요.", ephemeral: true);
             return;
         }
-        
+        if (!AlertCommandAccess.IsManager(Context.User))
+        {
+            await RespondAsync(AlertCommandAccess.DeniedMessage, ephemeral: true);
+            return;
+        }
+
+        switch (action)
+        {
+            case OfficialNewsCommand.Register:
+                await RegistEventExpireAlertAsync(guildId.Value, hours);
+                break;
+            case OfficialNewsCommand.Unregister:
+                await MobiEventExpireAlert.RegistEventExpireAlert(guildId.Value, new ());
+                await RespondAsync("이벤트 마감 알림을 비활성화했어요.", ephemeral: false);
+                break;
+            case OfficialNewsCommand.Test:
+                await TestEventExpireAlertAsync(guildId.Value);
+                break;
+            default:
+                await CheckEventExpireAlertAsync(guildId.Value);
+                break;
+        }
+    }
+
+    private async Task RegistEventExpireAlertAsync(ulong guildId, int? hours)
+    {
         var channelId = Context.Interaction.ChannelId;
         if (channelId is null)
         {
@@ -102,62 +137,39 @@ public class EventCommand : InteractionModuleBase<SocketInteractionContext>
             ChannelId = channelId.Value,
             HoursBefore = hoursBefore
         };
-        await MobiEventExpireAlert.RegistEventExpireAlert(guildId.Value, setting);
+        await MobiEventExpireAlert.RegistEventExpireAlert(guildId, setting);
         await RespondAsync(
             $"이 채널(<#{channelId}>)에 **{hoursBefore}시간 전** 알림을 등록했어요.",
             ephemeral: false);
     }
 
-    [SlashCommand("이벤트마감알림해제", "이 길드의 이벤트 마감 알림을 비활성화합니다.")]
-    public async Task Command_UnregistEventExpireAlert()
+    private async Task CheckEventExpireAlertAsync(ulong guildId)
     {
-        var guildId = Context.Interaction.GuildId;
-        if (guildId is null)
-        {
-            await RespondAsync("DM에서는 사용할 수 없어요.", ephemeral: true);
-            return;
-        }
-        
-        await MobiEventExpireAlert.RegistEventExpireAlert(guildId.Value, new ());
-        await RespondAsync("이벤트 마감 알림을 비활성화했어요.", ephemeral: false);
-    }
-
-    [SlashCommand("이벤트마감알림확인", "이벤트 마감 알림 등록 확인.")]
-    public async Task Command_CheckEventExpireAlert()
-    {
-        var guildId = Context.Interaction.GuildId;
-        if (guildId is null)
-        {
-            await RespondAsync("DM에서는 사용할 수 없어요.", ephemeral: true);
-            return;
-        }
-
-        var setting = await MobiEventExpireAlert.LoadSetting(guildId.Value);
+        var setting = await MobiEventExpireAlert.LoadSetting(guildId);
         if (setting == null || !setting.Enabled)
         {
             await RespondAsync("현재 이벤트 마감 알림 비활성화 상태입니다.", ephemeral: true);
             return;
         }
-            
+
         await RespondAsync(
             $"<#{setting.ChannelId}> 채널에 **{setting.HoursBefore}시간 전** 알림 등록되어있어요.",
             ephemeral: false);
     }
 
-    [SlashCommand("이벤트마감알림테스트", "테스트")]
-    public async Task Command_TestEventExpireAlert()
+    private async Task TestEventExpireAlertAsync(ulong guildId)
     {
-        var guildId = Context.Interaction.GuildId;
-        if (guildId is null)
+        var setting = await MobiEventExpireAlert.LoadSetting(guildId);
+        if (setting == null || !setting.Enabled)
         {
-            await RespondAsync("DM에서는 사용할 수 없어요.", ephemeral: true);
+            await RespondAsync("이벤트 마감 알림이 등록돼 있지 않아요. 먼저 `/이벤트마감알림 작업:등록`을 실행해주세요.", ephemeral: true);
             return;
         }
-        
-        await MobiEventExpireAlert.TestSendEventExpireAlerts(guildId.Value);
-        await RespondAsync("테스트", ephemeral: false);
+
+        await MobiEventExpireAlert.TestSendEventExpireAlerts(guildId);
+        await RespondAsync($"<#{setting.ChannelId}> 채널로 마감 알림 하나를 테스트로 보냈어요. 알릴 진행 중 이벤트가 없으면 오지 않아요.", ephemeral: true);
     }
-    
+
     private static IEnumerable<string> SplitIntoDiscordChunks(string text, int limit = 2000)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n');

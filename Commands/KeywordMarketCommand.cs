@@ -4,36 +4,62 @@ using Molly.KeywordMarket;
 
 namespace DiscordBot_Molly.Commands;
 
-// /상자시세모니터링·/패키지시세모니터링. 두 모니터링은 검색 조건만 다르고 동작은 같습니다.
+// /상자시세알림·/패키지시세알림. 두 알림은 검색 조건만 다르고 동작은 같습니다.
 public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    [SlashCommand("상자시세모니터링", "이 채널로 거래소 '상자' 아이템 시세·신규·사라짐 알림을 받도록 등록합니다. (길드당 1채널)")]
-    public Task Command_BoxRegister(
-        [Summary("등락률", "아이템 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)")]
-        [MinValue(KeywordMarketRules.MinChangePercent), MaxValue(KeywordMarketRules.MaxChangePercent)] int? percent = null) => RegisterAsync(Program.instance.BoxMarket, percent);
+    private const string ActionSummary = "등록: 이 채널로 받기 · 확인: 현재 설정 · 해제: 끄기 · 테스트: 알림 예시 보내기 (기본 확인)";
+    private const string PercentSummary = "등록할 때: 아이템 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)";
 
-    [SlashCommand("상자시세모니터링해제", "이 서버의 상자 시세 알림 등록을 해제합니다.")]
-    public Task Command_BoxUnregister() => UnregisterAsync(Program.instance.BoxMarket);
+    [DefaultMemberPermissions(GuildPermission.ManageGuild)]
+    [SlashCommand("상자시세알림", "거래소 '상자' 아이템 시세·신규·사라짐 알림을 등록·확인·해제·테스트합니다. (길드당 1채널)")]
+    public Task Command_BoxAlert(
+        [Summary("작업", ActionSummary)]
+        [Choice(OfficialNewsCommand.Register, OfficialNewsCommand.Register)]
+        [Choice(OfficialNewsCommand.Check, OfficialNewsCommand.Check)]
+        [Choice(OfficialNewsCommand.Unregister, OfficialNewsCommand.Unregister)]
+        [Choice(OfficialNewsCommand.Test, OfficialNewsCommand.Test)]
+        string action = OfficialNewsCommand.Check,
+        [Summary("등락률", PercentSummary)]
+        [MinValue(KeywordMarketRules.MinChangePercent), MaxValue(KeywordMarketRules.MaxChangePercent)] int? percent = null) => RunAsync(Program.instance.BoxMarket, action, percent);
 
-    [SlashCommand("상자시세모니터링테스트", "저장된 시세로 상자 시세 알림 예시(신규·사라짐·시세 변동)를 이 채널에 보냅니다.")]
-    public Task Command_BoxTest() => TestAsync(Program.instance.BoxMarket);
-
-    [SlashCommand("패키지시세모니터링", "이 채널로 거래소 '패키지' 아이템 시세·신규·사라짐 알림을 받도록 등록합니다. (길드당 1채널)")]
-    public Task Command_PackageRegister(
-        [Summary("등락률", "아이템 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)")]
-        [MinValue(KeywordMarketRules.MinChangePercent), MaxValue(KeywordMarketRules.MaxChangePercent)] int? percent = null) => RegisterAsync(Program.instance.PackageMarket, percent);
-
-    [SlashCommand("패키지시세모니터링해제", "이 서버의 패키지 시세 알림 등록을 해제합니다.")]
-    public Task Command_PackageUnregister() => UnregisterAsync(Program.instance.PackageMarket);
-
-    [SlashCommand("패키지시세모니터링테스트", "저장된 시세로 패키지 시세 알림 예시(신규·사라짐·시세 변동)를 이 채널에 보냅니다.")]
-    public Task Command_PackageTest() => TestAsync(Program.instance.PackageMarket);
+    [DefaultMemberPermissions(GuildPermission.ManageGuild)]
+    [SlashCommand("패키지시세알림", "거래소 '패키지' 아이템 시세·신규·사라짐 알림을 등록·확인·해제·테스트합니다. (길드당 1채널)")]
+    public Task Command_PackageAlert(
+        [Summary("작업", ActionSummary)]
+        [Choice(OfficialNewsCommand.Register, OfficialNewsCommand.Register)]
+        [Choice(OfficialNewsCommand.Check, OfficialNewsCommand.Check)]
+        [Choice(OfficialNewsCommand.Unregister, OfficialNewsCommand.Unregister)]
+        [Choice(OfficialNewsCommand.Test, OfficialNewsCommand.Test)]
+        string action = OfficialNewsCommand.Check,
+        [Summary("등락률", PercentSummary)]
+        [MinValue(KeywordMarketRules.MinChangePercent), MaxValue(KeywordMarketRules.MaxChangePercent)] int? percent = null) => RunAsync(Program.instance.PackageMarket, action, percent);
 
     [SlashCommand("상자시세", "마지막으로 저장한 거래소 '상자' 아이템 시세를 보여줍니다.")]
     public Task Command_BoxPrices() => PricesAsync(Program.instance.BoxMarket);
 
     [SlashCommand("패키지시세", "마지막으로 저장한 거래소 '패키지' 아이템 시세를 보여줍니다.")]
     public Task Command_PackagePrices() => PricesAsync(Program.instance.PackageMarket);
+
+    private async Task RunAsync(KeywordMarketMonitor monitor, string action, int? percent)
+    {
+        if (Context.Guild is null)
+        {
+            await RespondAsync("서버 채널에서만 사용할 수 있어요.", ephemeral: true);
+            return;
+        }
+        if (!AlertCommandAccess.IsManager(Context.User))
+        {
+            await RespondAsync(AlertCommandAccess.DeniedMessage, ephemeral: true);
+            return;
+        }
+        await (action switch
+        {
+            OfficialNewsCommand.Register => RegisterAsync(monitor, percent),
+            OfficialNewsCommand.Unregister => UnregisterAsync(monitor),
+            OfficialNewsCommand.Test => TestAsync(monitor),
+            _ => CheckAsync(monitor),
+        });
+    }
 
     private async Task RegisterAsync(KeywordMarketMonitor monitor, int? percent)
     {
@@ -72,12 +98,40 @@ public class KeywordMarketCommand : InteractionModuleBase<SocketInteractionConte
             description.AppendLine("\n⚠️ 모비라이프 데이터 연동이 꺼져 있어 지금은 시세를 수집하지 못해요. 관리자에게 알려 주세요.");
 
         var embed = new EmbedBuilder()
-            .WithTitle($"{definition.Emoji} {definition.DisplayName} 시세 모니터링 등록")
+            .WithTitle($"{definition.Emoji} {definition.DisplayName} 시세 알림 등록")
             .WithDescription(description.ToString().TrimEnd())
             .WithColor(Color.Gold)
             .WithFooter(KeywordMarketMessages.Footer(definition, monitor.Attribution))
             .Build();
         await FollowupAsync(embed: embed);
+    }
+
+    private async Task CheckAsync(KeywordMarketMonitor monitor)
+    {
+        if (Context.Interaction.GuildId is not { } guildId)
+        {
+            await RespondAsync("서버 채널에서만 사용할 수 있어요.", ephemeral: true);
+            return;
+        }
+
+        await DeferAsync(ephemeral: true);
+        var definition = monitor.Definition;
+        var registered = await monitor.Store.GetChannelAsync(guildId);
+        if (registered is null)
+        {
+            await FollowupAsync($"이 서버에는 등록된 {definition.DisplayName} 시세 알림이 없어요. 받을 채널에서 `/{definition.DisplayName}시세알림 작업:등록`을 실행해 주세요.", ephemeral: true);
+            return;
+        }
+        var text = new System.Text.StringBuilder();
+        text.AppendLine($"<#{registered.ChannelId}> 채널로 {definition.DisplayName} 시세 알림을 보내고 있어요.");
+        text.AppendLine($"- 등락률 {registered.Threshold * 100:0.#}%{(registered.ChangePercent is null ? "(기본값)" : "")}");
+        var latest = await monitor.Store.LoadLatestPricesAsync();
+        text.AppendLine(latest is null
+            ? "- 아직 저장된 시세가 없어요."
+            : $"- 마지막 시세 수집: {KeywordMarketMessages.Kst(latest.CollectedAtUtc)} · 추적 중인 아이템 {latest.Prices.Count}개");
+        if (!Program.instance.MobiLife.IsConfigured)
+            text.AppendLine("-# ⚠️ 모비라이프 데이터 연동이 꺼져 있어 지금은 시세를 수집하지 못해요.");
+        await FollowupAsync(text.ToString().TrimEnd(), ephemeral: true);
     }
 
     private async Task UnregisterAsync(KeywordMarketMonitor monitor)

@@ -10,7 +10,7 @@ public sealed record KeywordMarketDefinition(string Id, string DisplayName, stri
     public string SearchDescription => Category is null ? $"'{Keyword}'" : $"'{Category}' 분류에서 '{Keyword}'";
 }
 
-/// <summary>/상자시세모니터링·/패키지시세모니터링의 조절 가능한 기준값. 값을 바꾸면 다음 정각 갱신부터 적용됩니다.</summary>
+/// <summary>/상자시세알림·/패키지시세알림의 조절 가능한 기준값. 값을 바꾸면 다음 정각 갱신부터 적용됩니다.</summary>
 public static class KeywordMarketRules
 {
     public static readonly KeywordMarketDefinition Box = new("box", "상자", "📦", "상자", "아이템");

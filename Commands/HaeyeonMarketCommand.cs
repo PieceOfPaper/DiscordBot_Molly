@@ -6,12 +6,42 @@ namespace DiscordBot_Molly.Commands;
 
 public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionContext>
 {
-    [SlashCommand("해연시세모니터링", "이 채널로 해연 제작 아이템·재료 시세 알림을 받도록 등록합니다. (길드당 1채널)")]
-    public async Task Command_Register(
-        [Summary("장비등락률", "해연 장비 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)")]
+    private const string ActionSummary = "등록: 이 채널로 받기 · 확인: 현재 설정 · 해제: 끄기 · 테스트: 알림 예시 보내기 (기본 확인)";
+
+    [DefaultMemberPermissions(GuildPermission.ManageGuild)]
+    [SlashCommand("해연시세알림", "해연 제작 아이템·재료 시세 알림을 등록·확인·해제·테스트합니다. (길드당 1채널)")]
+    public async Task Command_Alert(
+        [Summary("작업", ActionSummary)]
+        [Choice(OfficialNewsCommand.Register, OfficialNewsCommand.Register)]
+        [Choice(OfficialNewsCommand.Check, OfficialNewsCommand.Check)]
+        [Choice(OfficialNewsCommand.Unregister, OfficialNewsCommand.Unregister)]
+        [Choice(OfficialNewsCommand.Test, OfficialNewsCommand.Test)]
+        string action = OfficialNewsCommand.Check,
+        [Summary("장비등락률", "등록할 때: 해연 장비 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 10, 1~100)")]
         [MinValue(HaeyeonMarketRules.MinChangePercent), MaxValue(HaeyeonMarketRules.MaxChangePercent)] int? productPercent = null,
-        [Summary("재료등락률", "재료 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 20, 1~100)")]
+        [Summary("재료등락률", "등록할 때: 재료 시세가 과거시세보다 몇 % 이상 오르내리면 알릴지 (기본 20, 1~100)")]
         [MinValue(HaeyeonMarketRules.MinChangePercent), MaxValue(HaeyeonMarketRules.MaxChangePercent)] int? materialPercent = null)
+    {
+        if (Context.Guild is null)
+        {
+            await RespondAsync("서버 채널에서만 사용할 수 있어요.", ephemeral: true);
+            return;
+        }
+        if (!AlertCommandAccess.IsManager(Context.User))
+        {
+            await RespondAsync(AlertCommandAccess.DeniedMessage, ephemeral: true);
+            return;
+        }
+        switch (action)
+        {
+            case OfficialNewsCommand.Register: await RegisterAsync(productPercent, materialPercent); break;
+            case OfficialNewsCommand.Unregister: await UnregisterAsync(); break;
+            case OfficialNewsCommand.Test: await TestAsync(); break;
+            default: await CheckAsync(); break;
+        }
+    }
+
+    private async Task RegisterAsync(int? productPercent, int? materialPercent)
     {
         if (Context.Interaction.GuildId is not { } guildId || Context.Interaction.ChannelId is not { } channelId)
         {
@@ -55,7 +85,7 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
             description.AppendLine("\n⚠️ 모비라이프 데이터 연동이 꺼져 있어 지금은 시세를 수집하지 못해요. 관리자에게 알려 주세요.");
 
         var embed = new EmbedBuilder()
-            .WithTitle("💹 해연 시세 모니터링 등록")
+            .WithTitle("💹 해연 시세 알림 등록")
             .WithDescription(description.ToString().TrimEnd())
             .WithColor(Color.Gold)
             .WithFooter($"몰리 • 해연 시세 모니터링 • 데이터: {monitor.Attribution}")
@@ -65,8 +95,35 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
 
     private static string Percent(decimal rate, int? chosen) => $"{rate * 100:0.#}%" + (chosen is null ? "(기본값)" : "");
 
-    [SlashCommand("해연시세모니터링해제", "이 서버의 해연 시세 알림 등록을 해제합니다.")]
-    public async Task Command_Unregister()
+    private async Task CheckAsync()
+    {
+        if (Context.Interaction.GuildId is not { } guildId)
+        {
+            await RespondAsync("서버 채널에서만 사용할 수 있어요.", ephemeral: true);
+            return;
+        }
+
+        await DeferAsync(ephemeral: true);
+        var monitor = Program.instance.HaeyeonMarket;
+        var registered = await monitor.Store.GetChannelAsync(guildId);
+        if (registered is null)
+        {
+            await FollowupAsync("이 서버에는 등록된 해연 시세 알림이 없어요. 받을 채널에서 `/해연시세알림 작업:등록`을 실행해 주세요.", ephemeral: true);
+            return;
+        }
+        var text = new System.Text.StringBuilder();
+        text.AppendLine($"<#{registered.ChannelId}> 채널로 해연 시세 알림을 보내고 있어요.");
+        text.AppendLine($"- 장비 등락률 {Percent(registered.Thresholds.Product, registered.ProductChangePercent)} · 재료 등락률 {Percent(registered.Thresholds.Material, registered.MaterialChangePercent)}");
+        var latest = await monitor.Store.GetLatestCollectedAtAsync();
+        text.AppendLine(latest is { } collectedAt
+            ? $"- 마지막 시세 수집: {TimeZoneInfo.ConvertTime(collectedAt, MobiTime.timezone):yyyy-MM-dd HH:mm}"
+            : "- 아직 저장된 시세가 없어요.");
+        if (!Program.instance.MobiLife.IsConfigured)
+            text.AppendLine("-# ⚠️ 모비라이프 데이터 연동이 꺼져 있어 지금은 시세를 수집하지 못해요.");
+        await FollowupAsync(text.ToString().TrimEnd(), ephemeral: true);
+    }
+
+    private async Task UnregisterAsync()
     {
         if (Context.Interaction.GuildId is not { } guildId)
         {
@@ -81,8 +138,8 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
             : $"<#{removed.ChannelId}> 채널의 해연 시세 알림을 해제했어요.");
     }
 
-    [SlashCommand("해연시세모니터링테스트", "저장된 시세로 해연 시세 알림 예시(시세 변동 또는 유불리 변동 중 무작위)를 이 채널에 보냅니다.")]
-    public async Task Command_Test()
+    // 저장된 시세로 해연 시세 알림 예시(시세 변동 또는 유불리 변동 중 무작위)를 이 채널에 보냅니다.
+    private async Task TestAsync()
     {
         await DeferAsync();
         var monitor = Program.instance.HaeyeonMarket;

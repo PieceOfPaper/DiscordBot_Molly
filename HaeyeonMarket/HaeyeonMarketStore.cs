@@ -19,7 +19,7 @@ public sealed record HaeyeonPriceSnapshot(MarketPrice Price, bool IsProduct);
 public sealed record HaeyeonLatestPrices(DateTimeOffset CollectedAtUtc, IReadOnlyDictionary<string, MarketPrice> Prices);
 
 /// <summary>
-/// /해연시세모니터링 SQLite 저장소. 길드별 알림 채널(길드당 1개)과 등락률, 마지막 정각 수집의 시세,
+/// /해연시세알림 SQLite 저장소. 길드별 알림 채널(길드당 1개)과 등락률, 마지막 정각 수집의 시세,
 /// 길드·아이템별 과거시세·현재시세, 제작 아이템별 유불리 상태를 보관합니다.
 /// 시세 이력은 모비라이프가 보관하므로 몰리는 마지막 성공 회차의 시세만 남깁니다(회차마다 통째로 교체).
 /// </summary>

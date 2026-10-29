@@ -15,7 +15,7 @@ public enum HaeyeonPriceView
     ProductTotals,
 }
 
-/// <summary>/해연시세와 /해연시세모니터링테스트에서 마지막 저장 시세를 보여주는 순수 로직입니다.</summary>
+/// <summary>/해연시세와 /해연시세알림 테스트에서 마지막 저장 시세를 보여주는 순수 로직입니다.</summary>
 public static class HaeyeonMarketReport
 {
     public static string Title(HaeyeonPriceView view) => view switch
