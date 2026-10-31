@@ -30,17 +30,15 @@ public sealed record UnpackRefreshResult(UnpackRepoStatus Status, bool Changed =
 
 /// <summary>
 /// 게임 데이터 저장소에서 만든 데이터 하나의 공용 보관소.
-/// - 시작 시 디스크 캐시를 읽고, 이후 <see cref="RunAsync"/>가 주기적으로 시트 폴더의 마지막 커밋만 확인합니다(요청 1회).
+/// - 시작 시 디스크 캐시를 읽고, 이후 <see cref="UnpackDataCatalogs.RunAsync"/>가 주기적으로 시트 폴더의 마지막 커밋만 확인합니다(모든 데이터 합쳐 요청 1회).
 /// - 봇이 시작된 뒤 첫 확인은 커밋과 상관없이 항상 다시 만들어 변환 규칙이 바뀐 코드가 바로 반영되게 합니다.
 ///   캐시는 그 사이와 저장소에 접근하지 못할 때 쓰는 마지막 정상 데이터입니다.
 /// - 이후에는 커밋이 바뀌었을 때만 필요한 시트를 받아 다시 만들고, 검증·캐시 저장까지 성공해야 교체합니다. 실패하면 마지막 정상 데이터를 유지합니다.
 /// - 캐시도 없고 저장소에도 접근하지 못하면 <see cref="Data"/>가 null이며, 명령은 <see cref="UnpackDataMessages.NoData"/>로 응답합니다.
 /// </summary>
-public sealed class UnpackDataCatalog<T> where T : class
+public sealed class UnpackDataCatalog<T> : IUnpackDataCatalog where T : class
 {
     private const int CacheFormat = 1;
-    public static readonly TimeSpan CheckInterval = TimeSpan.FromHours(1);
-    public static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(10);
 
     private readonly UnpackRepoClient m_Client;
     private readonly IUnpackDataset<T> m_Dataset;
@@ -67,7 +65,7 @@ public sealed class UnpackDataCatalog<T> where T : class
     public T? Data => Current?.Data;
     public DateTimeOffset? LastCheckedAt { get; private set; }
 
-    /// <summary>디스크 캐시만 읽습니다. 저장소 확인은 <see cref="RunAsync"/>가 합니다.</summary>
+    /// <summary>디스크 캐시만 읽습니다. 저장소 확인은 <see cref="UnpackDataCatalogs.RunAsync"/>가 합니다.</summary>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         await m_Gate.WaitAsync(ct);
@@ -89,46 +87,28 @@ public sealed class UnpackDataCatalog<T> where T : class
     /// <summary>시트 폴더의 마지막 커밋을 확인하고, 바뀌었거나 데이터가 없을 때만 다시 만듭니다.</summary>
     public async Task<UnpackRefreshResult> RefreshAsync(CancellationToken ct = default)
     {
+        var head = await m_Client.GetLatestCommitForPathAsync(UnpackSheets.ClientDirectory, ct);
+        if (!head.IsSuccess) return Failed(head.Status, $"시트 커밋 확인 실패({head.Status}): {head.Detail}", head.RetryAfter);
+        return await RefreshAsync(head.Value!, ct);
+    }
+
+    /// <summary>이미 확인한 시트 폴더 커밋으로 갱신합니다. 여러 데이터가 커밋 확인 한 번을 함께 씁니다(<see cref="UnpackDataCatalogs.RunAsync"/>).</summary>
+    public async Task<UnpackRefreshResult> RefreshAsync(string commit, CancellationToken ct)
+    {
         await m_Gate.WaitAsync(ct);
-        try { return await RefreshLockedAsync(ct); }
+        try { return await RefreshLockedAsync(commit, ct); }
         finally { m_Gate.Release(); }
     }
 
-    /// <summary>시작 직후 한 번 확인하고 이후 주기적으로 확인합니다. 토큰이 없거나 거부되면 멈추고 마지막 데이터를 계속 씁니다.</summary>
-    public async Task RunAsync(CancellationToken ct)
-    {
-        if (!m_Client.IsConfigured)
-        {
-            m_Log(Current is null
-                ? $"저장소를 읽지 않아 데이터가 없습니다({m_Client.DescribeState()}). 관련 명령은 데이터 없음으로 응답합니다."
-                : $"저장소를 읽지 않아 캐시만 사용합니다({m_Client.DescribeState()}).");
-            return;
-        }
-        try
-        {
-            while (true)
-            {
-                var result = await RefreshAsync(ct);
-                if (result.Status is UnpackRepoStatus.Unauthorized or UnpackRepoStatus.NotConfigured or UnpackRepoStatus.Disabled)
-                {
-                    m_Log("저장소 접근이 막혀 재시작 전까지 확인을 멈춥니다." + (Current is null ? " 데이터가 없어 관련 명령은 사용할 수 없습니다." : " 마지막 데이터를 계속 사용합니다."));
-                    return;
-                }
-                var delay = result.IsSuccess ? CheckInterval
-                    : result.RetryAfter is { } retryAfter && retryAfter > RetryInterval ? retryAfter
-                    : RetryInterval;
-                await Task.Delay(delay, ct);
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-        catch (Exception ex) { m_Log($"주기 확인 중단: {ex}"); }
-    }
+    /// <summary>이 데이터 하나만 주기적으로 확인합니다. 봇은 <see cref="UnpackDataCatalogs.RunAsync"/>로 모든 데이터를 함께 확인합니다.</summary>
+    public Task RunAsync(CancellationToken ct) => UnpackDataCatalogs.RunAsync(m_Client, [this], ct);
 
-    private async Task<UnpackRefreshResult> RefreshLockedAsync(CancellationToken ct)
+    void IUnpackDataCatalog.LogStopped(string reason) => m_Log(reason + (Current is null ? " 데이터가 없어 관련 명령은 사용할 수 없습니다." : " 마지막 데이터를 계속 사용합니다."));
+
+    UnpackRefreshResult IUnpackDataCatalog.Fail(UnpackRepoStatus status, string detail, TimeSpan? retryAfter) => Failed(status, detail, retryAfter);
+
+    private async Task<UnpackRefreshResult> RefreshLockedAsync(string commit, CancellationToken ct)
     {
-        var head = await m_Client.GetLatestCommitForPathAsync(UnpackSheets.ClientDirectory, ct);
-        if (!head.IsSuccess) return Failed(head.Status, $"시트 커밋 확인 실패({head.Status}): {head.Detail}", head.RetryAfter);
-        var commit = head.Value!;
         var current = Current;
         if (current is not null && current.Commit == commit && m_BuiltThisRun)
         {
@@ -221,6 +201,67 @@ public sealed class UnpackDataCatalog<T> where T : class
     }
 
     private static string Display(string patch) => patch.Length > 0 ? patch : "알 수 없음";
+}
+
+/// <summary>커밋 확인을 함께 쓰는 데이터 보관소. <see cref="UnpackDataCatalog{T}"/>가 구현합니다.</summary>
+public interface IUnpackDataCatalog
+{
+    string Name { get; }
+    Task<UnpackRefreshResult> RefreshAsync(string commit, CancellationToken ct);
+    // 확인을 멈출 때 데이터별 로그. 데이터 유무에 따라 안내를 덧붙입니다.
+    void LogStopped(string reason);
+    // 커밋 확인 자체가 실패했을 때 데이터별 로그를 남기고 결과를 돌려줍니다.
+    UnpackRefreshResult Fail(UnpackRepoStatus status, string detail, TimeSpan? retryAfter);
+}
+
+/// <summary>
+/// 여러 데이터 보관소의 주기 확인. 데이터 수와 상관없이 확인 1회당 시트 폴더 커밋 요청은 1회이고,
+/// 같은 커밋으로 각 데이터를 차례로 갱신합니다(바뀐 데이터만 시트를 받습니다).
+/// </summary>
+public static class UnpackDataCatalogs
+{
+    public static readonly TimeSpan CheckInterval = TimeSpan.FromHours(1);
+    public static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(10);
+
+    public static async Task RunAsync(UnpackRepoClient client, IReadOnlyList<IUnpackDataCatalog> catalogs, CancellationToken ct)
+    {
+        if (!client.IsConfigured)
+        {
+            foreach (var catalog in catalogs)
+                catalog.LogStopped($"저장소를 읽지 않습니다({client.DescribeState()}).");
+            return;
+        }
+        try
+        {
+            while (true)
+            {
+                var results = await RefreshAllAsync(client, catalogs, ct);
+                if (results.Any(x => x.Status is UnpackRepoStatus.Unauthorized or UnpackRepoStatus.NotConfigured or UnpackRepoStatus.Disabled))
+                {
+                    foreach (var catalog in catalogs)
+                        catalog.LogStopped("저장소 접근이 막혀 재시작 전까지 확인을 멈춥니다.");
+                    return;
+                }
+                var delay = results.All(x => x.IsSuccess) ? CheckInterval
+                    : results.Select(x => x.RetryAfter).OfType<TimeSpan>().Append(RetryInterval).Max();
+                await Task.Delay(delay, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { Console.WriteLine($"[게임데이터] 주기 확인 중단: {ex}"); }
+    }
+
+    /// <summary>시트 폴더 커밋을 한 번 확인하고 모든 데이터를 그 커밋으로 갱신합니다.</summary>
+    public static async Task<IReadOnlyList<UnpackRefreshResult>> RefreshAllAsync(UnpackRepoClient client, IReadOnlyList<IUnpackDataCatalog> catalogs, CancellationToken ct)
+    {
+        var head = await client.GetLatestCommitForPathAsync(UnpackSheets.ClientDirectory, ct);
+        if (!head.IsSuccess)
+            return catalogs.Select(x => x.Fail(head.Status, $"시트 커밋 확인 실패({head.Status}): {head.Detail}", head.RetryAfter)).ToArray();
+        var results = new List<UnpackRefreshResult>();
+        foreach (var catalog in catalogs)
+            results.Add(await catalog.RefreshAsync(head.Value!, ct));
+        return results;
+    }
 }
 
 public static class UnpackDataMessages

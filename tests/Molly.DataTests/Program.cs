@@ -141,6 +141,31 @@ if (args.Length is 1 or 2 && args[0] == "--runes-live")
     finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
     return;
 }
+if (args.SequenceEqual(new[] { "--unpack-data-live" }))
+{
+    // 설정된 토큰으로 클래스·마도저항 데이터를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트, Discord 미사용, CI 미사용).
+    var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
+    using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
+    var liveDir = Path.Combine(Path.GetTempPath(), "molly-unpack-data-live-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var classCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.Classes.ClassTable>(unpack, new Molly.Classes.UnpackClassDataset(), liveDir, Console.WriteLine);
+        var resistanceCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.MagicResistance.MagicResistanceData>(unpack, new Molly.MagicResistance.UnpackMagicResistanceDataset(), liveDir, Console.WriteLine);
+        var results = await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, [classCatalog, resistanceCatalog], default);
+        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null)
+        {
+            Console.WriteLine("데이터 만들기 실패: " + string.Join(" / ", results.Select(x => $"{x.Status} {x.Detail}")));
+            Environment.Exit(1);
+        }
+        Console.WriteLine("클래스: " + string.Join(", ", classCatalog.Data.Items.Select(x => x.Name)));
+        Console.WriteLine($"{resistanceCatalog.Data.AbyssName}: " + string.Join(", ", resistanceCatalog.Data.AbyssHell.Select(x => $"{x.Name} {x.RequiredResistance}/{x.Pressure}")));
+        var growth = Molly.HaeyeonCost.HaeyeonGrowth.From(resistanceCatalog.Data);
+        Console.WriteLine($"해연 장비: " + string.Join(", ", resistanceCatalog.Data.HaeyeonEquipment.Select(x => $"{x.Key} {x.Value.Initial}~{x.Value.Max}")) +
+                          $" → 해연 비용 계산 범위 {growth.InitialResistance}~{growth.MaxResistance}");
+    }
+    finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
+    return;
+}
 if (args.SequenceEqual(new[] { "--battle-live" }))
 {
     using var client = new HttpClient();
@@ -425,21 +450,24 @@ Check(normalized == "두룬", "퀴즈 정답 정규화");
 
 var consonantCsv = new ConsonantCsvData(
     "이름,지역\n알 수 없는 NPC,\n글리니스,던바튼",
-    "이름,분류,대륙\n던바튼,마을,울라\n티르 코네일,마을,울라",
-    "이름,계열\n전사,전사\n마법사,마법");
+    "이름,분류,대륙\n던바튼,마을,울라\n티르 코네일,마을,울라");
 var consonantTable = ConsonantCsvReader.Parse(consonantCsv, DateTimeOffset.UtcNow);
-Check(consonantTable.Npcs.Count == 2 && consonantTable.Regions.Count == 2 && consonantTable.Classes.Count == 2, "NPC·지역·클래스 CSV 검증");
-var npcQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Npc, quizPool.Items, consonantTable, 10);
+Check(consonantTable.Npcs.Count == 2 && consonantTable.Regions.Count == 2, "NPC·지역 CSV 검증");
+// 클래스는 게임 데이터 저장소(CombatJob)에서 받은 목록을 씁니다.
+Molly.Classes.ClassData[] quizClasses = [new("HighWarrior", "전사"), new("HighMage", "마법사")];
+var npcQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Npc, quizPool.Items, consonantTable, [], 10);
 Check(npcQuestions.Count == 2 && npcQuestions.Any(q => q.Prompt.Contains("종류: **NPC**") && q.Prompt.Contains("지역: 불명")) && npcQuestions.All(q => q.Prompt.Contains("자음:")), "NPC 자음·지역 힌트와 불명 처리");
-var regionQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Region, quizPool.Items, consonantTable, 10);
+var regionQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Region, quizPool.Items, consonantTable, [], 10);
 Check(regionQuestions.All(q => q.Prompt.Contains("종류: **지역**") && q.Prompt.Contains("분류: 마을")), "지역 자음·분류 힌트");
-var classQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Class, quizPool.Items, consonantTable, 10);
-Check(classQuestions.All(q => q.Prompt.Contains("종류: **클래스**") && !q.Prompt.Contains("💡 힌트")), "클래스 자음과 힌트 없음");
-var runeQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Season2WeaponRune, quizPool.Items, consonantTable, 10);
+var classQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Class, quizPool.Items, consonantTable, quizClasses, 10);
+Check(classQuestions.Count == 2 && classQuestions.All(q => q.Prompt.Contains("종류: **클래스**") && !q.Prompt.Contains("💡 힌트")), "클래스 자음과 힌트 없음");
+Check(QuizQuestions.UsesClasses(ConsonantTopic.Class) && QuizQuestions.UsesClasses(ConsonantTopic.NpcClassRegion) && !QuizQuestions.UsesClasses(ConsonantTopic.Npc) && !QuizQuestions.UsesClasses(ConsonantTopic.Region),
+    "클래스가 들어가는 종목만 게임 데이터 클래스가 필요");
+var runeQuestions = QuizQuestions.PickConsonant(ConsonantTopic.Season2WeaponRune, quizPool.Items, consonantTable, [], 10);
 Check(runeQuestions.Count == 1 && runeQuestions[0].Prompt.Contains("무기룬"), "시즌2 무기룬 자음 힌트");
-var mixedQuestions = QuizQuestions.PickConsonant(ConsonantTopic.NpcClassRegion, quizPool.Items, consonantTable, 99);
+var mixedQuestions = QuizQuestions.PickConsonant(ConsonantTopic.NpcClassRegion, quizPool.Items, consonantTable, quizClasses, 99);
 Check(mixedQuestions.Count == 6 && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("NPC")) && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("클래스")) && mixedQuestions.Select(q => q.Prompt).Any(x => x.Contains("지역")), "NPC·클래스·지역 혼합 출제");
-RejectConsonants(new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions, consonantCsv.Classes), "NPC 이름 중복 거부");
+RejectConsonants(new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions), "NPC 이름 중복 거부");
 
 var bottleCsv = "ID,메시지\n1,첫 번째 쪽지\n2,\"둘째 줄 첫 문장\n둘째 줄 두 번째 문장\"";
 var bottleTable = MessageBottleCsvReader.Parse(bottleCsv, DateTimeOffset.UtcNow);
@@ -454,7 +482,7 @@ try
     var consonantCatalog = new ConsonantCatalog(consonantSource, dir, _ => { });
     await consonantCatalog.InitializeAsync();
     var consonantOriginal = consonantCatalog.Current;
-    consonantSource.Csv = new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions, consonantCsv.Classes);
+    consonantSource.Csv = new ConsonantCsvData("이름,지역\n중복,던바튼\n중복,반호르", consonantCsv.Regions);
     Check(!await consonantCatalog.RefreshAsync() && ReferenceEquals(consonantOriginal, consonantCatalog.Current), "자음퀴즈 시트 검증 실패 시 정상 스냅샷 유지");
 
     var bottleSource = new FakeMessageBottleSource(bottleCsv);
@@ -556,6 +584,7 @@ await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
 await UnpackRepoTests.RunAsync();
 await RuneUnpackTests.RunAsync();
+await UnpackDataTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await HaeyeonCostTests.RunAsync();
 await KeywordMarketTests.RunAsync();

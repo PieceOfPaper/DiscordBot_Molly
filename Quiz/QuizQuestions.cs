@@ -1,4 +1,5 @@
 using System.Text;
+using Molly.Classes;
 using Molly.Runes;
 
 namespace Molly.Quiz;
@@ -17,7 +18,8 @@ public sealed record QuizQuestion(string Prompt, string Answer);
 
 public static class QuizQuestions
 {
-    public static IReadOnlyList<QuizQuestion> PickConsonant(ConsonantTopic topic, IEnumerable<RuneData> runes, ConsonantTable table, int count)
+    /// <param name="classes">게임 데이터 저장소의 클래스 목록. 클래스 종목에서만 쓰며 <see cref="UsesClasses"/>가 false면 비어 있어도 됩니다.</param>
+    public static IReadOnlyList<QuizQuestion> PickConsonant(ConsonantTopic topic, IEnumerable<RuneData> runes, ConsonantTable table, IEnumerable<ClassData> classes, int count)
     {
         if (count < 1) throw new ArgumentException("문제수는 최소 1개입니다.");
         var questions = topic switch
@@ -29,10 +31,10 @@ public static class QuizQuestions
             ConsonantTopic.Season2AccessoryRune => runes.Where(r => r.Season == 2 && r.Category == RuneCategory.Accessory).Select(CreateRuneQuestion),
             ConsonantTopic.Season2NonAccessoryRune => runes.Where(r => r.Season == 2 && r.Category != RuneCategory.Accessory).Select(CreateRuneQuestion),
             ConsonantTopic.Npc => table.Npcs.Select(n => CreateQuestion("NPC", n.Name, $"지역: {(string.IsNullOrWhiteSpace(n.Region) ? "불명" : n.Region)}")),
-            ConsonantTopic.Class => table.Classes.Select(c => CreateQuestion("클래스", c.Name, null)),
+            ConsonantTopic.Class => classes.Select(c => CreateQuestion("클래스", c.Name, null)),
             ConsonantTopic.Region => table.Regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}")),
             ConsonantTopic.NpcClassRegion => table.Npcs.Select(n => CreateQuestion("NPC", n.Name, $"지역: {(string.IsNullOrWhiteSpace(n.Region) ? "불명" : n.Region)}"))
-                .Concat(table.Classes.Select(c => CreateQuestion("클래스", c.Name, null)))
+                .Concat(classes.Select(c => CreateQuestion("클래스", c.Name, null)))
                 .Concat(table.Regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}"))),
             _ => throw new ArgumentException("지원하지 않는 자음퀴즈 문제종목입니다.")
         };
@@ -44,6 +46,8 @@ public static class QuizQuestions
 
     public static bool UsesRunes(ConsonantTopic topic) => topic is ConsonantTopic.Season2Rune or ConsonantTopic.Season2WeaponRune or
         ConsonantTopic.Season2ArmorRune or ConsonantTopic.Season2EmblemRune or ConsonantTopic.Season2AccessoryRune or ConsonantTopic.Season2NonAccessoryRune;
+
+    public static bool UsesClasses(ConsonantTopic topic) => topic is ConsonantTopic.Class or ConsonantTopic.NpcClassRegion;
 
     private static QuizQuestion CreateRuneQuestion(RuneData rune)
         => CreateQuestion("룬", rune.Name.TrimEnd('+').Trim(), $"{rune.Category.Display()}룬");

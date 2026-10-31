@@ -32,8 +32,9 @@ internal static class MagicResistanceTests
             "받는 피해 배율은 주는 피해 배율의 역수가 아님(2,000 미달: 1+2^0.75 ≠ 4)");
 
         // 입력 7,200: 출력 예시와 같은 필드
-        var embed = MagicResistanceCommand.BuildEmbed(7_200);
-        Assert(embed.Title == "마도저항 확인 · 7,200", "제목에 천 단위 쉼표를 넣은 입력 마도저항 표시");
+        var embed = MagicResistanceCommand.BuildEmbed(7_200, TestMagicResistance.Data);
+        Assert(embed.Title == "마도저항 확인 · 7,200" && embed.Description == "룬다 어비스 난이도별 마도 압력과 비교한 결과예요.",
+            "제목에 천 단위 쉼표를 넣은 입력 마도저항, 설명에 게임 데이터의 어비스 시즌 이름 표시");
         var fields = embed.Fields.Select(f => (f.Name, f.Value)).ToList();
         Assert(fields.SequenceEqual(new[]
         {
@@ -46,15 +47,15 @@ internal static class MagicResistanceTests
             "미달 항목이 있으면 추정식 안내와 파티장 동반 입장 예외를 함께 안내");
         Assert(fields.Count(f => f.Name.Contains("⚠️")) == 1, "지옥3 필요 마도저항 7,200과 같으면 미달이 아님");
 
-        var hell4 = MagicResistanceCatalog.RundaAbyss.Single(c => c.Name == "지옥4");
+        var hell4 = TestMagicResistance.Data.AbyssHell.Single(c => c.Name == "지옥4");
         Assert(MagicResistanceCalculator.Evaluate(8_499, hell4).BelowRequirement
                && !MagicResistanceCalculator.Evaluate(8_500, hell4).BelowRequirement
                && !MagicResistanceCalculator.Evaluate(8_501, hell4).BelowRequirement, "필요 저항 미만만 미달, 같거나 초과면 미달 아님");
-        var full = MagicResistanceCommand.BuildEmbed(9_000);
+        var full = MagicResistanceCommand.BuildEmbed(9_000, TestMagicResistance.Data);
         Assert(full.Fields.All(f => !f.Name.Contains("⚠️")) && !full.Footer!.Value.Text.Contains(MagicResistanceCommand.PartyNotice),
             "모든 기준을 충족하면 미달 표시와 파티장 예외 안내를 붙이지 않음");
 
-        var zero = MagicResistanceCommand.BuildEmbed(0);
+        var zero = MagicResistanceCommand.BuildEmbed(0, TestMagicResistance.Data);
         Assert(zero.Title == "마도저항 확인 · 0" && zero.Fields.Length == 4 && zero.Fields.All(f => f.Name.Contains("⚠️"))
                && zero.Fields[0].Value == "주는 피해 −95.3% · 받는 피해 +303.8%", "입력 0에서도 오류 없이 계산");
 
@@ -62,13 +63,12 @@ internal static class MagicResistanceTests
                && MagicResistanceCalculator.FormatPercent(-0.0) == "0%", "반올림 결과가 0이면 음수 0 없이 0%");
         Assert(MagicResistanceCalculator.FormatPercent(-0.05) == "−0.1%" && MagicResistanceCalculator.FormatPercent(12.345) == "+12.3%",
             "소수점 한 자리 반올림과 증감 부호 표기");
-        var calmEmbed = MagicResistanceCommand.BuildEmbed(4_400);
+        var calmEmbed = MagicResistanceCommand.BuildEmbed(4_400, TestMagicResistance.Data);
         Assert(calmEmbed.Fields[0].Value == "주는 피해 0% · 받는 피해 0%", "압력과 같은 난이도는 0%로 표시");
 
-        Assert(MagicResistanceCatalog.RundaAbyss.Select(c => (c.Name, c.RequiredResistance, c.Pressure)).SequenceEqual(new[]
-        {
-            ("지옥1", 3_500, 4_400), ("지옥2", 6_000, 6_600), ("지옥3", 7_200, 7_800), ("지옥4", 8_500, 9_000),
-        }), "룬다 어비스 기준값(지옥2는 9/17 조정값 6,000/6,600)");
+        var hell5 = TestMagicResistance.Data with { AbyssHell = [.. TestMagicResistance.Data.AbyssHell, new MagicPressureContent("지옥5", 9_500, 10_000)] };
+        Assert(MagicResistanceCommand.BuildEmbed(7_200, hell5).Fields.Select(f => f.Name).Last() == "지옥5 ⚠️ 입장 기준 미달",
+            "게임 데이터에 새 지옥 난이도가 생기면 코드 수정 없이 함께 비교");
     }
 
     private static void Assert(bool condition, string name)

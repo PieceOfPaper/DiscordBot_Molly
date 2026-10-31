@@ -6,6 +6,9 @@ using Molly.Market;
 
 internal static class HaeyeonCostTests
 {
+    // 게임 데이터와 같은 해연 장비 범위(무기 840~1,400, 그 외 420~700)로 만든 성장 규칙
+    private static HaeyeonGrowth G => TestMagicResistance.Growth;
+
     private static readonly DateTimeOffset s_Now = new(2026, 10, 19, 13, 20, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset s_Collected = new(2026, 10, 19, 13, 0, 30, TimeSpan.Zero);
 
@@ -46,65 +49,65 @@ internal static class HaeyeonCostTests
     private static void GrowthTests()
     {
         var slots = Enum.GetValues<HaeyeonSlot>();
-        Assert(HaeyeonCostRules.RuneResistance + slots.Sum(HaeyeonCostRules.InitialEquipment) == 7_200
-               && HaeyeonCostRules.RuneResistance + slots.Sum(x => HaeyeonCostRules.InitialEquipment(x) + HaeyeonCostRules.Gain(x, HaeyeonCostRules.MaxCount(x))) == 10_000,
+        Assert(HaeyeonCostRules.RuneResistance + slots.Sum(G.InitialEquipment) == 7_200
+               && HaeyeonCostRules.RuneResistance + slots.Sum(x => G.InitialEquipment(x) + G.Gain(x, G.MaxCount(x))) == 10_000,
             "초기 총 저항 7,200(룬 3,000 + 장비 4,200), 최대 10,000(룬 3,000 + 장비 7,000)");
-        Assert(HaeyeonCostRules.Gain(HaeyeonSlot.Weapon, 1) == 28 && 840 + HaeyeonCostRules.Gain(HaeyeonSlot.Weapon, 20) == 1_400,
+        Assert(G.Gain(HaeyeonSlot.Weapon, 1) == 28 && 840 + G.Gain(HaeyeonSlot.Weapon, 20) == 1_400,
             "무기는 감정마다 +28, 최대 1,400");
         Assert(new[] { HaeyeonSlot.Helmet, HaeyeonSlot.Top, HaeyeonSlot.Bottom, HaeyeonSlot.Gloves, HaeyeonSlot.Shoes, HaeyeonSlot.Necklace }
-                .All(x => HaeyeonCostRules.Gain(x, 1) == 14 && 420 + HaeyeonCostRules.Gain(x, 20) == 700),
+                .All(x => G.Gain(x, 1) == 14 && 420 + G.Gain(x, 20) == 700),
             "방어구 각 부위·목걸이는 감정마다 +14, 최대 700");
-        Assert(new[] { 0, 1, 2, 3, 19, 20, 21 }.Select(q => HaeyeonCostRules.Gain(HaeyeonSlot.Ring, q)).SequenceEqual(new[] { 0, 14, 42, 70, 518, 546, 560 }),
+        Assert(new[] { 0, 1, 2, 3, 19, 20, 21 }.Select(q => G.Gain(HaeyeonSlot.Ring, q)).SequenceEqual(new[] { 0, 14, 42, 70, 518, 546, 560 }),
             "반지 추가 0/1/2/3/19/20/21개 상승량 0/14/42/70/518/546/560(첫·마지막 +14, 중간 +28)");
-        Assert(slots.All(x => Throws(() => HaeyeonCostRules.Gain(x, HaeyeonCostRules.MaxCount(x) + 1))),
+        Assert(slots.All(x => Throws(() => G.Gain(x, G.MaxCount(x) + 1))),
             "최대치 이후 추가 감정은 없음(무기·부위 20개, 반지 21개)");
-        var full = HaeyeonCostPlanner.Plan(7_200, 10_000, s_TestPrices);
-        Assert(full.ReachedResistance == 10_000 && slots.All(x => full.Purchases[x] == HaeyeonCostRules.MaxCount(x)),
+        var full = HaeyeonCostPlanner.Plan(G, 7_200, 10_000, s_TestPrices);
+        Assert(full.ReachedResistance == 10_000 && slots.All(x => full.Purchases[x] == G.MaxCount(x)),
             "목표 10,000은 모든 슬롯을 최대까지 올리고 그 이상은 사지 않음");
     }
 
     private static void PlanTests()
     {
-        var plan = HaeyeonCostPlanner.Plan(7_200, 7_800, s_TestPrices);
+        var plan = HaeyeonCostPlanner.Plan(G, 7_200, 7_800, s_TestPrices);
         Assert(plan.Cost == 164_000 && plan.ReachedResistance == 7_802
                && plan.Purchases.OrderBy(x => x.Key).SequenceEqual(new Dictionary<HaeyeonSlot, int> { [HaeyeonSlot.Weapon] = 2, [HaeyeonSlot.Ring] = 20 }),
             "검증용 단가 7,200 → 7,800: 반지 20개 + 무기 2개, 164,000데카, 도달 7,802(반지 21개 먼저 고정 시 171,000)");
 
-        var expensiveRing = HaeyeonCostPlanner.Plan(7_200, 7_800, With(HaeyeonSlot.Ring, 20_000m));
+        var expensiveRing = HaeyeonCostPlanner.Plan(G, 7_200, 7_800, With(HaeyeonSlot.Ring, 20_000m));
         Assert(!expensiveRing.Purchases.ContainsKey(HaeyeonSlot.Ring) && expensiveRing.Purchases[HaeyeonSlot.Weapon] == 20
                && expensiveRing.Cost == 20 * 12_000 + 3 * 7_000 && expensiveRing.ReachedResistance == 7_802,
             "반지가 비싸지면 반지 대신 무기 20개 + 방어구·목걸이 3개로 바뀜");
-        var cheapWeapon = HaeyeonCostPlanner.Plan(7_200, 7_256, With(HaeyeonSlot.Weapon, 1_000m));
+        var cheapWeapon = HaeyeonCostPlanner.Plan(G, 7_200, 7_256, With(HaeyeonSlot.Weapon, 1_000m));
         Assert(cheapWeapon.Purchases.Keys.SequenceEqual([HaeyeonSlot.Weapon]) && cheapWeapon.Cost == 2_000, "무기가 싸면 무기만 사서 해결");
 
         // 현재 7,228: 대표 상태는 무기 1개(12,000). 목표 7,242는 처음부터면 반지 2개(14,000)지만, 무기를 되돌리지 않으므로 +14 한 번(7,000)이 필요
-        var kept = HaeyeonCostPlanner.Plan(7_228, 7_242, s_TestPrices);
-        var fromScratch = HaeyeonCostPlanner.Plan(7_200, 7_242, s_TestPrices).Cost - HaeyeonCostPlanner.Plan(7_200, 7_228, s_TestPrices).Cost;
+        var kept = HaeyeonCostPlanner.Plan(G, 7_228, 7_242, s_TestPrices);
+        var fromScratch = HaeyeonCostPlanner.Plan(G, 7_200, 7_242, s_TestPrices).Cost - HaeyeonCostPlanner.Plan(G, 7_200, 7_228, s_TestPrices).Cost;
         Assert(kept.EstimatedCurrent[HaeyeonSlot.Weapon] == 1 && kept.EstimatedCurrent.Where(x => x.Key != HaeyeonSlot.Weapon).All(x => x.Value == 0)
                && kept.Cost == 7_000 && kept.ReachedResistance == 7_242 && fromScratch == 2_000,
             "추정한 현재 상태(무기 1개)를 유지한 채 추가 비용 계산(처음부터 목표 − 처음부터 현재 = 2,000을 쓰지 않음)");
-        var mid = HaeyeonCostPlanner.Plan(7_242, 7_800, s_TestPrices);
-        Assert(mid.EstimatedCurrent[HaeyeonSlot.Ring] == 2 && mid.Purchases.All(x => x.Value > 0 && mid.EstimatedCurrent[x.Key] + x.Value <= HaeyeonCostRules.MaxCount(x.Key))
+        var mid = HaeyeonCostPlanner.Plan(G, 7_242, 7_800, s_TestPrices);
+        Assert(mid.EstimatedCurrent[HaeyeonSlot.Ring] == 2 && mid.Purchases.All(x => x.Value > 0 && mid.EstimatedCurrent[x.Key] + x.Value <= G.MaxCount(x.Key))
                && mid.Cost == 18 * 7_000 + 2 * 12_000 && mid.ReachedResistance == 7_802,
             "현재 7,242(반지 2개로 추정)에서 반지 18개 + 무기 2개만 추가 구매");
 
-        var again = HaeyeonCostPlanner.Plan(7_200, 7_800, s_TestPrices);
+        var again = HaeyeonCostPlanner.Plan(G, 7_200, 7_800, s_TestPrices);
         Assert(again.Cost == plan.Cost && again.ReachedResistance == plan.ReachedResistance && again.Purchases.OrderBy(x => x.Key).SequenceEqual(plan.Purchases.OrderBy(x => x.Key))
-               && HaeyeonCostPlanner.Plan(7_214, 7_400, s_TestPrices).EstimatedCurrent.SequenceEqual(HaeyeonCostPlanner.Plan(7_214, 7_400, s_TestPrices).EstimatedCurrent),
+               && HaeyeonCostPlanner.Plan(G, 7_214, 7_400, s_TestPrices).EstimatedCurrent.SequenceEqual(HaeyeonCostPlanner.Plan(G, 7_214, 7_400, s_TestPrices).EstimatedCurrent),
             "같은 입력·시세면 같은 결과");
 
-        var between = HaeyeonCostPlanner.Plan(7_200, 7_801, s_TestPrices);
-        var tiny = HaeyeonCostPlanner.Plan(7_200, 7_210, s_TestPrices);
+        var between = HaeyeonCostPlanner.Plan(G, 7_200, 7_801, s_TestPrices);
+        var tiny = HaeyeonCostPlanner.Plan(G, 7_200, 7_210, s_TestPrices);
         Assert(between.ReachedResistance == 7_802 && between.Cost == 164_000 && tiny.ReachedResistance == 7_214 && tiny.Cost == 7_000,
             "목표가 14 간격 사이여도 목표 이상(7,801 → 7,802, 7,210 → 7,214)에 도달");
 
-        Assert(HaeyeonCostPlanner.Validate(7_199, 7_800) == HaeyeonCostInputError.OutOfRange && HaeyeonCostPlanner.Validate(7_200, 10_001) == HaeyeonCostInputError.OutOfRange
-               && HaeyeonCostPlanner.Validate(10_014, 10_000) == HaeyeonCostInputError.OutOfRange && HaeyeonCostPlanner.Validate(7_201, 7_800) == HaeyeonCostInputError.OffGrid
-               && HaeyeonCostPlanner.Validate(7_214, 7_801) == HaeyeonCostInputError.None && HaeyeonCostPlanner.Validate(10_000, 10_000) == HaeyeonCostInputError.None,
+        Assert(HaeyeonCostPlanner.Validate(G, 7_199, 7_800) == HaeyeonCostInputError.OutOfRange && HaeyeonCostPlanner.Validate(G, 7_200, 10_001) == HaeyeonCostInputError.OutOfRange
+               && HaeyeonCostPlanner.Validate(G, 10_014, 10_000) == HaeyeonCostInputError.OutOfRange && HaeyeonCostPlanner.Validate(G, 7_201, 7_800) == HaeyeonCostInputError.OffGrid
+               && HaeyeonCostPlanner.Validate(G, 7_214, 7_801) == HaeyeonCostInputError.None && HaeyeonCostPlanner.Validate(G, 10_000, 10_000) == HaeyeonCostInputError.None,
             "지원 범위(7,200~10,000) 밖과 14 간격이 아닌 현재 입력 판정(목표는 간격 무관)");
 
         var fractional = new HaeyeonCostPlan(7_200, 7_228, 7_228, s_TestPrices.ToDictionary(x => x.Key, _ => 0), new Dictionary<HaeyeonSlot, int>(), 10_000.0001m);
-        var thirds = HaeyeonCostPlanner.Plan(7_200, 7_256, With(HaeyeonSlot.Weapon, 30_001m / 3));
+        var thirds = HaeyeonCostPlanner.Plan(G, 7_200, 7_256, With(HaeyeonSlot.Weapon, 30_001m / 3));
         Assert(fractional.Cost == 10_001 && thirds.ExactCost == 2 * (30_001m / 3) && thirds.Cost == 20_001,
             "평균 단가는 반올림하지 않고 합산한 뒤 최종 비용만 올림(10,000.33… × 2 = 20,000.67 → 20,001)");
     }
@@ -144,7 +147,7 @@ internal static class HaeyeonCostTests
 
     private static void ResponseTests()
     {
-        var response = HaeyeonCostCommand.Build(7_200, 7_800, Crafting(), TestLatest(), "모비라이프 제공", s_Now);
+        var response = HaeyeonCostCommand.Build(7_200, 7_800, G, Crafting(), TestLatest(), "모비라이프 제공", s_Now);
         var embed = response.Embed!;
         var text = embed.Description + string.Join("\n", embed.Fields.Select(f => f.Name + "\n" + f.Value)) + embed.Footer!.Value.Text;
         Assert(embed.Title == "해연 비용 계산" && embed.Description.Contains("현재 7,200 → 목표 7,800") && embed.Description.Contains("예상 도달 저항: 7,802")
@@ -154,21 +157,21 @@ internal static class HaeyeonCostTests
         Assert(text.Contains(HaeyeonCostCommand.OrderNotice) && text.Contains(HaeyeonCostCommand.EstimateNotice) && text.Contains(HaeyeonCostCommand.PremiseNotice)
                && text.Contains("시세 수집: 2026-10-19 22:00 KST") && embed.Footer.Value.Text.Contains("모비라이프 제공") && !text.Contains("⚠️"),
             "응답에 맞추는 순서 기준·추정 전제·시세 수집 시각(KST)·모비라이프 출처 포함");
-        var stale = HaeyeonCostCommand.Build(7_200, 7_800, Crafting(), TestLatest(), "모비라이프 제공", s_Now.AddHours(2)).Embed!;
+        var stale = HaeyeonCostCommand.Build(7_200, 7_800, G, Crafting(), TestLatest(), "모비라이프 제공", s_Now.AddHours(2)).Embed!;
         Assert(stale.Fields.Any(f => f.Value.Contains("시세 수집: 2026-10-19 22:00 KST · ⚠️ 최근 수집에 실패해 이전 시세를 사용했어요")),
             "최근 정각 수집을 놓친 이전 시세면 수집 시각과 오래된 시세임을 표시");
 
-        var done = HaeyeonCostCommand.Build(7_802, 7_500, Crafting(), null, "모비라이프 제공", s_Now).Embed!;
+        var done = HaeyeonCostCommand.Build(7_802, 7_500, G, Crafting(), null, "모비라이프 제공", s_Now).Embed!;
         Assert(done.Description.Contains("추가 비용은 0데카") && done.Description.Contains(HaeyeonCostCommand.OrderNotice), "목표가 현재 이하면 시세 없이도 0데카");
-        Assert(HaeyeonCostCommand.Build(7_100, 7_800, Crafting(), TestLatest(), "모비라이프 제공", s_Now).Message is { } range
+        Assert(HaeyeonCostCommand.Build(7_100, 7_800, G, Crafting(), TestLatest(), "모비라이프 제공", s_Now).Message is { } range
                && range.Contains("7,200~10,000") && range.Contains("10성 룬"), "범위 밖이면 지원 범위와 계산 전제를 안내");
-        Assert(HaeyeonCostCommand.Build(7_210, 7_800, Crafting(), TestLatest(), "모비라이프 제공", s_Now).Message is { } grid
+        Assert(HaeyeonCostCommand.Build(7_210, 7_800, G, Crafting(), TestLatest(), "모비라이프 제공", s_Now).Message is { } grid
                && grid.Contains("계산 전제와 맞지 않아요") && grid.Contains("14 단위"), "현재 입력이 14 간격이 아니면 반올림하지 않고 전제 불일치를 안내");
-        Assert(HaeyeonCostCommand.Build(7_200, 7_800, Crafting(), null, "모비라이프 제공", s_Now).Message == "아직 해연 시세를 준비하지 못했어요. 정각 시세 수집 이후에 다시 시도해 주세요.",
+        Assert(HaeyeonCostCommand.Build(7_200, 7_800, G, Crafting(), null, "모비라이프 제공", s_Now).Message == "아직 해연 시세를 준비하지 못했어요. 정각 시세 수집 이후에 다시 시도해 주세요.",
             "시세 캐시가 없으면 준비 전 안내");
         var noRing = TestLatest();
         noRing = noRing with { Prices = noRing.Prices.Where(x => x.Key != "해연의 페리도트 링ZZ").ToDictionary(x => x.Key, x => x.Value) };
-        Assert(HaeyeonCostCommand.Build(7_200, 7_800, Crafting(), noRing, "모비라이프 제공", s_Now).Message is { } missing
+        Assert(HaeyeonCostCommand.Build(7_200, 7_800, G, Crafting(), noRing, "모비라이프 제공", s_Now).Message is { } missing
                && missing.Contains("반지의 유효한 해연 시세가 없어") && missing.Contains("모비라이프 제공"), "필요 그룹 시세가 없으면 0데카로 대체하지 않고 추정 불가 안내");
     }
 
@@ -183,7 +186,7 @@ internal static class HaeyeonCostTests
                 new Dictionary<ulong, IReadOnlyDictionary<string, ItemPriceState>>(), [], []);
             // 명령은 시세 공급자(IMarketPriceSource)를 받지 않고 저장소의 마지막 정각 시세만 읽습니다.
             var latest = await store.LoadLatestPricesAsync();
-            var embed = HaeyeonCostCommand.Build(7_200, 7_800, Crafting(), latest, "모비라이프 제공", s_Now).Embed!;
+            var embed = HaeyeonCostCommand.Build(7_200, 7_800, G, Crafting(), latest, "모비라이프 제공", s_Now).Embed!;
             Assert(embed.Description.Contains("약 164,000데카") && embed.Timestamp == s_Collected,
                 "저장소 캐시(정각 수집 결과)만으로 응답하고 API를 추가로 호출하지 않음");
         }

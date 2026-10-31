@@ -4,6 +4,8 @@ using Discord.WebSocket;
 using Microsoft.Extensions.Configuration;
 using System.IO;
 using Molly.Runes;
+using Molly.Classes;
+using Molly.MagicResistance;
 using Molly.Quiz;
 using Molly.Nunchi;
 using Molly.Messages;
@@ -28,6 +30,8 @@ class Program
     public DiscordSocketClient client => m_Client;
     // 룬은 게임 데이터 저장소에서 만듭니다. 캐시도 없고 저장소에도 접근하지 못하면 Data가 null이고 룬 명령은 데이터 없음으로 응답합니다.
     public UnpackDataCatalog<RuneTable> Runes { get; private set; } = null!;
+    public UnpackDataCatalog<ClassTable> Classes { get; private set; } = null!;
+    public UnpackDataCatalog<MagicResistanceData> MagicResistance { get; private set; } = null!;
     public ConsonantCatalog Consonants { get; private set; } = null!;
     public MessageBottleCatalog MessageBottles { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
@@ -245,9 +249,15 @@ class Program
         using var sheetHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;
         Runes = new UnpackDataCatalog<RuneTable>(Unpack, new UnpackRuneDataset(), dataDirectory);
+        Classes = new UnpackDataCatalog<ClassTable>(Unpack, new UnpackClassDataset(), dataDirectory);
+        MagicResistance = new UnpackDataCatalog<MagicResistanceData>(Unpack, new UnpackMagicResistanceDataset(), dataDirectory);
+        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance];
         await Runes.InitializeAsync(appCts.Token);
-        // 시트 폴더의 마지막 커밋을 시작 직후와 이후 1시간마다 확인하고, 바뀌었을 때만 다시 받습니다. 실패해도 다른 기능은 그대로 시작합니다.
-        _ = Runes.RunAsync(appCts.Token);
+        await Classes.InitializeAsync(appCts.Token);
+        await MagicResistance.InitializeAsync(appCts.Token);
+        // 시트 폴더의 마지막 커밋을 시작 직후와 이후 1시간마다 한 번 확인하고(데이터 수와 무관), 바뀐 데이터만 다시 받습니다.
+        // 실패해도 다른 기능은 그대로 시작합니다.
+        _ = UnpackDataCatalogs.RunAsync(Unpack, unpackCatalogs, appCts.Token);
         Consonants = new ConsonantCatalog(new GoogleSheetsConsonantSource(sheetHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId),
             dataDirectory);

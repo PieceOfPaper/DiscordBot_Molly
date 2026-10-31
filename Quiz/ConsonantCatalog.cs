@@ -5,7 +5,8 @@ using Microsoft.VisualBasic.FileIO;
 
 namespace Molly.Quiz;
 
-public sealed record ConsonantCsvData(string Npcs, string Regions, string Classes);
+// 클래스는 게임 데이터 저장소(Classes/UnpackClassDataset)에서 받으므로 시트에서는 NPC·지역만 읽습니다.
+public sealed record ConsonantCsvData(string Npcs, string Regions);
 
 public interface IConsonantSource
 {
@@ -18,8 +19,7 @@ public sealed class GoogleSheetsConsonantSource : IConsonantSource
     private readonly HttpClient client;
     private readonly Uri npcUri;
     private readonly Uri regionUri;
-    private readonly Uri classUri;
-    public string CacheKey => $"{npcUri}|{regionUri}|{classUri}";
+    public string CacheKey => $"{npcUri}|{regionUri}";
 
     public GoogleSheetsConsonantSource(HttpClient client, string spreadsheetId)
     {
@@ -28,11 +28,10 @@ public sealed class GoogleSheetsConsonantSource : IConsonantSource
         this.client = client;
         npcUri = CreateUri(spreadsheetId, "NPC");
         regionUri = CreateUri(spreadsheetId, "지역");
-        classUri = CreateUri(spreadsheetId, "클래스");
     }
 
     public async Task<ConsonantCsvData> FetchAsync(CancellationToken ct)
-        => new(await FetchCsvAsync(npcUri, ct), await FetchCsvAsync(regionUri, ct), await FetchCsvAsync(classUri, ct));
+        => new(await FetchCsvAsync(npcUri, ct), await FetchCsvAsync(regionUri, ct));
 
     private static Uri CreateUri(string spreadsheetId, string sheetName)
         => new($"https://docs.google.com/spreadsheets/d/{spreadsheetId}/gviz/tq?tqx=out:csv&sheet={Uri.EscapeDataString(sheetName)}");
@@ -51,24 +50,21 @@ public sealed class GoogleSheetsConsonantSource : IConsonantSource
 
 public sealed record NpcData(string Name, string Region);
 public sealed record RegionData(string Name, string Category);
-public sealed record ClassData(string Name);
 
 public sealed class ConsonantTable
 {
     public IReadOnlyList<NpcData> Npcs { get; }
     public IReadOnlyList<RegionData> Regions { get; }
-    public IReadOnlyList<ClassData> Classes { get; }
     public DateTimeOffset LoadedAt { get; }
 
-    internal ConsonantTable(IEnumerable<NpcData> npcs, IEnumerable<RegionData> regions, IEnumerable<ClassData> classes, DateTimeOffset loadedAt)
+    internal ConsonantTable(IEnumerable<NpcData> npcs, IEnumerable<RegionData> regions, DateTimeOffset loadedAt)
     {
         Npcs = Array.AsReadOnly(npcs.ToArray());
         Regions = Array.AsReadOnly(regions.ToArray());
-        Classes = Array.AsReadOnly(classes.ToArray());
         LoadedAt = loadedAt;
     }
 
-    public static ConsonantTable Empty { get; } = new([], [], [], DateTimeOffset.MinValue);
+    public static ConsonantTable Empty { get; } = new([], [], DateTimeOffset.MinValue);
 }
 
 public static class ConsonantCsvReader
@@ -77,10 +73,9 @@ public static class ConsonantCsvReader
     {
         var npcs = Read(csv.Npcs, ["이름", "지역"], "NPC", row => new NpcData(row["이름"], row["지역"]));
         var regions = Read(csv.Regions, ["이름", "분류", "대륙"], "지역", row => new RegionData(row["이름"], row["분류"]));
-        var classes = Read(csv.Classes, ["이름", "계열"], "클래스", row => new ClassData(row["이름"]));
-        if (npcs.Count == 0 || regions.Count == 0 || classes.Count == 0)
-            throw new InvalidDataException("NPC·지역·클래스 시트에는 각각 한 개 이상의 출제 가능한 행이 필요합니다.");
-        return new(npcs, regions, classes, loadedAt);
+        if (npcs.Count == 0 || regions.Count == 0)
+            throw new InvalidDataException("NPC·지역 시트에는 각각 한 개 이상의 출제 가능한 행이 필요합니다.");
+        return new(npcs, regions, loadedAt);
     }
 
     private static List<T> Read<T>(string csv, string[] required, string tableName, Func<Dictionary<string, string>, T> create)
@@ -187,7 +182,7 @@ public sealed class ConsonantCatalog
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
             Volatile.Write(ref current, snapshot);
-            log($"[자음퀴즈] 시트 갱신 완료: NPC {snapshot.Npcs.Count}개, 지역 {snapshot.Regions.Count}개, 클래스 {snapshot.Classes.Count}개");
+            log($"[자음퀴즈] 시트 갱신 완료: NPC {snapshot.Npcs.Count}개, 지역 {snapshot.Regions.Count}개");
             return true;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

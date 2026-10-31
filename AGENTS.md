@@ -6,7 +6,7 @@
 - 콘텐츠의 제품 방향과 채택 기준은 `docs/content-planning-guidelines.md`를 따른다.
 - 콘텐츠는 게임에 접속하지 않은 동안 대신 관찰·기록·알림을 제공하는 편의 기능과, Discord에서 부담 없이 짧게 즐기는 놀이 기능을 중심으로 한다.
 - Google Sheets의 룬·클래스·스킬·생활스킬·제작·가공 등 원본 데이터를 읽고 검증한다. 요청된 범위만 작업한다.
-- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬은 교체를 마쳤다(`Runes/`).
+- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬(`Runes/`), 자음퀴즈 클래스(`Classes/`), 마도저항 기준값(`MagicResistance/`)은 교체를 마쳤다. 배틀 관련 시트(`클래스`·`스킬`·`패시브스킬`·`생활스킬`·`배틀*`)는 배틀용 데이터를 재가공하는 원본이므로 Google Sheets에 그대로 두고 교체하지 않는다.
 - 모비라이프 OpenAPI(https://open.mabimobi.life/docs)를 쓰는 작업은 `docs/mobilife-openapi.md`의 이용약관·출처 표기·요청 한도·중단 대비 규칙을 따른다. 기능은 `MobiLife/`의 공용 클라이언트를 도메인 인터페이스 뒤에서만 사용한다.
 - 배틀(자동전투) 기능의 설계는 `docs/battle/README.md`를 따른다. 클래스·스킬 시트에 새 클래스 원본 데이터가 추가되어 배틀 관련 시트에 반영할 때는 `docs/battle/new-class-workflow.md`의 절차를 따른다.
 
@@ -40,15 +40,16 @@
 - MobiShop.cs, Commons/CsvTable.cs: 상점 테이블과 CSV 매핑.
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
-- Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`). clone하지 않고 시트 폴더 커밋 SHA·`version.json`·필요한 파일만 REST API로 받는다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
+- Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`), 여러 보관소가 커밋 확인 1회를 함께 쓰는 주기 확인(`UnpackDataCatalogs`). 새 데이터는 Program.cs의 보관소 목록에 추가한다. clone하지 않고 시트 폴더 커밋 SHA·`version.json`·필요한 파일만 REST API로 받는다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
 - Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석(RuneEffectText), 검색(RuneSearch).
+- Classes/: 게임 데이터 저장소의 CombatJob으로 공개된 전직 클래스 목록을 만드는 데이터셋(UnpackClassDataset). `/자음퀴즈` 클래스 종목이 쓴다(배틀은 쓰지 않음).
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
 - Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.
-- HaeyeonCost/: /해연비용계산의 장비 성장 수치·부위 매핑(HaeyeonCostRules), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
+- HaeyeonCost/: /해연비용계산의 계산 가정·부위 매핑(HaeyeonCostRules)과 게임 데이터 장비 범위로 만든 성장 규칙(HaeyeonGrowth), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). 모비라이프 API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
 - KeywordMarket/: 검색어로 찾은 거래소 아이템 전체를 추적하는 /상자시세알림·/패키지시세알림(시세 변동·신규·사라짐) 판정·저장·정각 수집. 정각 일정은 Market/MarketSchedule 공용.
 - Currency/: 서버별 놀이 재화 `마물 퇴치 증표`의 잔액·원장 저장소(MollyTokenStore), `증표규칙` 시트(TokenRuleCatalog), 표기·이모지(MollyToken). 증표를 주고받는 기능은 이 저장소만 쓴다.
 - Attendance/: 서버별 출석부(/출석부등록·/출석부해제) 저장·출석일 계산(오전 6시 KST 고정)·메시지 갱신·매일 초기화. 출석 기록과 증표 지급은 한 트랜잭션.
-- MagicResistance/: `/마도저항확인`의 룬다 어비스 난이도별 필요 마도저항·마도 압력 기준값(MagicResistanceCatalog)과 피해 증감 추정식(MagicResistanceCalculator). 기준값·출처는 `docs/magic-resistance.md`.
+- MagicResistance/: 게임 데이터 저장소의 AbyssDungeon·Equipment·EquipmentArcaneResistance 등으로 최근 어비스 지옥 난이도별 필요 마도저항·마도 압력과 해연 장비 부위별 마도저항 범위를 만드는 데이터셋(UnpackMagicResistanceDataset, `/마도저항확인`·`/해연비용계산` 공유), 피해 증감 추정식(MagicResistanceCalculator). 기준·출처는 `docs/magic-resistance.md`.
 - Prediction/: `/배틀` 승부 예측(BattlePredictionStore) 베팅·마감·정산·재시작 무효 처리와 공동 배당 계산. 증표는 정산할 때만 차감·배당한다.
 - Status/: `/몰리상태`의 수집 작업별 상태·서버별 전송 상태 저장(MollyStatusStore), 실행 시작 시각·진행 중 작업과 기록 창구(MollyStatusTracker), 수집 상태 판정(CollectionStatusJudge)·응답 문구(MollyStatusReport)·상태 수집(MollyStatusService). 각 작업은 성공·실패 지점에서 트래커에 기록하고, 조회는 외부 API를 호출하지 않는다. 기획은 `docs/molly-status.md`.
 - OfficialNews/: 공식 소식(공지·업데이트·이벤트·에린 노트) 목록 파싱(OfficialNewsParser)·10분 주기 HTTP 수집과 새 글 판정(OfficialNewsCollector)·구독/글/발송 작업/수집 상태/공지 글 비교 기준 저장(OfficialNewsStore)·단일 발송 worker(OfficialNewsDeliveryWorker). `/점검알림`은 게시판이 아닌 공지 안의 알림 종류(`NewsBoards.Maintenance`, 수집 대상 아님)로, 같은 공지 목록에서 점검 글 분류·제목/말머리 변화 판정(MaintenanceRules)과 Embed(MaintenanceMessages)를 쓴다. 목록은 이벤트 수집과 같은 HTTP 경로로 읽고 브라우저를 쓰지 않는다(브라우저가 필요한 것은 Cloudflare 검사가 있는 랭킹뿐). 기획은 `docs/official-news.md`.

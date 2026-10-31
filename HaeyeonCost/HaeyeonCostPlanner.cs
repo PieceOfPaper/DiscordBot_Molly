@@ -3,9 +3,9 @@ namespace Molly.HaeyeonCost;
 public enum HaeyeonCostInputError
 {
     None,
-    // 현재 또는 목표가 지원 범위(7,200~10,000) 밖
+    // 현재 또는 목표가 지원 범위(초기~최대 총 저항, 현재 게임 데이터 기준 7,200~10,000) 밖
     OutOfRange,
-    // 현재 저항이 초기 7,200에서 14 단위로 오를 수 있는 값이 아님(다른 룬·장비 구성이 섞였을 수 있음)
+    // 현재 저항이 초기 총 저항에서 14 단위로 오를 수 있는 값이 아님(다른 룬·장비 구성이 섞였을 수 있음)
     OffGrid,
 }
 
@@ -26,31 +26,29 @@ public sealed record HaeyeonCostPlan(
 }
 
 /// <summary>
-/// 해연 장비 추가 구매 비용을 슬롯별 그룹 배낭 DP로 계산합니다. 저항은 14 단위(최대 200단위)라 상태 수가 작습니다.
+/// 해연 장비 추가 구매 비용을 슬롯별 그룹 배낭 DP로 계산합니다. 저항은 14 단위(현재 게임 데이터 기준 최대 200단위)라 상태 수가 작습니다.
 /// 1) 초기 상태에서 현재 저항과 정확히 같은 최소 비용 상태를 대표 현재 상태로 추정합니다.
 /// 2) 그 상태의 진행도를 유지한 채(되돌리기·재배치·판매 없음) 목표 이상에 도달하는 최소 추가 비용 조합을 찾습니다.
 /// 동률은 슬롯 순서(HaeyeonSlot)와 적은 수량을 먼저 고르고, 최종 비용이 같으면 도달 저항이 높은 조합을 고릅니다.
 /// </summary>
 public static class HaeyeonCostPlanner
 {
-    public const int MaxUnits = (HaeyeonCostRules.MaxResistance - HaeyeonCostRules.InitialResistance) / HaeyeonCostRules.Step;
-
-    public static HaeyeonCostInputError Validate(int current, int target)
+    public static HaeyeonCostInputError Validate(HaeyeonGrowth growth, int current, int target)
     {
-        if (current is < HaeyeonCostRules.MinInput or > HaeyeonCostRules.MaxInput || target is < HaeyeonCostRules.MinInput or > HaeyeonCostRules.MaxInput)
+        if (current < growth.MinInput || current > growth.MaxInput || target < growth.MinInput || target > growth.MaxInput)
             return HaeyeonCostInputError.OutOfRange;
-        return (current - HaeyeonCostRules.InitialResistance) % HaeyeonCostRules.Step == 0 ? HaeyeonCostInputError.None : HaeyeonCostInputError.OffGrid;
+        return (current - growth.InitialResistance) % HaeyeonCostRules.Step == 0 ? HaeyeonCostInputError.None : HaeyeonCostInputError.OffGrid;
     }
 
-    public static HaeyeonCostPlan Plan(int current, int target, IReadOnlyDictionary<HaeyeonSlot, decimal> prices)
+    public static HaeyeonCostPlan Plan(HaeyeonGrowth growth, int current, int target, IReadOnlyDictionary<HaeyeonSlot, decimal> prices)
     {
-        if (Validate(current, target) != HaeyeonCostInputError.None) throw new ArgumentException("지원하지 않는 입력입니다.");
+        if (Validate(growth, current, target) != HaeyeonCostInputError.None) throw new ArgumentException("지원하지 않는 입력입니다.");
         var initial = Enum.GetValues<HaeyeonSlot>().ToDictionary(x => x, _ => 0);
-        var estimate = Solve(initial, prices)[(current - HaeyeonCostRules.InitialResistance) / HaeyeonCostRules.Step]
+        var estimate = Solve(growth, initial, prices)[(current - growth.InitialResistance) / HaeyeonCostRules.Step]
             ?? throw new InvalidOperationException("현재 저항에 도달하는 상태가 없습니다.");
         var needed = Math.Max(0, (target - current + HaeyeonCostRules.Step - 1) / HaeyeonCostRules.Step);
 
-        var extra = Solve(estimate.Counts, prices);
+        var extra = Solve(growth, estimate.Counts, prices);
         var best = -1;
         for (var units = needed; units < extra.Length; units++)
             if (extra[units] is { } option && (best < 0 || option.Cost <= extra[best]!.Value.Cost))
@@ -63,26 +61,27 @@ public static class HaeyeonCostPlanner
 
     /// <summary>baseCounts에서 출발해 정확히 u단위 더 오르는 최소 비용과 그때의 슬롯별 수량(절대값). 도달할 수 없으면 null.</summary>
     private static (decimal Cost, IReadOnlyDictionary<HaeyeonSlot, int> Counts)?[] Solve(
-        IReadOnlyDictionary<HaeyeonSlot, int> baseCounts, IReadOnlyDictionary<HaeyeonSlot, decimal> prices)
+        HaeyeonGrowth growth, IReadOnlyDictionary<HaeyeonSlot, int> baseCounts, IReadOnlyDictionary<HaeyeonSlot, decimal> prices)
     {
         var slots = Enum.GetValues<HaeyeonSlot>();
-        var cost = new decimal?[MaxUnits + 1];
+        var maxUnits = growth.MaxUnits;
+        var cost = new decimal?[maxUnits + 1];
         cost[0] = 0;
         var choices = new int[slots.Length][];
         for (var g = 0; g < slots.Length; g++)
         {
             var slot = slots[g];
             var start = baseCounts[slot];
-            var startUnits = HaeyeonCostRules.Gain(slot, start) / HaeyeonCostRules.Step;
-            var next = new decimal?[MaxUnits + 1];
-            choices[g] = new int[MaxUnits + 1];
-            for (var before = 0; before <= MaxUnits; before++)
+            var startUnits = growth.Gain(slot, start) / HaeyeonCostRules.Step;
+            var next = new decimal?[maxUnits + 1];
+            choices[g] = new int[maxUnits + 1];
+            for (var before = 0; before <= maxUnits; before++)
             {
                 if (cost[before] is not { } spent) continue;
-                for (var count = start; count <= HaeyeonCostRules.MaxCount(slot); count++)
+                for (var count = start; count <= growth.MaxCount(slot); count++)
                 {
-                    var units = before + HaeyeonCostRules.Gain(slot, count) / HaeyeonCostRules.Step - startUnits;
-                    if (units > MaxUnits) break;
+                    var units = before + growth.Gain(slot, count) / HaeyeonCostRules.Step - startUnits;
+                    if (units > maxUnits) break;
                     var total = spent + (count - start) * prices[slot];
                     if (next[units] is { } existing && existing <= total) continue;
                     next[units] = total;
@@ -92,8 +91,8 @@ public static class HaeyeonCostPlanner
             cost = next;
         }
 
-        var result = new (decimal, IReadOnlyDictionary<HaeyeonSlot, int>)?[MaxUnits + 1];
-        for (var units = 0; units <= MaxUnits; units++)
+        var result = new (decimal, IReadOnlyDictionary<HaeyeonSlot, int>)?[maxUnits + 1];
+        for (var units = 0; units <= maxUnits; units++)
         {
             if (cost[units] is not { } total) continue;
             var counts = new Dictionary<HaeyeonSlot, int>();
@@ -103,7 +102,7 @@ public static class HaeyeonCostPlanner
                 var slot = slots[g];
                 var count = choices[g][remaining];
                 counts[slot] = count;
-                remaining -= (HaeyeonCostRules.Gain(slot, count) - HaeyeonCostRules.Gain(slot, baseCounts[slot])) / HaeyeonCostRules.Step;
+                remaining -= (growth.Gain(slot, count) - growth.Gain(slot, baseCounts[slot])) / HaeyeonCostRules.Step;
             }
             result[units] = (total, counts);
         }

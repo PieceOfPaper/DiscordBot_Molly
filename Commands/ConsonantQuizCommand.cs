@@ -42,18 +42,24 @@ public class ConsonantQuizCommand : InteractionModuleBase<SocketInteractionConte
             await RespondAsync("문제종목을 선택하고 문제수와 제한시간을 1 이상으로 입력해주세요.", ephemeral: true);
             return;
         }
-        // 룬 종목만 게임 데이터 저장소의 룬이 필요합니다. NPC·클래스·지역은 시트 데이터로 그대로 진행합니다.
+        // 룬·클래스 종목은 게임 데이터 저장소의 데이터가 필요합니다. NPC·지역만 쓰는 종목은 시트 데이터로 그대로 진행합니다.
         var runes = Program.instance.Runes.Data;
         if (QuizQuestions.UsesRunes(selected.Value) && runes is null)
         {
             await RespondAsync(UnpackDataMessages.NoData(Program.instance.Runes.Name), ephemeral: true);
             return;
         }
+        var classes = Program.instance.Classes.Data;
+        if (QuizQuestions.UsesClasses(selected.Value) && classes is null)
+        {
+            await RespondAsync(UnpackDataMessages.NoData(Program.instance.Classes.Name), ephemeral: true);
+            return;
+        }
         await RespondAsync("자음퀴즈 스레드를 준비하고 있어요. 잠시만 기다려주세요.", ephemeral: false);
         try
         {
             await Program.instance.Consonants.EnsureFreshAsync(TimeSpan.FromMinutes(10));
-            var questions = QuizQuestions.PickConsonant(selected.Value, runes?.Items ?? [], Program.instance.Consonants.Current, count);
+            var questions = QuizQuestions.PickConsonant(selected.Value, runes?.Items ?? [], Program.instance.Consonants.Current, classes?.Items ?? [], count);
             var result = await Program.instance.Quizzes.StartAsync(Context.Guild.Id, "자음퀴즈",
                 $"{topic}: 자음과 종류·힌트를 보고 정답을 맞혀주세요.", questions, seconds,
                 async ct =>
