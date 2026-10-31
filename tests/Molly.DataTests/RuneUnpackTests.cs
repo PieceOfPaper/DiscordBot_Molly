@@ -70,6 +70,27 @@ internal static class RuneUnpackTests
         Assert(Render("  <color=#0FB376>강화 효과:  축복</color>을\r\n\n  부여한다.  ") == "강화 효과: 축복을\n부여한다.", "색상 태그 제거와 공백·빈 줄 정리");
         Assert(RuneEffectText.References("$#Buff@개발명(A)!지속시간[s]$ $#MagicEffect@개발명(B)!쿨다운[s]$").SequenceEqual([("Buff", "A"), ("MagicEffect", "B")]),
             "설명이 참조하는 시트·Id 목록");
+
+        // 초월: 단계별 최종 값으로 바꾼 사본을 만들고 다른 수치만 슬래시로 잇습니다.
+        RuneValueOverride Override(string sheet, string id, string column, string value, int slot = 1) => new(sheet, id, column, slot, value);
+        var level1 = values.With([
+            Override("MagicEffect", "Atk", RuneValueOverride.MagicEffectActionParams, "AttackPowerMultiplier,0.19"),
+            Override("SkillEffect", "Hit", "SkillEffect_Coefficient", "0.15", slot: 2),
+            Override("Buff", "Stack", RuneValueOverride.BuffDuration, "12"),
+            Override("MagicEffect", "없음", RuneValueOverride.MagicEffectActionParams, "X,1"),
+        ]);
+        var level2 = values.With([Override("MagicEffect", "Atk", RuneValueOverride.MagicEffectActionParams, "AttackPowerMultiplier,0.2")]);
+        Assert(level1.MagicEffects["Atk"].Args[1] == "0.19" && level1.SkillEffects["Hit"][1].Coefficient == 0.15 && level1.SkillEffects["Hit"][0].Coefficient == 14.700000000000001 &&
+               level1.Buffs["Stack"].Duration == 12 && !level1.MagicEffects.ContainsKey("없음") && values.MagicEffects["Atk"].Args[1] == "0.175",
+            "초월 값은 액션 인자 전체·EffectN 슬롯·지속시간을 바꾼 사본을 만들고 원본과 없는 행은 그대로");
+        var transcended = RuneEffectText.Render(
+            "공격력이 $#MagicEffect@개발명(Atk)!액션 인자{0}[%]$ 증가하고, 캐스팅 속도가 $#MagicEffect@개발명(Slow)!액션 인자{0}[u%]$ 증가한다.\n$#Buff@개발명(Stack)!지속시간[s]$ 동안 << $#MagicEffect@개발명(Atk)!액션 인자{0}[%]$ * 2 >>",
+            [values, level1, level2], out var transcendMissing);
+        Assert(transcended == "공격력이 17.5%/19%/20% 증가하고, 캐스팅 속도가 15% 증가한다.\n15초/12초/15초 동안 35%/38%/40%" && transcendMissing == 0,
+            "초월로 바뀌는 수치만 기본/1초월/2초월 순서로 슬래시 표기하고 계산식도 단계별로 계산");
+        Assert(RuneEffectText.MergeLevels(["피해 3m", "피해 3m"]) == "피해 3m" && RuneEffectText.MergeLevels(["A 10%", "B 12%"]) == "A 10%",
+            "단계별 문장이 같으면 그대로, 숫자 밖 글자가 다르면 기본 문장");
+        Assert(RuneNames.TranscendLegend(2) == "기본/1초월/2초월", "초월 수치 순서 표기");
     }
 
     private static void MessageTests()
@@ -88,6 +109,9 @@ internal static class RuneUnpackTests
         Assert(accessory.Title == "💍 분노+" && accessory.Color == RuneMessages.Legendary &&
                accessory.Description!.StartsWith("🟧 **전설** · 장신구 룬 · 시즌 2 · <:class:1>대검전사 전용\n\n▸ ") && accessory.Footer!.Value.Text == "몰리 • 게임 데이터 패치 P",
             "전용 클래스는 클래스 이모지 표기로, 출처는 footer로 표시");
+        var transcendRune = runes[0] with { Effect = "공격력이 20%/22%/24% 증가한다.", TranscendLevels = 2 };
+        Assert(RuneMessages.Build(transcendRune, Label).Description!.EndsWith("▸ 공격력이 20%/22%/24% 증가한다.\n-# 수치는 기본/1초월/2초월 순서예요."),
+            "초월 수치가 있는 룬은 효과 아래에 수치 순서 안내");
         Assert(RuneMessages.Header(" 분*노 ", 5) == "🔍 **분\\*노** 룬 검색 결과 **5개**", "검색어의 마크다운 문자는 이스케이프");
 
         var many = TestRunes.Table(string.Join("\n", Enumerable.Range(0, 23).Select(i => $"2,전설,방어구,,룬 {i},{new string('가', 300)}"))).Items;
@@ -150,6 +174,20 @@ internal static class RuneUnpackTests
              {"Id":"A1_Tick","Activation":{"Params1":"-"},"Execution":{"SuccessRate":100,"Cooldown":6.0},"Action":["AttachBuff",["A1_Buff"]]},
              {"Id":"Other","Action":["DoNothing",[]]}]}
             """,
+        ["RuneTranscend"] = """
+            {"sheet":"RuneTranscend","rows":[
+             {"RootRuneOptionSheetId":"W1","TranscendentState":"Level1",
+              "Target1":{"sheet":"SkillEffect","sheetId":"W1","sheetColumn":"SkillEffect_Coefficient","sheetColumnOption":"1","modifiedValue":"15.55"},
+              "Target2":{"sheet":"MagicEffect","sheetId":"W1_Speed","sheetColumn":"MagicEffect_Action_Params","sheetColumnOption":"1","modifiedValue":"DefaultAttackSpeed,0.12"},
+              "Target3":{"sheet":"None","sheetId":"Invalid","sheetColumn":"None","sheetColumnOption":"Invalid","modifiedValue":"Invalid"}},
+             {"RootRuneOptionSheetId":"W1","TranscendentState":"Level2",
+              "Target1":{"sheet":"SkillEffect","sheetId":"W1","sheetColumn":"SkillEffect_Coefficient","sheetColumnOption":"1","modifiedValue":"16.4"},
+              "Target2":{"sheet":"MagicEffect","sheetId":"W1_Speed","sheetColumn":"MagicEffect_Action_Params","sheetColumnOption":"1","modifiedValue":"DefaultAttackSpeed,0.14"}},
+             {"RootRuneOptionSheetId":"C1","TranscendentState":"Level1",
+              "Target1":{"sheet":"MagicEffect","sheetId":"Other","sheetColumn":"MagicEffect_Action_Params","sheetColumnOption":"1","modifiedValue":"X,1"}},
+             {"RootRuneOptionSheetId":"Unused","TranscendentState":"Level1",
+              "Target1":{"sheet":"Buff","sheetId":"A1_Buff","sheetColumn":"Buff_Duration","sheetColumnOption":"Invalid","modifiedValue":"1"}}]}
+            """,
         ["Buff"] = """{"sheet":"Buff","rows":[{"Id":"A1_Buff","Duration":15.0,"MaxStackCount":3,"ShieldValue":0}]}""",
         ["SkillEffect"] = """
             {"sheet":"SkillEffect","rows":[{"Id":"W1","Effect1":{"probability":100,"coefficient":14.700000000000001,"value":0,"reserved1":0,"reserved2":0}}]}
@@ -171,14 +209,16 @@ internal static class RuneUnpackTests
             "전설·신화만 담고 이전 버전(IsOriginal)·이름 없는 룬은 제외, 최신 시즌부터 무기·방어구·앰블럼·장신구 순");
         var weapon = table.ById["W1"];
         Assert(weapon is { Season: 2, Grade: RuneGrade.Legendary, Category: RuneCategory.Weapon, Class: "", Name: "눈부신 잔영" } &&
-               weapon.Effect == "스킬 사용 시 (공격력x147%)의 피해를 주고,\n공격 속도가 10% 증가한다.",
-            "Socketable 이름의 '무기 룬: ' 접두어를 떼고 옵션 설명 수치를 채움");
+               weapon.Effect == "스킬 사용 시 (공격력x147%/155.5%/164%)의 피해를 주고,\n공격 속도가 10%/12%/14% 증가한다." && weapon.TranscendLevels == 2,
+            "Socketable 이름의 '무기 룬: ' 접두어를 떼고 옵션 설명 수치를 기본/1초월/2초월로 채움");
+        Assert(table.ById["A1"].TranscendLevels == 0 && table.ById["C1"].TranscendLevels == 0,
+            "초월 행이 없거나 설명 수치가 바뀌지 않는 룬은 초월 표기 없음(다른 옵션의 초월 행은 무시)");
         Assert(table.ById["A1"] is { Grade: RuneGrade.Mythic, Effect: "6초마다 15초 동안 최대 3회" } &&
                table.ById["E1"] is { Season: 1, Category: RuneCategory.Emblem, Name: "백금 천칭", Effect: "공격력이 20% 증가한다." } &&
                table.ById["C1"] is { Class: "화염술사", Name: "폭염+", Category: RuneCategory.Accessory },
             "신화 등급·시즌 번호·엠블럼 분류·전용 클래스(CombatJob) 변환");
         Assert(table.Warnings.Any(x => x.Contains("N1") && x.Contains("이름")), "이름이 없는 룬은 경고로 남김");
-        Assert(requested.SequenceEqual(["Rune", "Socketable", "CombatJob", "RuneOption", "MagicEffect", "Buff", "SkillEffect"]), "필요한 시트만 차례로 받음");
+        Assert(requested.SequenceEqual(["Rune", "Socketable", "CombatJob", "RuneOption", "RuneTranscend", "MagicEffect", "Buff", "SkillEffect"]), "필요한 시트만 차례로 받음");
 
         var noEmblem = new Dictionary<string, string>(s_Sheets) { ["Rune"] = s_Sheets["Rune"].Replace("\"Emblem\"", "\"Weapon\"") };
         await AssertThrowsAsync<InvalidDataException>(() => dataset.BuildAsync(Fetcher(noEmblem), default), "분류 하나가 통째로 비면 검증 실패");
@@ -194,7 +234,7 @@ internal static class RuneUnpackTests
         Assert(restored.Items.SequenceEqual(table.Items), "캐시 저장·복원 시 룬 정보 보존");
 
         var search = RuneSearch.Format(RuneSearch.Find(table, "눈부신"));
-        Assert(search.Contains("눈부신 잔영 · 시즌 2 · 전설 · 무기") && search.Contains("\n스킬 사용 시"), "검색 결과에 시즌·등급·분류와 여러 줄 효과 표시");
+        Assert(search.Contains("눈부신 잔영 · 시즌 2 · 전설 · 무기 · 수치 기본/1초월/2초월") && search.Contains("\n스킬 사용 시"), "검색 결과에 시즌·등급·분류와 여러 줄 효과 표시");
     }
 
     private static async Task CatalogTests()

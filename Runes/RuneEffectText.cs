@@ -13,6 +13,63 @@ public sealed class RuneTooltipValues
     public Dictionary<string, RuneMagicEffectValues> MagicEffects { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, RuneBuffValues> Buffs { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, IReadOnlyList<RuneSkillEffectSlot>> SkillEffects { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>초월 단계의 값으로 바꾼 사본. 담겨 있지 않은 행(설명이 참조하지 않는 행)은 건너뜁니다.</summary>
+    public RuneTooltipValues With(IEnumerable<RuneValueOverride> overrides)
+    {
+        var copy = new RuneTooltipValues();
+        foreach (var (id, effect) in MagicEffects) copy.MagicEffects[id] = effect;
+        foreach (var (id, buff) in Buffs) copy.Buffs[id] = buff;
+        foreach (var (id, slots) in SkillEffects) copy.SkillEffects[id] = slots;
+        foreach (var o in overrides)
+        {
+            switch (o.Column)
+            {
+                case RuneValueOverride.MagicEffectActionParams when copy.MagicEffects.TryGetValue(o.Id, out var effect):
+                    copy.MagicEffects[o.Id] = effect with { Args = o.Value.Split(',') };
+                    break;
+                case RuneValueOverride.BuffDuration when copy.Buffs.TryGetValue(o.Id, out var buff) && ParseNumber(o.Value) is { } duration:
+                    copy.Buffs[o.Id] = buff with { Duration = duration };
+                    break;
+                case var column when column.StartsWith("SkillEffect_", StringComparison.Ordinal) &&
+                                     copy.SkillEffects.TryGetValue(o.Id, out var slots) && o.Slot >= 1 && o.Slot <= slots.Count &&
+                                     ParseNumber(o.Value) is { } value:
+                    var list = slots.ToArray();
+                    var slot = list[o.Slot - 1];
+                    list[o.Slot - 1] = column switch
+                    {
+                        "SkillEffect_Probability" => slot with { Probability = value },
+                        "SkillEffect_Coefficient" => slot with { Coefficient = value },
+                        "SkillEffect_Value" => slot with { Value = value },
+                        "SkillEffect_Reserved1" => slot with { Reserved1 = value },
+                        "SkillEffect_Reserved2" => slot with { Reserved2 = value },
+                        _ => slot,
+                    };
+                    copy.SkillEffects[o.Id] = list;
+                    break;
+            }
+        }
+        return copy;
+    }
+
+    private static double? ParseNumber(string text) =>
+        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ? value : null;
+}
+
+/// <summary>
+/// RuneTranscend의 TargetN 하나. 초월 단계에서 바뀌는 시트 값이며 Value는 그 단계의 최종 값입니다(기본값에 더하지 않음).
+/// MagicEffect_Action_Params는 인자 전체('AttackPowerMultiplier,0.22'), SkillEffect_*의 Slot은 EffectN 번호(sheetColumnOption)입니다.
+/// </summary>
+public sealed record RuneValueOverride(string Sheet, string Id, string Column, int Slot, string Value)
+{
+    public const string MagicEffectActionParams = "MagicEffect_Action_Params";
+    public const string BuffDuration = "Buff_Duration";
+
+    public static readonly IReadOnlySet<string> SupportedColumns = new HashSet<string>(StringComparer.Ordinal)
+    {
+        MagicEffectActionParams, BuffDuration,
+        "SkillEffect_Probability", "SkillEffect_Coefficient", "SkillEffect_Value", "SkillEffect_Reserved1", "SkillEffect_Reserved2",
+    };
 }
 
 /// <summary>
@@ -59,6 +116,40 @@ public static class RuneEffectText
         text = s_RichTag.Replace(text, "");
         unresolved = missing;
         return Normalize(text);
+    }
+
+    /// <summary>
+    /// 기본 값과 초월 단계별 값으로 각각 만든 문장을 하나로 합칩니다. 단계마다 다른 수치만 '24%/26%/28%'처럼 슬래시로 잇습니다.
+    /// </summary>
+    /// <param name="levels">[0]은 기본 값, 이후는 1초월부터 차례로. 찾지 못한 수치 개수는 기본 값 기준입니다.</param>
+    public static string Render(string description, IReadOnlyList<RuneTooltipValues> levels, out int unresolved, string? fallbackMagicEffect = null)
+    {
+        var texts = new string[levels.Count];
+        unresolved = 0;
+        for (var i = 0; i < levels.Count; i++)
+        {
+            texts[i] = Render(description, levels[i], out var missing, fallbackMagicEffect);
+            if (i == 0) unresolved = missing;
+        }
+        return MergeLevels(texts);
+    }
+
+    // 숫자와 바로 뒤 단위(%·초·m)를 한 덩어리로 봅니다.
+    private static readonly Regex s_Number = new(@"(-?\d+(?:\.\d+)?(?:%|초|m)?)", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// 같은 설명을 단계별 값으로 만든 문장들을 합칩니다. 숫자 밖의 글자가 단계마다 다르면 합칠 수 없어 기본 문장([0])을 그대로 씁니다.
+    /// </summary>
+    public static string MergeLevels(IReadOnlyList<string> texts)
+    {
+        if (texts.Count == 1 || texts.All(t => t == texts[0])) return texts[0];
+        var parts = texts.Select(t => s_Number.Split(t)).ToArray();
+        // Split은 캡처한 숫자를 홀수 번째에 둡니다.
+        if (parts.Any(p => p.Length != parts[0].Length) ||
+            Enumerable.Range(0, parts[0].Length).Where(i => i % 2 == 0).Any(i => parts.Any(p => p[i] != parts[0][i])))
+            return texts[0];
+        return string.Concat(Enumerable.Range(0, parts[0].Length).Select(i =>
+            i % 2 == 0 || parts.All(p => p[i] == parts[0][i]) ? parts[0][i] : string.Join("/", parts.Select(p => p[i]))));
     }
 
     private static double? Lookup(RuneTooltipValues values, string sheet, string id, string field, string? fallbackMagicEffect)

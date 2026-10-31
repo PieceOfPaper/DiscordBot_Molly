@@ -39,6 +39,7 @@ public static class RuneMessages
         if (rune.Class.Length > 0) meta += $" · {classLabel(rune.Class)} 전용";
         var effect = string.Join("\n", rune.Effect.Split('\n').Select(line => "▸ " + line));
         var description = meta + "\n\n" + effect;
+        if (rune.TranscendLevels > 0) description += $"\n-# 수치는 {RuneNames.TranscendLegend(rune.TranscendLevels)} 순서예요.";
         if (description.Length > MaxDescriptionLength) description = description[..(MaxDescriptionLength - 1)] + "…";
         var embed = new EmbedBuilder()
             .WithTitle($"{CategoryEmoji(rune.Category)} {rune.Name}")

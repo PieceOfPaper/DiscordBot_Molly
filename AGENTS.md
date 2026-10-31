@@ -41,7 +41,7 @@
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
 - Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`), 여러 보관소가 커밋 확인 1회를 함께 쓰는 주기 확인(`UnpackDataCatalogs`). 새 데이터는 Program.cs의 보관소 목록에 추가한다. clone하지 않고 시트 폴더 커밋 SHA·`version.json`·필요한 파일만 REST API로 받는다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
-- Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석(RuneEffectText), 검색(RuneSearch).
+- Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption·RuneTranscend 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석과 초월 단계 수치의 `기본/1초월/2초월` 슬래시 표기(RuneEffectText), 검색(RuneSearch).
 - Classes/: 게임 데이터 저장소의 CombatJob으로 공개된 전직 클래스 목록을 만드는 데이터셋(UnpackClassDataset). `/자음퀴즈` 클래스 종목이 쓴다(배틀은 쓰지 않음).
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
 - Crafting/: 게임 데이터 저장소의 CraftingRecipe 등으로 만드는 공용 제작 레시피 데이터셋(UnpackCraftingDataset, 여러 기능에서 재사용). 분류·장비 부위·방어구 재질(중갑·경갑·천옷)을 담는다. HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.

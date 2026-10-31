@@ -26,14 +26,19 @@ public static class RuneNames
         RuneCategory.Accessory => "장신구",
         _ => throw new ArgumentOutOfRangeException(nameof(category)),
     };
+
+    // 초월 수치 표기 순서. 2 → '기본/1초월/2초월'
+    public static string TranscendLegend(int levels) =>
+        string.Join("/", Enumerable.Range(0, levels + 1).Select(level => level == 0 ? "기본" : $"{level}초월"));
 }
 
 /// <param name="Id">게임 데이터의 Rune.Id(예: Rune_Weapon_v30_Tier10_A01).</param>
 /// <param name="Season">RuneSeasonType의 숫자(Season02 → 2).</param>
 /// <param name="Class">전용 클래스 표시 이름. 공용 룬은 빈 문자열입니다.</param>
 /// <param name="Name">'무기 룬: ' 같은 접두어를 뺀 표시 이름. 같은 이름의 상위 룬은 끝에 '+'가 붙습니다.</param>
-/// <param name="Effect">옵션 설명을 줄바꿈으로 이은 문장. 수치를 찾지 못한 자리는 '?'입니다.</param>
-public sealed record RuneData(string Id, int Season, RuneGrade Grade, RuneCategory Category, string Class, string Name, string Effect);
+/// <param name="Effect">옵션 설명을 줄바꿈으로 이은 문장. 수치를 찾지 못한 자리는 '?'이고, 초월로 바뀌는 수치는 '24%/26%/28%'처럼 단계별로 적습니다.</param>
+/// <param name="TranscendLevels">효과 문장에 함께 적은 초월 단계 수. 초월로 바뀌는 수치가 없으면 0입니다.</param>
+public sealed record RuneData(string Id, int Season, RuneGrade Grade, RuneCategory Category, string Class, string Name, string Effect, int TranscendLevels = 0);
 
 public sealed class RuneTable
 {

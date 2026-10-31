@@ -10,6 +10,8 @@ namespace Molly.Runes;
 /// - Socketable.DisplayName: 이름('무기 룬: 눈부신 잔영') / CombatJob.DisplayName: 클래스 이름
 /// - RuneOption.Description: 효과 문장. 수치는 MagicEffect·Buff·SkillEffect 값으로 채웁니다(RuneEffectText).
 ///   MagicEffect 참조 Id가 없으면 게임 클라이언트처럼 RuneOption.MagicEffectList[0]을 대신 씁니다.
+/// - RuneTranscend: 옵션(RootRuneOptionSheetId)의 초월 단계(Level1·Level2…)별 값. 단계마다 다른 수치는 '기본/1초월/2초월'로 함께 적습니다.
+///   RuneOption.Transcendable은 실제 초월 행과 맞지 않아(시즌 3 룬은 false인데 행이 있음) 쓰지 않고 행이 있는지로 판단합니다.
 /// 전설·신화 등급만 담고, 같은 룬의 이전 버전(IsOriginal)은 제외합니다.
 /// </summary>
 public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
@@ -86,6 +88,37 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
                 }
         }
 
+        var transcends = new Dictionary<string, SortedDictionary<int, List<RuneValueOverride>>>(StringComparer.Ordinal);
+        var unsupported = new SortedSet<string>(StringComparer.Ordinal);
+        using (var runeTranscend = await sheets("RuneTranscend", ct))
+        {
+            foreach (var row in UnpackSheets.Rows(runeTranscend))
+            {
+                if (UnpackSheets.Reference(row, "RootRuneOptionSheetId") is not { } optionId || !optionIds.Contains(optionId)) continue;
+                var state = UnpackSheets.Text(row, "TranscendentState");
+                if (!state.StartsWith("Level", StringComparison.Ordinal) ||
+                    !int.TryParse(state.AsSpan("Level".Length), NumberStyles.None, CultureInfo.InvariantCulture, out var level) || level < 1)
+                    continue;
+                if (!transcends.TryGetValue(optionId, out var levels)) transcends[optionId] = levels = [];
+                if (!levels.TryGetValue(level, out var overrides)) levels[level] = overrides = [];
+                for (var i = 1; i <= 5; i++)
+                {
+                    // 빈 자리는 sheet가 "None", sheetId가 "Invalid"입니다.
+                    if (!row.TryGetProperty($"Target{i}", out var target) || target.ValueKind != JsonValueKind.Object ||
+                        UnpackSheets.Reference(target, "sheet") is not { } targetSheet || UnpackSheets.Reference(target, "sheetId") is not { } targetId)
+                        continue;
+                    var column = UnpackSheets.Text(target, "sheetColumn");
+                    if (!RuneValueOverride.SupportedColumns.Contains(column))
+                    {
+                        unsupported.Add(column);
+                        continue;
+                    }
+                    var slot = int.TryParse(UnpackSheets.Text(target, "sheetColumnOption"), NumberStyles.None, CultureInfo.InvariantCulture, out var option) ? option : 0;
+                    overrides.Add(new RuneValueOverride(targetSheet, targetId, column, slot, UnpackSheets.Text(target, "modifiedValue")));
+                }
+            }
+        }
+
         // 큰 시트(수 MB)는 설명이 참조하는 행만 남깁니다.
         var references = descriptions.Values.SelectMany(RuneEffectText.References)
             .Concat(fallbacks.Values.Select(id => (Sheet: "MagicEffect", Id: id)))
@@ -96,8 +129,14 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
             UnpackSheets.Number(row, "Duration") ?? 0, UnpackSheets.Number(row, "MaxStackCount") ?? 0, UnpackSheets.Number(row, "ShieldValue") ?? 0), ct);
         await ReadReferencedAsync(sheets, "SkillEffect", references, row => values.SkillEffects[UnpackSheets.Reference(row, "Id")!] = ReadSkillEffect(row), ct);
 
+        // 옵션별 [기본, 1초월, 2초월…] 값. 초월 행이 없는 옵션은 기본 값 하나입니다.
+        IReadOnlyList<RuneTooltipValues> LevelValues(string optionId) => transcends.TryGetValue(optionId, out var levels)
+            ? [values, .. levels.Values.Select(values.With)]
+            : [values];
+
         var items = new List<RuneData>();
         var warnings = new List<string>();
+        foreach (var column in unsupported) warnings.Add($"초월 값 {column}은 지원하지 않아 기본 수치로 표시");
         var keys = new HashSet<(int, RuneGrade, RuneCategory, string)>();
         var unresolvedRunes = 0;
         foreach (var candidate in candidates)
@@ -108,13 +147,17 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
                 continue;
             }
             var unresolved = 0;
+            var transcendLevels = 0;
             var effect = string.Join("\n", candidate.Options
-                .Select(id => (Description: descriptions.TryGetValue(id, out var description) ? description : "", Fallback: fallbacks.GetValueOrDefault(id)))
+                .Select(id => (Id: id, Description: descriptions.TryGetValue(id, out var description) ? description : "", Fallback: fallbacks.GetValueOrDefault(id)))
                 .Where(option => option.Description.Length > 0)
                 .Select(option =>
                 {
-                    var text = RuneEffectText.Render(option.Description, values, out var missing, option.Fallback);
+                    var levels = LevelValues(option.Id);
+                    var text = RuneEffectText.Render(option.Description, levels, out var missing, option.Fallback);
                     unresolved += missing;
+                    if (levels.Count > 1 && text != RuneEffectText.Render(option.Description, values, option.Fallback))
+                        transcendLevels = Math.Max(transcendLevels, levels.Count - 1);
                     return text;
                 })
                 .Where(text => text.Length > 0));
@@ -134,7 +177,7 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
                 warnings.Add($"{name}({candidate.Id}): 수치 {unresolved}개를 찾지 못해 '{RuneEffectText.Unknown}'로 표시");
             }
             var className = candidate.CombatJob is { } job && classes.TryGetValue(job, out var display) ? display : "";
-            items.Add(new RuneData(candidate.Id, candidate.Season, candidate.Grade, candidate.Category, className, name, effect));
+            items.Add(new RuneData(candidate.Id, candidate.Season, candidate.Grade, candidate.Category, className, name, effect, transcendLevels));
         }
 
         foreach (var category in Enum.GetValues<RuneCategory>())
@@ -219,6 +262,7 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
             writer.WriteString("class", rune.Class);
             writer.WriteString("name", rune.Name);
             writer.WriteString("effect", rune.Effect);
+            writer.WriteNumber("transcendLevels", rune.TranscendLevels);
             writer.WriteEndObject();
         }
         writer.WriteEndArray();
@@ -233,7 +277,8 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
             Enum.Parse<RuneCategory>(x.GetProperty("category").GetString()!),
             x.GetProperty("class").GetString()!,
             x.GetProperty("name").GetString()!,
-            x.GetProperty("effect").GetString()!)).ToArray();
+            x.GetProperty("effect").GetString()!,
+            x.TryGetProperty("transcendLevels", out var levels) ? levels.GetInt32() : 0)).ToArray();
         if (items.Length == 0) throw new InvalidDataException("캐시에 룬이 없습니다.");
         return new RuneTable(items);
     }

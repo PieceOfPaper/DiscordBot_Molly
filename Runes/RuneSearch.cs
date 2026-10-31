@@ -22,6 +22,7 @@ public static class RuneSearch
         => $"룬 검색 결과: {results.Count}개\n\n" + string.Join("\n\n", results.Select(r =>
             $"{r.Name} · 시즌 {r.Season} · {r.Grade.Display()} · {r.Category.Display()}" +
             (string.IsNullOrWhiteSpace(r.Class) ? string.Empty : $" · {r.Class}") +
+            (r.TranscendLevels > 0 ? $" · 수치 {RuneNames.TranscendLegend(r.TranscendLevels)}" : string.Empty) +
             $"\n{r.Effect}"));
 
     public static IReadOnlyList<string> SplitMessages(string text)
