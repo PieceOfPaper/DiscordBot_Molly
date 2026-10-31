@@ -69,6 +69,19 @@ if (args.SequenceEqual(new[] { "--mobilife-live" }))
     Console.WriteLine($"모비라이프 거래소 분류 {result.Value!.Data.Count}개: {string.Join(", ", result.Value.Data.Select(x => $"{x.ParentCategory}({x.ItemCount})"))}");
     return;
 }
+if (args.SequenceEqual(new[] { "--unpack-live" }))
+{
+    // 설정된 토큰으로 게임 데이터 저장소의 최신 커밋과 version.json만 읽습니다(요청 2회, Discord 미사용, CI 미사용).
+    var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
+    using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
+    Console.WriteLine($"게임 데이터 저장소 상태: {unpack.DescribeState()}");
+    var head = await unpack.GetHeadCommitAsync();
+    if (!head.IsSuccess) { Console.WriteLine($"최신 커밋 조회 실패: {head.Status} {head.Detail}"); Environment.Exit(1); }
+    var version = await unpack.GetVersionAsync(head.Value);
+    if (!version.IsSuccess) { Console.WriteLine($"version.json 조회 실패: {version.Status} {version.Detail}"); Environment.Exit(1); }
+    Console.WriteLine($"커밋 {head.Value}, 앱 {version.Value!.AppVersion}, 빌드 {version.Value.BuildBranch}, 패치 {version.Value.PatchDisplay}, 생성 {version.Value.GeneratedAt:O}");
+    return;
+}
 if (args.SequenceEqual(new[] { "--haeyeon-live" }))
 {
     // 실제 제작 시트와 모비라이프 시세(검색어 5개, 요청 5회)로 해연 판정만 출력합니다. DB 저장·Discord 전송 없음, CI 미사용.
@@ -606,6 +619,7 @@ catch (InvalidDataException) { Console.WriteLine("PASS HTTP 로그인 HTML 거�
 await QuizFlowTests.RunAsync();
 await MobiEventTests.RunAsync();
 await MobiLifeTests.RunAsync();
+await UnpackRepoTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await HaeyeonCostTests.RunAsync();
 await KeywordMarketTests.RunAsync();

@@ -12,6 +12,7 @@ using Molly.Lottery;
 using DiscordBot_Molly.Commands;
 using Molly.Battle;
 using Molly.MobiLife;
+using Molly.Unpack;
 using Molly.Crafting;
 using Molly.HaeyeonMarket;
 using Molly.KeywordMarket;
@@ -47,6 +48,7 @@ class Program
     public BattleSessions BattleSessions { get; } = new();
     // 모비라이프 OpenAPI. 키가 없거나 API가 중단돼도 봇은 정상 시작하며, 연동 기능만 안내 메시지를 표시합니다.
     public MobiLifeApiClient MobiLife { get; private set; } = null!;
+    public UnpackRepoClient Unpack { get; private set; } = null!;
     // 제작 시트는 여러 기능이 함께 쓰는 공용 레시피 데이터입니다.
     public CraftingCatalog Crafting { get; private set; } = null!;
     public HaeyeonMarketMonitor HaeyeonMarket { get; private set; } = null!;
@@ -196,6 +198,17 @@ class Program
         }
         MobiLife = new MobiLifeApiClient(mobiLifeOptions);
         Console.WriteLine($"[모비라이프] {MobiLife.DescribeState()}");
+        UnpackRepoOptions unpackOptions;
+        try { unpackOptions = UnpackRepoOptions.FromConfiguration(m_Config); }
+        catch (ArgumentException ex)
+        {
+            Console.WriteLine($"[게임데이터] 설정 오류로 저장소 접근을 끕니다: {ex.Message}");
+            unpackOptions = new UnpackRepoOptions { Enabled = false };
+        }
+        Unpack = new UnpackRepoClient(unpackOptions);
+        Console.WriteLine($"[게임데이터] {Unpack.DescribeState()}");
+        // 서버에서 토큰이 동작하는지 시작 로그로 확인합니다(요청 2회). 실패해도 다른 기능은 그대로 시작합니다.
+        if (Unpack.IsConfigured) _ = LogUnpackAccessAsync(Unpack, appCts.Token);
         await MobiEventExpireAlert.InitializeStorageAsync(appCts.Token);
         RegisteredCharacters = new RegisteredCharacterStore();
         await RegisteredCharacters.InitializeAsync(appCts.Token);
@@ -342,5 +355,19 @@ class Program
         var store = new KeywordMarketStore(definition.Id);
         await store.InitializeAsync(ct);
         return new KeywordMarketMonitor(definition, new MobiLifeMarketPriceSource(MobiLife), store, new DiscordKeywordAlertSender(m_Client), status: status);
+    }
+
+    private static async Task LogUnpackAccessAsync(UnpackRepoClient unpack, CancellationToken ct)
+    {
+        try
+        {
+            var head = await unpack.GetHeadCommitAsync(ct);
+            if (!head.IsSuccess) { Console.WriteLine($"[게임데이터] 저장소 접근 실패({head.Status}): {head.Detail}"); return; }
+            var version = await unpack.GetVersionAsync(head.Value, ct);
+            Console.WriteLine(version.IsSuccess
+                ? $"[게임데이터] 저장소 접근 확인: 커밋 {head.Value![..7]}, 앱 {version.Value!.AppVersion}, 패치 {version.Value.PatchDisplay}, 생성 {version.Value.GeneratedAt:yyyy-MM-dd HH:mm}"
+                : $"[게임데이터] version.json 읽기 실패({version.Status}): {version.Detail}");
+        }
+        catch (OperationCanceledException) { }
     }
 }

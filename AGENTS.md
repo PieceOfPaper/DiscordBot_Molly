@@ -39,6 +39,7 @@
 - MobiShop.cs, Commons/CsvTable.cs: 상점 테이블과 CSV 매핑.
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
+- Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트. clone하지 않고 최신 커밋 SHA·`version.json`·필요한 파일만 REST API로 받는다. 토큰·확인 절차는 `docs/unpack-repo.md`.
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
 - Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.
 - HaeyeonCost/: /해연비용계산의 장비 성장 수치·부위 매핑(HaeyeonCostRules), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
@@ -69,6 +70,7 @@
 - Discord 토큰은 user-secrets 또는 Discord__Token 환경변수로 설정한다.
 - .env는 자동 로딩되지 않는다. 실제 비밀 값을 파일·로그·커밋에 넣지 않는다.
 - Google 인증 파일도 저장소 밖에서 관리한다.
+- 게임 데이터 저장소 토큰은 `Unpack:Token`(user-secrets) 또는 `Unpack__Token` 환경변수(서버)로 설정한다. 저장소 하나·Contents 읽기 전용 fine-grained 토큰만 쓴다.
 - 모비라이프 API 키는 `MobiLife:ApiKey`(user-secrets, 개발용 키) 또는 `MobiLife__ApiKey` 환경변수(서버, 서비스용 키)로 설정한다.
 - 실서버 검증은 테스트 서버 ID Discord__GuildId를 지정하고 사용자의 요청 범위 안에서 수행한다.
 

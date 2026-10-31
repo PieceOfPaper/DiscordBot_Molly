@@ -146,6 +146,8 @@ dotnet run
   전투를 포함한 Google Sheets 문서 ID입니다. `/배틀`은 `클래스`, `스킬`, `배틀스킬`, `배틀스킬효과`, `배틀스킬파생`, `배틀자원`, `배틀규칙`, `배틀돌발이벤트`, `배틀돌발이벤트효과` 탭을 시작 시 한 묶음으로 읽습니다. 하나라도 검증에 실패하면 마지막 정상 스냅샷만 사용하며, 정상본이 없을 때는 배틀만 사용할 수 없습니다.
 - `MobiLife:ApiKey`<br>
   선택 설정입니다. [모비라이프 OpenAPI](https://open.mabimobi.life/docs) 키로, Discord 토큰처럼 로컬 개발은 user-secrets(`dotnet user-secrets set "MobiLife:ApiKey" "개발용_키"`), 서버는 환경변수 `MobiLife__ApiKey`(서비스용 키)로 설정합니다. 없으면 모비라이프 연동 기능만 안내 메시지를 표시하고 나머지 기능은 정상 동작합니다. `MobiLife:Enabled=false`로 호출을 끌 수 있습니다. 자세한 내용은 아래 `모비라이프 OpenAPI 사용`을 참고하세요.
+- `Unpack:Token`<br>
+  선택 설정입니다. 게임 데이터 private 저장소 [PieceOfPaper/MabinogiMobileUnpack](https://github.com/PieceOfPaper/MabinogiMobileUnpack)을 읽는 GitHub fine-grained 토큰입니다. 로컬 개발은 user-secrets(`dotnet user-secrets set "Unpack:Token" "github_pat_..."`), 서버는 환경변수 `Unpack__Token`으로 설정하며 개발용·서버용 토큰을 따로 발급합니다. 없으면 저장소를 읽지 않고 나머지 기능은 정상 동작합니다. `Unpack:Enabled=false`로 호출을 끌 수 있습니다. 발급 방법은 아래 `게임 데이터 저장소 연동`을 참고하세요.
 - `OfficialNews:Enabled`<br>
   선택 설정입니다. 공식 소식(공지·업데이트·이벤트·에린 노트, 공지 목록에서 판정하는 점검 알림 포함) 수집을 켜고 끕니다. 기본은 켜짐(`true`)이며 `false`면 공식 홈페이지를 확인하지 않습니다. 서버는 환경변수 `OfficialNews__Enabled`로 설정합니다. 자세한 내용은 [공식 소식 알림 기획서](docs/official-news.md)를 참고하세요.
 - `assets/shop_table.csv`  
@@ -179,6 +181,24 @@ dotnet run
 - 모비라이프 데이터를 보여주는 모든 응답에는 출처 `모비라이프 제공`을 표기합니다.
 - 키가 없거나 API가 중단·폐기되어도 봇의 다른 기능은 영향을 받지 않습니다.
 - 이용약관, 키 설정, 요청 한도, 기능 추가 규칙과 중단 대비는 [모비라이프 OpenAPI 연동 가이드](docs/mobilife-openapi.md)를 따릅니다.
+
+## 게임 데이터 저장소 연동
+
+게임 클라이언트에서 꺼낸 데이터는 private 저장소 [PieceOfPaper/MabinogiMobileUnpack](https://github.com/PieceOfPaper/MabinogiMobileUnpack)에 있습니다. 저장소가 커서 clone하지 않고, GitHub REST API로 최신 커밋 SHA·`version.json`·필요한 파일만 받습니다.
+
+토큰 발급 요약(GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token):
+
+| 항목 | 값 |
+| --- | --- |
+| Token name | 사용처가 보이는 이름. 서버 `molly-unpack-lightsail`, 로컬 `molly-unpack-local` |
+| Expiration | 만료일 지정(예: 1년). 만료 전에 새 토큰으로 교체 |
+| Resource owner | `PieceOfPaper` |
+| Repository access | **Only select repositories** → `MabinogiMobileUnpack` |
+| Permissions | Repository permissions의 **Contents: Read-only**만. 나머지는 No access |
+
+- 발급 직후 한 번만 보이는 토큰 값을 복사해 로컬은 user-secrets `Unpack:Token`, 서버는 `/etc/molly/molly.env`의 `Unpack__Token`에 넣습니다.
+- 토큰 값은 저장소·로그·Issue·GitHub Actions에 넣지 않습니다. CI는 이 저장소를 읽지 않으므로 CI용 토큰은 필요 없습니다.
+- 접근 확인, 오류별 원인, 교체 절차는 [게임 데이터 저장소 연동](docs/unpack-repo.md)을 참고하세요.
 
 ## 해연 시세 모니터링
 
@@ -300,6 +320,8 @@ dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuratio
 dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --live
 # 설정한 모비라이프 API 키로 거래소 분류 목록을 1회 조회 (네트워크 필요, CI에서는 실행하지 않음)
 dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --mobilife-live
+# 설정한 게임 데이터 저장소 토큰으로 최신 커밋과 version.json만 조회 (요청 2회, 네트워크 필요, CI에서는 실행하지 않음)
+dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --unpack-live
 # 실제 제작 시트와 모비라이프 시세(요청 5회)로 해연 시세 매칭과 /해연시세 세 종류의 표시 내용만 출력 (DB 저장·Discord 전송 없음, CI에서는 실행하지 않음)
 dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --haeyeon-live
 # 모비라이프 시세(모니터링당 요청 1~5회)로 상자·패키지 검색 결과만 출력 (DB 저장·Discord 전송 없음, CI에서는 실행하지 않음)
