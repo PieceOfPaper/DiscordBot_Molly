@@ -9,7 +9,7 @@ public sealed record HaeyeonUnitPrice(HaeyeonSlot Slot, decimal Average, int Ite
 
 /// <summary>
 /// 평균 단가 계산 결과. Missing이 비어 있지 않으면 해당 그룹의 유효 시세가 없어 추정할 수 없습니다.
-/// Unmapped는 해연 완제품이지만 부위 매핑이 없어 평균에서 뺀 품목입니다.
+/// Unmapped는 해연 완제품이지만 게임 데이터에서 부위를 알 수 없어 평균에서 뺀 품목입니다.
 /// </summary>
 public sealed record HaeyeonUnitPrices(
     IReadOnlyDictionary<HaeyeonSlot, HaeyeonUnitPrice> Prices,
@@ -22,14 +22,9 @@ public sealed record HaeyeonUnitPrices(
 
 public static class HaeyeonCostPricing
 {
-    /// <summary>제작 시트에서 해연 완제품을 찾아 슬롯을 정합니다. 매핑할 수 없으면 null입니다.</summary>
-    public static HaeyeonSlot? SlotOf(CraftingRecipe recipe)
-    {
-        if (!recipe.Name.StartsWith(HaeyeonMarketRules.ProductPrefix, StringComparison.Ordinal)) return null;
-        if (HaeyeonCostRules.ExplicitSlots.TryGetValue(recipe.Name, out var mapped))
-            return mapped.Category == recipe.Category ? mapped.Slot : null;
-        return recipe.Category == HaeyeonCostRules.WeaponCategory ? HaeyeonSlot.Weapon : null;
-    }
+    /// <summary>해연 완제품의 슬롯을 게임 데이터 장비 부위로 정합니다. 해연 완제품이 아니거나 부위를 알 수 없으면 null입니다.</summary>
+    public static HaeyeonSlot? SlotOf(CraftingRecipe recipe) =>
+        recipe.Name.StartsWith(HaeyeonMarketRules.ProductPrefix, StringComparison.Ordinal) ? HaeyeonCostRules.SlotOf(recipe.Slot) : null;
 
     /// <summary>
     /// 마지막 저장 시세로 그룹별 평균 단가를 구합니다. 같은 품목은 한 번만 세고, 거래 수량으로 가중하지 않으며,

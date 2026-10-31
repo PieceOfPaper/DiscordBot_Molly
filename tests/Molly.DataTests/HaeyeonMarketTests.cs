@@ -7,13 +7,12 @@ using Molly.MobiLife;
 
 internal static class HaeyeonMarketTests
 {
-    // 2026-09 실제 제작 시트 형식(gviz CSV)에서 행만 줄인 샘플
-    private const string CraftCsv = """
-        "이름","분류","제작","스킬","재료1","재료2","재료3","재료4","재료5","재료6","재료7","재료8","기타"
-        "해연의 숏소드ZZ","무기","대장 기술","대장 기술/19","백금강괴/5","특급 목재/5","포식의 마력석/15","망령의 영혼석/80","","","","",""
-        "해연의 페리도트 링ZZ","장신구","핸디크래프트","핸디크래프트/19","세공된 페리도트ZZ/1","백금강괴/4","포식의 마력석/8","","","","","",""
-        "다른 장비","무기","대장 기술","대장 기술/1","백금강괴/1","","","","","","","",""
-        """;
+    // 게임 데이터 제작 레시피(UnpackCraftingDataset 결과)에서 행만 줄인 샘플
+    internal static readonly CraftingTable Crafting = new([
+        new("해연의 숏소드ZZ", [new("백금강괴", 5), new("특급 목재", 5), new("포식의 마력석", 15), new("망령의 영혼석", 80)], "무기", "Weapon"),
+        new("해연의 페리도트 링ZZ", [new("세공된 페리도트ZZ", 1), new("백금강괴", 4), new("포식의 마력석", 8)], "장신구", "Ring"),
+        new("다른 장비", [new("백금강괴", 1)], "무기", "Weapon"),
+    ]);
 
     public static async Task RunAsync()
     {
@@ -27,30 +26,7 @@ internal static class HaeyeonMarketTests
 
     private static void CraftingTests()
     {
-        var table = CraftingCsvReader.Parse(CraftCsv, DateTimeOffset.UtcNow);
-        Assert(table.Items.Count == 3 && table.ByName["해연의 숏소드ZZ"].Ingredients.Count == 4 &&
-               table.ByName["해연의 숏소드ZZ"].Ingredients[2] == new CraftingIngredient("포식의 마력석", 15), "제작 시트의 '재료명/수량'을 레시피로 해석하고 빈 재료 칸은 건너뜀");
-        Assert(table.ByName["해연의 숏소드ZZ"].Category == "무기" && table.ByName["해연의 페리도트 링ZZ"].Category == "장신구",
-            "제작 시트의 분류 열을 레시피 분류로 읽음");
-        Assert(CraftingCsvReader.Parse("\"이름\",\"재료1\"\n\"A\",\"B/1\"", DateTimeOffset.UtcNow).Items[0].Category == "",
-            "분류 열이 없는 이전 캐시도 읽고 분류는 빈 값");
-        Assert(HaeyeonMarketRules.SelectRecipes(table).Select(x => x.Name).SequenceEqual(["해연의 숏소드ZZ", "해연의 페리도트 링ZZ"]), "해연의로 시작하는 레시피만 선택");
-
-        foreach (var (csv, name) in new[]
-        {
-            ("\"이름\",\"재료1\"\n\"A\",\"B/0\"", "수량 0 거부"),
-            ("\"이름\",\"재료1\"\n\"A\",\"B\"", "수량 없는 재료 거부"),
-            ("\"이름\",\"재료1\"\n\"A\",\"B/1\"\n\"A\",\"C/1\"", "중복 레시피 이름 거부"),
-            ("\"이름\",\"재료1\",\"재료2\"\n\"A\",\"B/1\",\"B/2\"", "한 레시피 안 중복 재료 거부"),
-            ("\"이름\",\"재료1\"\n\"A\",\"\"", "재료 없는 레시피 거부"),
-            ("\"아이템\",\"재료1\"\n\"A\",\"B/1\"", "이름 헤더 없는 시트 거부"),
-        })
-        {
-            var rejected = false;
-            try { CraftingCsvReader.Parse(csv, DateTimeOffset.UtcNow); }
-            catch (InvalidDataException) { rejected = true; }
-            Assert(rejected, "제작 시트 검증: " + name);
-        }
+        Assert(HaeyeonMarketRules.SelectRecipes(Crafting).Select(x => x.Name).SequenceEqual(["해연의 숏소드ZZ", "해연의 페리도트 링ZZ"]), "해연의로 시작하는 레시피만 선택");
     }
 
     private static readonly DateTimeOffset s_Now = new(2026, 9, 24, 3, 0, 0, TimeSpan.Zero);
@@ -62,7 +38,7 @@ internal static class HaeyeonMarketTests
 
     private static void EvaluatorTests()
     {
-        var recipes = HaeyeonMarketRules.SelectRecipes(CraftingCsvReader.Parse(CraftCsv, s_Now));
+        var recipes = HaeyeonMarketRules.SelectRecipes(Crafting);
         var tracked = HaeyeonMarketEvaluator.TrackedNames(recipes);
         Assert(tracked.Count == 6 && tracked["해연의 숏소드ZZ"] && !tracked["백금강괴"] && !tracked.ContainsKey("세공된 페리도트ZZ"),
             "추적 대상은 해연 제작품과 재료이며 무가치 재료(세공된 페리도트ZZ)는 제외");
@@ -145,7 +121,7 @@ internal static class HaeyeonMarketTests
 
     private static void ReportTests()
     {
-        var recipes = HaeyeonMarketRules.SelectRecipes(CraftingCsvReader.Parse(CraftCsv, s_Now));
+        var recipes = HaeyeonMarketRules.SelectRecipes(Crafting);
         // 숏소드 재료 합계 3,300 / 링 재료 합계 1,200(페리도트 0)
         var prices = Prices(P("해연의 숏소드ZZ", 3960), P("해연의 페리도트 링ZZ", 1000, count: 2),
             P("백금강괴", 100), P("특급 목재", 100), P("포식의 마력석", 100), P("망령의 영혼석", 10));
@@ -153,9 +129,22 @@ internal static class HaeyeonMarketTests
         Assert(HaeyeonMarketReport.BuildLines(HaeyeonPriceView.Weapons, recipes, prices).SequenceEqual(["해연의 숏소드ZZ · **3,960** (매물 100개)"]) &&
                HaeyeonMarketReport.BuildLines(HaeyeonPriceView.Accessories, recipes, prices).SequenceEqual(["해연의 페리도트 링ZZ · **1,000** (매물 2개, 적음)"]) &&
                HaeyeonMarketReport.ItemCount(HaeyeonPriceView.Weapons, recipes) == 1,
-            "/해연시세 해연무기·해연장신구: 제작 시트 분류가 같은 해연 아이템만 표시");
-        Assert(HaeyeonMarketReport.BuildLines(HaeyeonPriceView.Armors, recipes, prices).Count == 0 && HaeyeonMarketReport.ItemCount(HaeyeonPriceView.Armors, recipes) == 0,
-            "/해연시세 해연방어구: 해당 분류가 없으면 빈 목록");
+            "/해연시세 해연무기·해연장신구: 제작 분류가 같은 해연 아이템만 표시");
+        Assert(HaeyeonMarketReport.BuildLines(HaeyeonPriceView.HeavyArmors, recipes, prices).Count == 0 && HaeyeonMarketReport.ItemCount(HaeyeonPriceView.HeavyArmors, recipes) == 0,
+            "/해연시세 해연중갑: 해당 재질의 방어구가 없으면 빈 목록");
+        var armors = new CraftingRecipe[]
+        {
+            new("해연의 비늘 갑옷 투구ZZ", [new("백금강괴", 4)], "방어구", "Hat", "중갑"),
+            new("해연의 가죽 갑옷 투구ZZ", [new("특급 가죽", 4)], "방어구", "Hat", "경갑"),
+            new("해연의 전투복 투구ZZ", [new("특급 옷감", 4)], "방어구", "Hat", "천옷"),
+            new("해연의 전투복 상의ZZ", [new("특급 옷감", 5)], "방어구", "Top", "천옷"),
+        };
+        var armorPrices = Prices(armors.Select(x => P(x.Name, 500)).ToArray());
+        Assert(HaeyeonMarketReport.BuildLines(HaeyeonPriceView.HeavyArmors, armors, armorPrices).SequenceEqual(["해연의 비늘 갑옷 투구ZZ · **500** (매물 100개)"]) &&
+               HaeyeonMarketReport.BuildLines(HaeyeonPriceView.LightArmors, armors, armorPrices).SequenceEqual(["해연의 가죽 갑옷 투구ZZ · **500** (매물 100개)"]) &&
+               HaeyeonMarketReport.ItemCount(HaeyeonPriceView.ClothArmors, armors) == 2 && HaeyeonMarketReport.Title(HaeyeonPriceView.ClothArmors) == "💹 해연 천옷 시세" &&
+               HaeyeonMarketReport.ProductLabel(HaeyeonPriceView.LightArmors) == "경갑 방어구" && HaeyeonMarketReport.ProductLabel(HaeyeonPriceView.Weapons) == "무기",
+            "/해연시세 해연중갑·해연경갑·해연천옷: 방어구를 재질(중갑·경갑·천옷)별로 나눠 표시");
 
         var materials = HaeyeonMarketReport.BuildLines(HaeyeonPriceView.Materials, recipes, prices);
         Assert(HaeyeonMarketReport.ItemCount(HaeyeonPriceView.Materials, recipes) == 5 && materials.Count(x => x.StartsWith("백금강괴 · ")) == 1 &&
@@ -223,7 +212,7 @@ internal static class HaeyeonMarketTests
                    (await store.GetChannelsAsync()).Count == 1, "해제하면 해당 길드 등록만 삭제");
 
             var now = s_Now;
-            var recipes = HaeyeonMarketRules.SelectRecipes(CraftingCsvReader.Parse(CraftCsv, s_Now));
+            var recipes = HaeyeonMarketRules.SelectRecipes(Crafting);
             var source = new FakeSource();
             var sender = new FakeSender();
             var monitor = new HaeyeonMarketMonitor(_ => Task.FromResult(recipes), source, store, sender, () => now, _ => { });
@@ -323,7 +312,7 @@ internal static class HaeyeonMarketTests
                 "등록 시 장비·재료 등락률을 길드별로 저장하고, 정하지 않으면 기본값(10%·20%) 사용");
 
             var now = s_Now;
-            var recipes = HaeyeonMarketRules.SelectRecipes(CraftingCsvReader.Parse(CraftCsv, s_Now));
+            var recipes = HaeyeonMarketRules.SelectRecipes(Crafting);
             var source = new FakeSource();
             var sender = new FakeSender();
             var monitor = new HaeyeonMarketMonitor(_ => Task.FromResult(recipes), source, store, sender, () => now, _ => { });

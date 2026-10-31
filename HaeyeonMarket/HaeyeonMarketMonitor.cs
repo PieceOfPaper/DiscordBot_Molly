@@ -118,7 +118,7 @@ public sealed class HaeyeonMarketMonitor
     {
         var collectedAt = m_UtcNow();
         var recipes = await m_Recipes(ct).ConfigureAwait(false);
-        if (recipes.Count == 0) return new HaeyeonRunResult(false, "제작 시트에 해연 아이템이 없어 수집하지 않았습니다.", StatusErrorKinds.SourceData);
+        if (recipes.Count == 0) return new HaeyeonRunResult(false, "게임 데이터의 해연 제작 레시피가 없어 수집하지 않았습니다.", StatusErrorKinds.SourceData);
         var tracked = HaeyeonMarketEvaluator.TrackedNames(recipes);
 
         // 검색어 중 하나라도 실패하면 일부 시세만으로 잘못 알리지 않도록 이번 회차 전체를 건너뜁니다.
@@ -140,7 +140,7 @@ public sealed class HaeyeonMarketMonitor
 
         var lastPrices = (await Store.LoadLatestPricesAsync(ct).ConfigureAwait(false))?.Prices;
         // 상승·하락 흐름은 정각 회차마다 한 번 세어 3회 연속 확인될 때만 알리며 모든 서버가 같이 씁니다.
-        // 제작 시트에서 빠진 아이템의 상태는 버리고, 이번 응답에만 없는 아이템은 이전 상태를 둡니다(다시 나타나면 1회부터).
+        // 제작 레시피에서 빠진 아이템의 상태는 버리고, 이번 응답에만 없는 아이템은 이전 상태를 둡니다(다시 나타나면 1회부터).
         var trend = MarketTrendAlertEvaluator.Evaluate(prices.Values, await Store.LoadTrendAlertStatesAsync(ct).ConfigureAwait(false),
             x => x.Name, MarketSchedule.HourOf(collectedAt));
         var trendAlerts = trend.Alerts;

@@ -5,10 +5,10 @@ namespace Molly.HaeyeonMarket;
 /// <summary>/해연시세알림의 조절 가능한 기준값. 값을 바꾸면 다음 정각 갱신부터 적용됩니다.</summary>
 public static class HaeyeonMarketRules
 {
-    // 제작 시트에서 이 이름으로 시작하는 아이템만 추적합니다.
+    // 제작 레시피(게임 데이터)에서 이 이름으로 시작하는 아이템만 추적합니다.
     public const string ProductPrefix = "해연의";
 
-    // 모비라이프 시세 검색어. 추적 대상 이름은 제작 시트에서 뽑고, 검색 결과에서 이름이 정확히 같은 항목만 씁니다.
+    // 모비라이프 시세 검색어. 추적 대상 이름은 제작 레시피에서 뽑고, 검색 결과에서 이름이 정확히 같은 항목만 씁니다.
     public static readonly IReadOnlyList<string> SearchKeywords = ["해연의", "마력석", "영혼석", "특급", "백금강괴"];
 
     // 시세를 조회하지 않고 0으로 계산하는 무가치한 재료.

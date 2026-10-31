@@ -75,12 +75,22 @@ if (args.SequenceEqual(new[] { "--unpack-live" }))
 }
 if (args.SequenceEqual(new[] { "--haeyeon-live" }))
 {
-    // 실제 제작 시트와 모비라이프 시세(검색어 5개, 요청 5회)로 해연 판정만 출력합니다. DB 저장·Discord 전송 없음, CI 미사용.
+    // 게임 데이터 저장소의 제작 레시피(커밋 1회 + version·시트 5개)와 모비라이프 시세(검색어 5개, 요청 5회)로 해연 판정만 출력합니다.
+    // DB 저장·Discord 전송 없음, CI 미사용.
     var config = new ConfigurationBuilder().AddUserSecrets(typeof(MobiLifeApiClient).Assembly).AddEnvironmentVariables().Build();
-    using var sheetHttp = new HttpClient();
     using var mobiLife = new MobiLifeApiClient(MobiLifeOptions.FromConfiguration(config));
-    var recipes = HaeyeonMarketRules.SelectRecipes(CraftingCsvReader.Parse(
-        await new GoogleSheetsCraftingSource(sheetHttp, GoogleSheetsDocument.DefaultSpreadsheetId).FetchCsvAsync(default), DateTimeOffset.UtcNow));
+    using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
+    var liveDir = Path.Combine(Path.GetTempPath(), "molly-haeyeon-live-" + Guid.NewGuid().ToString("N"));
+    CraftingTable crafting;
+    try
+    {
+        var craftingCatalog = new Molly.Unpack.UnpackDataCatalog<CraftingTable>(unpack, new UnpackCraftingDataset(), liveDir, Console.WriteLine);
+        var refreshed = await craftingCatalog.RefreshAsync();
+        if (!refreshed.IsSuccess || craftingCatalog.Data is null) { Console.WriteLine($"제작 데이터 만들기 실패: {refreshed.Status} {refreshed.Detail}"); Environment.Exit(1); }
+        crafting = craftingCatalog.Data;
+    }
+    finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
+    var recipes = HaeyeonMarketRules.SelectRecipes(crafting);
     var tracked = HaeyeonMarketEvaluator.TrackedNames(recipes);
     var source = new MobiLifeMarketPriceSource(mobiLife);
     var prices = new Dictionary<string, MarketPrice>(StringComparer.Ordinal);
@@ -143,7 +153,7 @@ if (args.Length is 1 or 2 && args[0] == "--runes-live")
 }
 if (args.SequenceEqual(new[] { "--unpack-data-live" }))
 {
-    // 설정된 토큰으로 클래스·마도저항 데이터를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트, Discord 미사용, CI 미사용).
+    // 설정된 토큰으로 클래스·마도저항·제작 데이터를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트, Discord 미사용, CI 미사용).
     var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
     using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
     var liveDir = Path.Combine(Path.GetTempPath(), "molly-unpack-data-live-" + Guid.NewGuid().ToString("N"));
@@ -151,8 +161,9 @@ if (args.SequenceEqual(new[] { "--unpack-data-live" }))
     {
         var classCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.Classes.ClassTable>(unpack, new Molly.Classes.UnpackClassDataset(), liveDir, Console.WriteLine);
         var resistanceCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.MagicResistance.MagicResistanceData>(unpack, new Molly.MagicResistance.UnpackMagicResistanceDataset(), liveDir, Console.WriteLine);
-        var results = await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, [classCatalog, resistanceCatalog], default);
-        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null)
+        var craftingCatalog = new Molly.Unpack.UnpackDataCatalog<CraftingTable>(unpack, new UnpackCraftingDataset(), liveDir, Console.WriteLine);
+        var results = await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, [classCatalog, resistanceCatalog, craftingCatalog], default);
+        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || craftingCatalog.Data is null)
         {
             Console.WriteLine("데이터 만들기 실패: " + string.Join(" / ", results.Select(x => $"{x.Status} {x.Detail}")));
             Environment.Exit(1);
@@ -162,6 +173,9 @@ if (args.SequenceEqual(new[] { "--unpack-data-live" }))
         var growth = Molly.HaeyeonCost.HaeyeonGrowth.From(resistanceCatalog.Data);
         Console.WriteLine($"해연 장비: " + string.Join(", ", resistanceCatalog.Data.HaeyeonEquipment.Select(x => $"{x.Key} {x.Value.Initial}~{x.Value.Max}")) +
                           $" → 해연 비용 계산 범위 {growth.InitialResistance}~{growth.MaxResistance}");
+        foreach (var recipe in HaeyeonMarketRules.SelectRecipes(craftingCatalog.Data))
+            Console.WriteLine($"{recipe.Name} | {recipe.Category} | {recipe.Slot} | {recipe.ArmorType} | " +
+                              $"{Molly.HaeyeonCost.HaeyeonCostPricing.SlotOf(recipe)} | {string.Join(", ", recipe.Ingredients.Select(x => $"{x.Name}/{x.Quantity}"))}");
     }
     finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
     return;

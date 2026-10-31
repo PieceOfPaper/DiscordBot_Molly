@@ -5,9 +5,11 @@ namespace Molly.HaeyeonMarket;
 
 public enum HaeyeonPriceView
 {
-    // 해연 제작 아이템 시세(제작 시트 분류별)
+    // 해연 제작 아이템 시세(무기, 재질별 방어구, 장신구)
     Weapons,
-    Armors,
+    HeavyArmors,
+    LightArmors,
+    ClothArmors,
     Accessories,
     // 해연 재료 시세(중복 없이, 마력석·영혼석·기타 분류)
     Materials,
@@ -21,20 +23,28 @@ public static class HaeyeonMarketReport
     public static string Title(HaeyeonPriceView view) => view switch
     {
         HaeyeonPriceView.Weapons => "💹 해연 무기 시세",
-        HaeyeonPriceView.Armors => "💹 해연 방어구 시세",
+        HaeyeonPriceView.HeavyArmors => "💹 해연 중갑 시세",
+        HaeyeonPriceView.LightArmors => "💹 해연 경갑 시세",
+        HaeyeonPriceView.ClothArmors => "💹 해연 천옷 시세",
         HaeyeonPriceView.Accessories => "💹 해연 장신구 시세",
         HaeyeonPriceView.Materials => "💹 해연 재료 시세",
         _ => "💹 해연 아이템 · 재료 합계 비교",
     };
 
-    // 아이템 시세 종류가 보여줄 제작 시트 분류. 아이템 시세 종류가 아니면 null입니다.
-    public static string? ProductCategory(HaeyeonPriceView view) => view switch
+    // 아이템 시세 종류가 보여줄 제작 분류와 방어구 재질(무기·장신구는 빈 문자열). 아이템 시세 종류가 아니면 null입니다.
+    public static (string Category, string ArmorType)? ProductFilter(HaeyeonPriceView view) => view switch
     {
-        HaeyeonPriceView.Weapons => "무기",
-        HaeyeonPriceView.Armors => "방어구",
-        HaeyeonPriceView.Accessories => "장신구",
+        HaeyeonPriceView.Weapons => (UnpackCraftingDataset.WeaponCategory, ""),
+        HaeyeonPriceView.HeavyArmors => (UnpackCraftingDataset.ArmorCategory, "중갑"),
+        HaeyeonPriceView.LightArmors => (UnpackCraftingDataset.ArmorCategory, "경갑"),
+        HaeyeonPriceView.ClothArmors => (UnpackCraftingDataset.ArmorCategory, "천옷"),
+        HaeyeonPriceView.Accessories => (UnpackCraftingDataset.AccessoryCategory, ""),
         _ => null,
     };
+
+    // 아이템을 찾지 못했을 때 안내에 쓰는 이름(예: 중갑 방어구).
+    public static string ProductLabel(HaeyeonPriceView view) =>
+        ProductFilter(view) is { } filter ? (filter.ArmorType.Length > 0 ? $"{filter.ArmorType} {filter.Category}" : filter.Category) : "";
 
     // 아이템·재료 목록에 변화 이모지가 하나라도 붙으면 목록 아래에 범례를 붙입니다.
     public static IReadOnlyList<string> BuildLines(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes, IReadOnlyDictionary<string, MarketPrice> prices) => view switch
@@ -58,7 +68,9 @@ public static class HaeyeonMarketReport
     };
 
     private static IEnumerable<CraftingRecipe> ProductsOf(HaeyeonPriceView view, IReadOnlyList<CraftingRecipe> recipes) =>
-        recipes.Where(x => x.Category == ProductCategory(view));
+        ProductFilter(view) is { } filter
+            ? recipes.Where(x => x.Category == filter.Category && (filter.ArmorType.Length == 0 || x.ArmorType == filter.ArmorType))
+            : [];
 
     // 재료 분류: 이름에 "마력석"이 들어가면 마력석, "영혼석"이 들어가면 영혼석, 나머지는 기타
     public static string MaterialCategory(string name) =>

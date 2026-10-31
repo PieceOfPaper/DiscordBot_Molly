@@ -54,8 +54,8 @@ class Program
     // 모비라이프 OpenAPI. 키가 없거나 API가 중단돼도 봇은 정상 시작하며, 연동 기능만 안내 메시지를 표시합니다.
     public MobiLifeApiClient MobiLife { get; private set; } = null!;
     public UnpackRepoClient Unpack { get; private set; } = null!;
-    // 제작 시트는 여러 기능이 함께 쓰는 공용 레시피 데이터입니다.
-    public CraftingCatalog Crafting { get; private set; } = null!;
+    // 제작 레시피는 여러 기능이 함께 쓰는 공용 데이터입니다(게임 데이터 저장소).
+    public UnpackDataCatalog<CraftingTable> Crafting { get; private set; } = null!;
     public HaeyeonMarketMonitor HaeyeonMarket { get; private set; } = null!;
     public KeywordMarketMonitor BoxMarket { get; private set; } = null!;
     public KeywordMarketMonitor PackageMarket { get; private set; } = null!;
@@ -251,10 +251,12 @@ class Program
         Runes = new UnpackDataCatalog<RuneTable>(Unpack, new UnpackRuneDataset(), dataDirectory);
         Classes = new UnpackDataCatalog<ClassTable>(Unpack, new UnpackClassDataset(), dataDirectory);
         MagicResistance = new UnpackDataCatalog<MagicResistanceData>(Unpack, new UnpackMagicResistanceDataset(), dataDirectory);
-        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance];
+        Crafting = new UnpackDataCatalog<CraftingTable>(Unpack, new UnpackCraftingDataset(), dataDirectory);
+        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, Crafting];
         await Runes.InitializeAsync(appCts.Token);
         await Classes.InitializeAsync(appCts.Token);
         await MagicResistance.InitializeAsync(appCts.Token);
+        await Crafting.InitializeAsync(appCts.Token);
         // 시트 폴더의 마지막 커밋을 시작 직후와 이후 1시간마다 한 번 확인하고(데이터 수와 무관), 바뀐 데이터만 다시 받습니다.
         // 실패해도 다른 기능은 그대로 시작합니다.
         _ = UnpackDataCatalogs.RunAsync(Unpack, unpackCatalogs, appCts.Token);
@@ -270,11 +272,6 @@ class Program
         Battles = new BattleCatalog(new GoogleSheetsBattleSource(sheetHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId), dataDirectory);
         await Battles.InitializeAsync(appCts.Token);
-        Crafting = new CraftingCatalog(new GoogleSheetsCraftingSource(sheetHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId,
-            m_Config["GoogleSheets:CraftingSheetName"] ?? GoogleSheetsCraftingSource.DefaultSheetName),
-            dataDirectory);
-        await Crafting.InitializeAsync(appCts.Token);
         TokenRules = new TokenRuleCatalog(new GoogleSheetsTokenRuleSource(sheetHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId,
             m_Config["GoogleSheets:TokenRuleSheetId"] ?? GoogleSheetsTokenRuleSource.DefaultSheetId),
@@ -292,11 +289,8 @@ class Program
         var haeyeonStore = new HaeyeonMarketStore();
         await haeyeonStore.InitializeAsync(appCts.Token);
         HaeyeonMarket = new HaeyeonMarketMonitor(
-            async ct =>
-            {
-                await Crafting.EnsureFreshAsync(TimeSpan.FromMinutes(10), ct);
-                return HaeyeonMarketRules.SelectRecipes(Crafting.Current);
-            },
+            // 게임 데이터가 아직 없으면(첫 실행에서 저장소를 읽기 전 등) 빈 목록으로 이번 회차를 실패 처리하고 다시 시도합니다.
+            _ => Task.FromResult(Crafting.Data is { } crafting ? HaeyeonMarketRules.SelectRecipes(crafting) : (IReadOnlyList<CraftingRecipe>)[]),
             new MobiLifeMarketPriceSource(MobiLife), haeyeonStore, new DiscordHaeyeonAlertSender(m_Client), status: statusTracker);
         BoxMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Box, statusTracker, appCts.Token);
         PackageMarket = await CreateKeywordMarketAsync(KeywordMarketRules.Package, statusTracker, appCts.Token);

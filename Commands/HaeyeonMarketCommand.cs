@@ -1,6 +1,7 @@
 using Discord;
 using Discord.Interactions;
 using Molly.HaeyeonMarket;
+using Molly.Unpack;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -66,7 +67,7 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
             ? $"이 채널(<#{channelId}>)에 해연 시세 알림을 등록했어요."
             : $"알림 채널을 <#{previous.ChannelId}>에서 이 채널(<#{channelId}>)로 옮겼어요. 서버당 한 채널만 받을 수 있어요.");
         description.AppendLine();
-        description.AppendLine("매 정각 제작 시트의 해연 제작 아이템과 재료 시세를 저장하고, 다음 경우 알려드려요.");
+        description.AppendLine("매 정각 게임 데이터의 해연 제작 아이템과 재료 시세를 저장하고, 다음 경우 알려드려요.");
         description.AppendLine($"- 제작 아이템 시세가 과거시세보다 {Percent(thresholds.Product, productPercent)} 이상, 재료 시세가 {Percent(thresholds.Material, materialPercent)} 이상 변동");
         description.AppendLine("- 완제품 구매가와 재료 구매 합계 중 더 저렴한 쪽이 바뀜");
         description.AppendLine("- 상승·하락 표시(📈📉)나 가능성(⏫🔼⏬🔽)이 바뀜");
@@ -144,7 +145,7 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
         await DeferAsync();
         var monitor = Program.instance.HaeyeonMarket;
         var latest = await monitor.Store.LoadLatestPricesAsync();
-        var recipes = HaeyeonMarketRules.SelectRecipes(Program.instance.Crafting.Current);
+        var recipes = Program.instance.Crafting.Data is { } table ? HaeyeonMarketRules.SelectRecipes(table) : [];
         // 등록된 서버면 그 서버의 등락률, 아니면 기본값으로 가상 과거시세를 만듭니다.
         var registered = Context.Interaction.GuildId is { } guildId ? await monitor.Store.GetChannelAsync(guildId) : null;
         var thresholds = registered?.Thresholds ?? HaeyeonThresholds.Default;
@@ -166,9 +167,11 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
 
     [SlashCommand("해연시세", "마지막으로 저장한 해연 제작 아이템·재료 시세를 보여줍니다.")]
     public async Task Command_Prices(
-        [Summary("종류", "해연무기·해연방어구·해연장신구: 분류별 아이템, 해연재료: 재료, 총해연재료: 아이템별 재료 합계 비교")]
+        [Summary("종류", "해연무기·해연중갑·해연경갑·해연천옷·해연장신구: 분류별 아이템, 해연재료: 재료, 총해연재료: 아이템별 재료 합계 비교")]
         [Choice("해연무기", "해연무기")]
-        [Choice("해연방어구", "해연방어구")]
+        [Choice("해연중갑", "해연중갑")]
+        [Choice("해연경갑", "해연경갑")]
+        [Choice("해연천옷", "해연천옷")]
         [Choice("해연장신구", "해연장신구")]
         [Choice("해연재료", "해연재료")]
         [Choice("총해연재료", "총해연재료")] string kind)
@@ -176,7 +179,9 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
         var view = kind switch
         {
             "해연무기" => HaeyeonPriceView.Weapons,
-            "해연방어구" => HaeyeonPriceView.Armors,
+            "해연중갑" => HaeyeonPriceView.HeavyArmors,
+            "해연경갑" => HaeyeonPriceView.LightArmors,
+            "해연천옷" => HaeyeonPriceView.ClothArmors,
             "해연장신구" => HaeyeonPriceView.Accessories,
             "해연재료" => HaeyeonPriceView.Materials,
             "총해연재료" => HaeyeonPriceView.ProductTotals,
@@ -184,24 +189,31 @@ public class HaeyeonMarketCommand : InteractionModuleBase<SocketInteractionConte
         };
         if (view is null)
         {
-            await RespondAsync("종류는 해연무기, 해연방어구, 해연장신구, 해연재료, 총해연재료 중에서 골라 주세요.", ephemeral: true);
+            await RespondAsync("종류는 해연무기, 해연중갑, 해연경갑, 해연천옷, 해연장신구, 해연재료, 총해연재료 중에서 골라 주세요.", ephemeral: true);
+            return;
+        }
+
+        var crafting = Program.instance.Crafting;
+        if (crafting.Data is not { } table)
+        {
+            await RespondAsync(UnpackDataMessages.NoData(crafting.Name), ephemeral: true);
             return;
         }
 
         await DeferAsync();
         var monitor = Program.instance.HaeyeonMarket;
         var latest = await monitor.Store.LoadLatestPricesAsync();
-        var recipes = HaeyeonMarketRules.SelectRecipes(Program.instance.Crafting.Current);
+        var recipes = HaeyeonMarketRules.SelectRecipes(table);
         if (latest is null || recipes.Count == 0)
         {
-            await FollowupAsync(latest is null ? "아직 저장된 해연 시세가 없어요. 첫 수집 이후에 다시 시도해 주세요." : "제작 시트의 해연 아이템을 불러오지 못했어요.");
+            await FollowupAsync(latest is null ? "아직 저장된 해연 시세가 없어요. 첫 수집 이후에 다시 시도해 주세요." : "게임 데이터에서 해연 제작 레시피를 찾지 못했어요.");
             return;
         }
 
         var count = HaeyeonMarketReport.ItemCount(view.Value, recipes);
         if (count == 0)
         {
-            await FollowupAsync($"제작 시트에서 분류가 '{HaeyeonMarketReport.ProductCategory(view.Value)}'인 해연 아이템을 찾지 못했어요.");
+            await FollowupAsync($"게임 데이터에서 해연 {HaeyeonMarketReport.ProductLabel(view.Value)} 제작 레시피를 찾지 못했어요.");
             return;
         }
 

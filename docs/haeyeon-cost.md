@@ -84,16 +84,17 @@
 
 ## 평균 단가
 
-`HaeyeonMarketStore.LoadLatestPricesAsync`(마지막 정각 해연 시세)와 제작 시트(`CraftingCatalog`, `HaeyeonMarketRules.SelectRecipes`)를 재사용한다.
+`HaeyeonMarketStore.LoadLatestPricesAsync`(마지막 정각 해연 시세)와 게임 데이터 제작 레시피(`Crafting/UnpackCraftingDataset.cs`, `HaeyeonMarketRules.SelectRecipes`)를 재사용한다.
 
-| 그룹 | 대상 품목(2026-10-19 시트 기준) | 분류 방법 |
+| 그룹 | 대상 품목(2026-10-31 게임 데이터 기준) | 분류 방법(제작 레시피의 장비 부위 `Equipment.EquipmentType`) |
 |---|---|---|
-| 무기 | 해연 무기 21종 | 제작 시트 `분류`가 `무기`인 `해연의…` 완제품 |
-| 투구·상의·하의·장갑·신발 | 부위마다 비늘 갑옷·가죽 갑옷·전투복 3종 | `HaeyeonCostRules.ExplicitSlots` 이름 매핑(시트 분류 `방어구`와 일치할 때만) |
-| 목걸이 | 해연의 페리도트 네크리스ZZ | 이름 매핑(분류 `장신구`) |
-| 반지 | 해연의 페리도트 링ZZ | 이름 매핑(분류 `장신구`) |
+| 무기 | 해연 무기 21종 | `Weapon` |
+| 투구·상의·하의·장갑·신발 | 부위마다 비늘 갑옷(중갑)·가죽 갑옷(경갑)·전투복(천옷) 3종 | `Hat`·`Top`·`Bottom`·`Gloves`·`Shoes`(재질과 무관하게 부위별로 묶음) |
+| 목걸이 | 해연의 페리도트 네크리스ZZ | `Accessory` |
+| 반지 | 해연의 페리도트 링ZZ | `Ring` |
 
-- 시트 분류에는 부위 정보가 없어 방어구·장신구는 명시적 이름 매핑을 쓴다. 이름 일부로 추측하지 않는다. 매핑에 없는 해연 방어구·장신구는 평균에서 빠지며 결과의 `Unmapped`에 남는다. 시트에 새 품목이 생기면 매핑을 추가한다.
+- 부위는 게임 데이터의 장비 부위로 정한다(`HaeyeonCostRules.SlotOf`). 이름으로 추측하지 않으며, 게임 데이터에 새 해연 장비가 생기면 코드 수정 없이 해당 부위 평균에 들어간다. 장비 부위가 없거나 다른 부위(엠블럼 등)인 해연 품목은 평균에서 빠지며 결과의 `Unmapped`에 남는다.
+- 제작 데이터가 없으면(캐시 없음 + 저장소 접근 실패) `UnpackDataMessages.NoData`로 사용할 수 없다고 안내한다.
 - 품목별 최저가의 산술평균. 같은 품목은 한 번만 세고 거래 수량으로 가중하지 않는다. 재료 가격은 섞지 않는다.
 - `HaeyeonMarketEvaluator.IsReliable`을 통과하지 못한 시세(매진·0원 이하·매물 3개 미만)와 시세 누락 품목은 제외하며 0데카로 치지 않는다.
 - 8개 그룹 모두 계산에 쓰므로 하나라도 유효 시세가 없으면 추정 불가를 안내한다.

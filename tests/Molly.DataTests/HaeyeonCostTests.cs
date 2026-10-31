@@ -21,20 +21,25 @@ internal static class HaeyeonCostTests
 
     private static readonly string[] s_Weapons = ["해연의 숏소드ZZ", "해연의 그레이트 소드ZZ"];
 
-    private static CraftingTable Crafting(params (string Name, string Category)[] extra)
-    {
-        var rows = s_Weapons.Select(x => (x, "무기"))
-            .Concat(HaeyeonCostRules.ExplicitSlots.Select(x => (x.Key, x.Value.Category)))
-            .Concat(extra)
-            .Select(x => $"{x.Item1},{x.Item2},백금강괴/1");
-        return CraftingCsvReader.Parse("이름,분류,재료1\n" + string.Join("\n", rows), s_Now);
-    }
+    // 게임 데이터와 같은 해연 방어구 15종(재질 3 × 부위 5)·목걸이·반지와 장비 부위(Equipment.EquipmentType)
+    private static readonly (string Name, string Category, string Slot)[] s_Gear =
+    [
+        .. from material in new[] { "비늘 갑옷", "가죽 갑옷", "전투복" }
+           from part in new[] { ("투구", "Hat"), ("상의", "Top"), ("하의", "Bottom"), ("장갑", "Gloves"), ("신발", "Shoes") }
+           select ($"해연의 {material} {part.Item1}ZZ", "방어구", part.Item2),
+        ("해연의 페리도트 네크리스ZZ", "장신구", "Accessory"),
+        ("해연의 페리도트 링ZZ", "장신구", "Ring"),
+    ];
+
+    private static CraftingTable Crafting(params (string Name, string Category, string Slot)[] extra) =>
+        new(s_Weapons.Select(x => (x, "무기", "Weapon")).Concat(s_Gear).Concat(extra)
+            .Select(x => new CraftingRecipe(x.Item1, [new("백금강괴", 1)], x.Item2, x.Item3)));
 
     private static MarketPrice P(string name, long price, long count = 10, bool soldOut = false) =>
         new(name.GetHashCode(), name, "장비", price, count, soldOut, s_Collected);
 
     private static HaeyeonLatestPrices TestLatest() => new(s_Collected,
-        s_Weapons.Select(x => P(x, 12_000)).Concat(HaeyeonCostRules.ExplicitSlots.Keys.Select(x => P(x, 7_000)))
+        s_Weapons.Select(x => P(x, 12_000)).Concat(s_Gear.Select(x => P(x.Name, 7_000)))
             .ToDictionary(x => x.Name, StringComparer.Ordinal));
 
     public static async Task RunAsync()
@@ -138,11 +143,16 @@ internal static class HaeyeonCostTests
         Assert(!mixed.IsComplete && mixed.Missing.SequenceEqual([HaeyeonSlot.Ring]) && !mixed.Prices.ContainsKey(HaeyeonSlot.Ring),
             "유효 시세가 하나도 없는 그룹은 추정 불가로 표시");
 
-        var unmapped = HaeyeonCostPricing.Average(HaeyeonMarketRules.SelectRecipes(Crafting(("해연의 신규 갑옷 투구ZZ", "방어구"), ("해연의 사파이어 링ZZ", "장신구"), ("백금강괴 묶음", "무기"))), latest);
-        Assert(unmapped.Unmapped.SequenceEqual(["해연의 신규 갑옷 투구ZZ", "해연의 사파이어 링ZZ"]) && unmapped.Prices[HaeyeonSlot.Helmet].ItemCount == 3,
-            "부위 매핑이 없는 해연 방어구·장신구는 이름으로 추측하지 않고 평균에서 제외");
-        Assert(HaeyeonCostPricing.SlotOf(new CraftingRecipe("해연의 페리도트 네크리스ZZ", [new("백금강괴", 1)], "방어구")) is null,
-            "매핑된 이름이라도 시트 분류가 다르면 부위를 정하지 않음");
+        var added = Crafting(("해연의 신규 갑옷 투구ZZ", "방어구", "Hat"), ("해연의 엠블럼ZZ", "장비", "Emblem"), ("해연의 비약", "아이템", ""), ("백금강괴 묶음", "무기", "Weapon"));
+        var addedPrices = latest.Prices.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+        addedPrices["해연의 신규 갑옷 투구ZZ"] = P("해연의 신규 갑옷 투구ZZ", 11_000);
+        var unmapped = HaeyeonCostPricing.Average(HaeyeonMarketRules.SelectRecipes(added), latest with { Prices = addedPrices });
+        Assert(unmapped.Unmapped.SequenceEqual(["해연의 엠블럼ZZ", "해연의 비약"]) && unmapped.Prices[HaeyeonSlot.Helmet] is { Average: 8_000m, ItemCount: 4 }
+               && unmapped.Prices[HaeyeonSlot.Weapon].ItemCount == 2,
+            "게임 데이터에 새 해연 방어구가 생기면 이름 매핑 없이 장비 부위로 평균에 들어가고, 부위가 없는 해연 품목·해연이 아닌 품목은 제외");
+        Assert(HaeyeonCostPricing.SlotOf(new CraftingRecipe("해연의 페리도트 네크리스ZZ", [new("백금강괴", 1)], "장신구", "Accessory")) == HaeyeonSlot.Necklace
+               && HaeyeonCostPricing.SlotOf(new CraftingRecipe("잔영의 페리도트 네크리스ZZ", [new("백금강괴", 1)], "장신구", "Accessory")) is null,
+            "장비 부위(Accessory→목걸이)로 슬롯을 정하고 해연이 아닌 장비는 슬롯 없음");
     }
 
     private static void ResponseTests()

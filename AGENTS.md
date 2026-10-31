@@ -6,7 +6,7 @@
 - 콘텐츠의 제품 방향과 채택 기준은 `docs/content-planning-guidelines.md`를 따른다.
 - 콘텐츠는 게임에 접속하지 않은 동안 대신 관찰·기록·알림을 제공하는 편의 기능과, Discord에서 부담 없이 짧게 즐기는 놀이 기능을 중심으로 한다.
 - Google Sheets의 룬·클래스·스킬·생활스킬·제작·가공 등 원본 데이터를 읽고 검증한다. 요청된 범위만 작업한다.
-- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬(`Runes/`), 자음퀴즈 클래스(`Classes/`), 마도저항 기준값(`MagicResistance/`)은 교체를 마쳤다. 배틀 관련 시트(`클래스`·`스킬`·`패시브스킬`·`생활스킬`·`배틀*`)는 배틀용 데이터를 재가공하는 원본이므로 Google Sheets에 그대로 두고 교체하지 않는다.
+- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬(`Runes/`), 자음퀴즈 클래스(`Classes/`), 마도저항 기준값(`MagicResistance/`), 제작 레시피(`Crafting/`)는 교체를 마쳤다. `가공` 시트는 쓰는 기능이 없어 교체하지 않았다. 배틀 관련 시트(`클래스`·`스킬`·`패시브스킬`·`생활스킬`·`배틀*`)는 배틀용 데이터를 재가공하는 원본이므로 Google Sheets에 그대로 두고 교체하지 않는다.
 - 모비라이프 OpenAPI(https://open.mabimobi.life/docs)를 쓰는 작업은 `docs/mobilife-openapi.md`의 이용약관·출처 표기·요청 한도·중단 대비 규칙을 따른다. 기능은 `MobiLife/`의 공용 클라이언트를 도메인 인터페이스 뒤에서만 사용한다.
 - 배틀(자동전투) 기능의 설계는 `docs/battle/README.md`를 따른다. 클래스·스킬 시트에 새 클래스 원본 데이터가 추가되어 배틀 관련 시트에 반영할 때는 `docs/battle/new-class-workflow.md`의 절차를 따른다.
 
@@ -44,8 +44,8 @@
 - Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석(RuneEffectText), 검색(RuneSearch).
 - Classes/: 게임 데이터 저장소의 CombatJob으로 공개된 전직 클래스 목록을 만드는 데이터셋(UnpackClassDataset). `/자음퀴즈` 클래스 종목이 쓴다(배틀은 쓰지 않음).
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
-- Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.
-- HaeyeonCost/: /해연비용계산의 계산 가정·부위 매핑(HaeyeonCostRules)과 게임 데이터 장비 범위로 만든 성장 규칙(HaeyeonGrowth), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). 모비라이프 API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
+- Crafting/: 게임 데이터 저장소의 CraftingRecipe 등으로 만드는 공용 제작 레시피 데이터셋(UnpackCraftingDataset, 여러 기능에서 재사용). 분류·장비 부위·방어구 재질(중갑·경갑·천옷)을 담는다. HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.
+- HaeyeonCost/: /해연비용계산의 계산 가정·부위 매핑(HaeyeonCostRules)과 게임 데이터 장비 범위로 만든 성장 규칙(HaeyeonGrowth), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). 부위 그룹은 제작 레시피의 장비 부위로 정한다. 모비라이프 API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
 - KeywordMarket/: 검색어로 찾은 거래소 아이템 전체를 추적하는 /상자시세알림·/패키지시세알림(시세 변동·신규·사라짐) 판정·저장·정각 수집. 정각 일정은 Market/MarketSchedule 공용.
 - Currency/: 서버별 놀이 재화 `마물 퇴치 증표`의 잔액·원장 저장소(MollyTokenStore), `증표규칙` 시트(TokenRuleCatalog), 표기·이모지(MollyToken). 증표를 주고받는 기능은 이 저장소만 쓴다.
 - Attendance/: 서버별 출석부(/출석부등록·/출석부해제) 저장·출석일 계산(오전 6시 KST 고정)·메시지 갱신·매일 초기화. 출석 기록과 증표 지급은 한 트랜잭션.

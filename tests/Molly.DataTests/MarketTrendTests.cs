@@ -57,10 +57,8 @@ internal static class MarketTrendTests
             "/상자시세·/패키지시세 목록에 변화 이모지만 붙이고 목록 아래에 범례를 붙임. 판정하지 않으면 기존 줄 그대로");
         Assert(KeywordMarketMessages.BuildPriceLines([P(0, 0, 0)]).SequenceEqual(["보물 상자 · **1,000** (매물 100개)"]),
             "변화 이모지가 하나도 없으면 범례를 붙이지 않음");
-        var recipes = HaeyeonMarketRules.SelectRecipes(Molly.Crafting.CraftingCsvReader.Parse("""
-            "이름","분류","재료1"
-            "해연의 숏소드ZZ","무기","백금강괴/5"
-            """, s_Now));
+        var recipes = HaeyeonMarketRules.SelectRecipes(new Molly.Crafting.CraftingTable(
+            [new("해연의 숏소드ZZ", [new("백금강괴", 5)], "무기", "Weapon")]));
         var prices = new Dictionary<string, MarketPrice>
         {
             ["해연의 숏소드ZZ"] = P(3, 4, -1) with { Name = "해연의 숏소드ZZ" },

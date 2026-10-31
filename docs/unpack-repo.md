@@ -138,10 +138,12 @@ sudo bash -c 'set -a; . /etc/molly/molly.env; curl -fsS -H "Authorization: Beare
 | 룬 | `Runes/UnpackRuneDataset.cs` | Rune, Socketable, CombatJob, RuneOption, MagicEffect, Buff, SkillEffect | 요청 8회(버전·시트 7개), 약 27MB | `/룬`, `/스피드퀴즈`, `/진혹거퀴즈`, `/자음퀴즈`(룬 종목) |
 | 클래스 | `Classes/UnpackClassDataset.cs` | CombatJob(전직 클래스 중 `ShowClass=true`만, 견습·미공개 제외) | 요청 2회(버전·시트 1개), 약 34KB | `/자음퀴즈`(클래스·NPC+클래스+지역 종목) |
 | 마도저항 | `MagicResistance/UnpackMagicResistanceDataset.cs` | AbyssDungeonGroup, AbyssDungeonDifficulty, AbyssDungeon, Equipment, EquipmentArcaneResistance | 요청 6회(버전·시트 5개), 약 3.3MB | `/마도저항확인`, `/해연비용계산` |
+| 제작 | `Crafting/UnpackCraftingDataset.cs` | CraftingRecipe(제작 화면에 항상 보이는 레시피만), Equipment, EquipmentMaterialType, EquipmentTool, Consumable | 요청 6회(버전·시트 5개), 약 21MB | `/해연시세`, `/해연시세알림`, `/해연비용계산` |
 
-- 커밋이 바뀐 회차의 요청 수는 커밋 확인 1회에 위 표에서 다시 만드는 데이터의 요청 수를 더한 값이다(현재 세 데이터 모두면 1 + 8 + 2 + 6 = 17회, 약 31MB).
+- 커밋이 바뀐 회차의 요청 수는 커밋 확인 1회에 위 표에서 다시 만드는 데이터의 요청 수를 더한 값이다(현재 네 데이터 모두면 1 + 8 + 2 + 6 + 6 = 23회, 약 52MB).
 
 - 하루 요청 수는 확인 24회(데이터 수와 무관)에 봇 시작과 데이터가 바뀐 날만 다시 만들기 요청이 더해진다. 길드·사용자 수와 무관하고, 명령 실행은 저장소를 호출하지 않는다.
-- 큰 시트(MagicEffect·Buff·SkillEffect, 각 5~10MB)는 한 번에 하나씩 받아 필요한 행만 남기고 바로 버린다.
-- 실제 저장소로 확인: `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --runes-live runes.tsv`(룬), `-- --unpack-data-live`(클래스·마도저항)
+- 큰 시트(MagicEffect·Buff·SkillEffect 각 5~10MB, Consumable 약 13MB)는 한 번에 하나씩 받아 필요한 행만 남기고 바로 버린다.
+- 실제 저장소로 확인: `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --runes-live runes.tsv`(룬), `-- --unpack-data-live`(클래스·마도저항·제작)
 - Google Sheets의 배틀 원본(`클래스`·`스킬`·`패시브스킬`·`생활스킬` 탭)은 배틀용 데이터를 재가공하는 원본이라 언팩 데이터로 바꾸지 않는다.
+- Google Sheets의 `제작` 탭은 제작 데이터로 교체해 읽지 않는다. `가공` 탭은 쓰는 기능이 없어 교체하지 않았다(게임 데이터는 `Altering` 시트이며, 2026-10-31 기준 결과물 수량 `Result.Amount`가 0으로 나와 쓰려면 먼저 확인해야 한다).

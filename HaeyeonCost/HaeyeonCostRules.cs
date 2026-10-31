@@ -43,31 +43,22 @@ public static class HaeyeonCostRules
         _ => "반지",
     };
 
-    // 무기는 제작 시트 분류가 '무기'인 해연 완제품 전체. 방어구·장신구는 시트 분류만으로 부위를 알 수 없어 이름을 명시적으로 매핑합니다.
-    // 시트에 새 방어구·장신구가 생기면 여기에 추가해야 평균에 들어갑니다(매핑 없는 품목은 평균에서 빠집니다).
-    public const string WeaponCategory = "무기";
-
-    public static readonly IReadOnlyDictionary<string, (string Category, HaeyeonSlot Slot)> ExplicitSlots =
-        new Dictionary<string, (string, HaeyeonSlot)>(StringComparer.Ordinal)
-        {
-            ["해연의 비늘 갑옷 투구ZZ"] = ("방어구", HaeyeonSlot.Helmet),
-            ["해연의 비늘 갑옷 상의ZZ"] = ("방어구", HaeyeonSlot.Top),
-            ["해연의 비늘 갑옷 하의ZZ"] = ("방어구", HaeyeonSlot.Bottom),
-            ["해연의 비늘 갑옷 장갑ZZ"] = ("방어구", HaeyeonSlot.Gloves),
-            ["해연의 비늘 갑옷 신발ZZ"] = ("방어구", HaeyeonSlot.Shoes),
-            ["해연의 가죽 갑옷 투구ZZ"] = ("방어구", HaeyeonSlot.Helmet),
-            ["해연의 가죽 갑옷 상의ZZ"] = ("방어구", HaeyeonSlot.Top),
-            ["해연의 가죽 갑옷 하의ZZ"] = ("방어구", HaeyeonSlot.Bottom),
-            ["해연의 가죽 갑옷 장갑ZZ"] = ("방어구", HaeyeonSlot.Gloves),
-            ["해연의 가죽 갑옷 신발ZZ"] = ("방어구", HaeyeonSlot.Shoes),
-            ["해연의 전투복 투구ZZ"] = ("방어구", HaeyeonSlot.Helmet),
-            ["해연의 전투복 상의ZZ"] = ("방어구", HaeyeonSlot.Top),
-            ["해연의 전투복 하의ZZ"] = ("방어구", HaeyeonSlot.Bottom),
-            ["해연의 전투복 장갑ZZ"] = ("방어구", HaeyeonSlot.Gloves),
-            ["해연의 전투복 신발ZZ"] = ("방어구", HaeyeonSlot.Shoes),
-            ["해연의 페리도트 네크리스ZZ"] = ("장신구", HaeyeonSlot.Necklace),
-            ["해연의 페리도트 링ZZ"] = ("장신구", HaeyeonSlot.Ring),
-        };
+    /// <summary>
+    /// 게임 데이터 장비 부위(Equipment.EquipmentType, 제작 레시피의 Slot) → 해연 슬롯. 장비가 아니거나 다른 부위(엠블럼 등)면 null입니다.
+    /// 무기는 종류와 상관없이 하나의 그룹이고, 방어구는 재질(중갑·경갑·천옷)과 상관없이 부위별 그룹입니다.
+    /// </summary>
+    public static HaeyeonSlot? SlotOf(string equipmentType) => equipmentType switch
+    {
+        "Weapon" => HaeyeonSlot.Weapon,
+        "Hat" => HaeyeonSlot.Helmet,
+        "Top" => HaeyeonSlot.Top,
+        "Bottom" => HaeyeonSlot.Bottom,
+        "Gloves" => HaeyeonSlot.Gloves,
+        "Shoes" => HaeyeonSlot.Shoes,
+        "Accessory" => HaeyeonSlot.Necklace,
+        "Ring" => HaeyeonSlot.Ring,
+        _ => null,
+    };
 }
 
 /// <summary>

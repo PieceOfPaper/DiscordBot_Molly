@@ -32,6 +32,12 @@ public sealed class HaeyeonCostCommand : InteractionModuleBase<SocketInteraction
             await RespondAsync(UnpackDataMessages.NoData(catalog.Name), ephemeral: true);
             return;
         }
+        var crafting = Program.instance.Crafting;
+        if (crafting.Data is not { } table)
+        {
+            await RespondAsync(UnpackDataMessages.NoData(crafting.Name), ephemeral: true);
+            return;
+        }
         HaeyeonGrowth growth;
         try { growth = HaeyeonGrowth.From(data); }
         catch (InvalidDataException ex)
@@ -43,7 +49,7 @@ public sealed class HaeyeonCostCommand : InteractionModuleBase<SocketInteraction
         await DeferAsync();
         var monitor = Program.instance.HaeyeonMarket;
         var latest = await monitor.Store.LoadLatestPricesAsync();
-        var response = Build(current, target, growth, Program.instance.Crafting.Current, latest, monitor.Attribution, DateTimeOffset.UtcNow);
+        var response = Build(current, target, growth, table, latest, monitor.Attribution, DateTimeOffset.UtcNow);
         if (response.Embed is { } embed) await FollowupAsync(embed: embed);
         else await FollowupAsync(response.Message);
     }

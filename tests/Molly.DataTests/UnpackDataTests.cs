@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Molly.Classes;
+using Molly.Crafting;
 using Molly.HaeyeonCost;
 using Molly.MagicResistance;
 using Molly.Unpack;
@@ -56,16 +57,35 @@ internal static class UnpackDataTests
             """{"Id":"SwordAndShield_20_1","DisplayName":"잔영의 숏소드ZZ","EquipmentType":"Weapon","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Weapon_1"}""",
             """{"Id":"SwordAndShield_20_2","DisplayName":"해연의 숏소드ZZ","EquipmentType":"Weapon","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Weapon_2"}""",
             """{"Id":"Bow_20_2","DisplayName":"해연의 숏보우ZZ","EquipmentType":"Weapon","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Weapon_2"}""",
-            """{"Id":"HeavyArmor_Head_20_2","DisplayName":"해연의 비늘 갑옷 투구ZZ","EquipmentType":"Hat","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Armor_2"}""",
+            """{"Id":"HeavyArmor_Head_20_2","DisplayName":"해연의 비늘 갑옷 투구ZZ","EquipmentType":"Hat","MaterialTypeSheetData":"HeavyArmor","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Armor_2"}""",
             """{"Id":"HeavyArmor_Foot_20_2","DisplayName":"해연의 비늘 갑옷 신발ZZ","EquipmentType":"Shoes","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Armor_2"}""",
             """{"Id":"Accessory_20_2","DisplayName":"해연의 페리도트 네크리스ZZ","EquipmentType":"Accessory","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Necklace_2"}""",
-            """{"Id":"Ring_20_2","DisplayName":"해연의 페리도트 링ZZ","EquipmentType":"Ring","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Ring_2"}"""),
+            """{"Id":"Ring_20_2","DisplayName":"해연의 페리도트 링ZZ","EquipmentType":"Ring","MaterialTypeSheetData":"Ring","EquipmentArcaneResistance":"ArcaneResistance_Tier20_Ring_2"}"""),
         ["EquipmentArcaneResistance"] = Sheet("EquipmentArcaneResistance",
             """{"Id":"ArcaneResistance_Tier20_Weapon_1","MinValue":280,"MaxValue":840}""",
             """{"Id":"ArcaneResistance_Tier20_Weapon_2","MinValue":840,"MaxValue":1400}""",
             """{"Id":"ArcaneResistance_Tier20_Armor_2","MinValue":420,"MaxValue":700}""",
             """{"Id":"ArcaneResistance_Tier20_Necklace_2","MinValue":420,"MaxValue":700}""",
             """{"Id":"ArcaneResistance_Tier20_Ring_2","MinValue":420,"MaxValue":700}"""),
+        ["CraftingRecipe"] = Sheet("CraftingRecipe",
+            """{"Id":"SwordAndShield_20_2","DisplayType":"Show","FacilityType":"Crafting_Metalwork","EquipmentResultId":"SwordAndShield_20_2","EquipmentToolResultId":0,"ConsumableResults":[],"FakeItemIngredients":[],"FakeItemResults":[],"ConsumableIngredients":[{"Id":"BarPlatinum","Amount":5},{"Id":"Material_Abyss_Runda_02","Amount":15}]}""",
+            // 레시피 아이템이 있어야 보이는 절반 재료 레시피, 같은 결과물의 다른 조합, 숨김·퀘스트 레시피는 담지 않습니다.
+            """{"Id":"SwordAndShield_20_2_Recipe","DisplayType":"Consumable","FacilityType":"Crafting_Metalwork","EquipmentResultId":"SwordAndShield_20_2","ConsumableResults":[],"ConsumableIngredients":[{"Id":"Recipe_SwordAndShield_20_1","Amount":1},{"Id":"BarPlatinum","Amount":5}]}""",
+            """{"Id":"SwordAndShield_20_2_1","DisplayType":"Show","FacilityType":"Crafting_Metalwork","EquipmentResultId":"SwordAndShield_20_2","ConsumableResults":[],"ConsumableIngredients":[{"Id":"BarPlatinum","Amount":1}]}""",
+            """{"Id":"Hidden_1","DisplayType":"Hide","FacilityType":"Crafting_Metalwork","EquipmentResultId":"Bow_20_2","ConsumableResults":[],"ConsumableIngredients":[{"Id":"BarPlatinum","Amount":1}]}""",
+            """{"Id":"Quest_1","DisplayType":"Show","FacilityType":"Crafting_FoodCooking","EquipmentResultId":"None","ConsumableResults":[{"Id":"Steak","Amount":1}],"FakeItemIngredients":[{"SheetId":"Q_Meat","Amount":1}],"ConsumableIngredients":[]}""",
+            """{"Id":"HeavyArmor_Head_20_2","DisplayType":"Show","FacilityType":"Crafting_Clothwork","EquipmentResultId":"HeavyArmor_Head_20_2","ConsumableResults":[],"ConsumableIngredients":[{"Id":"BarPlatinum","Amount":4}]}""",
+            """{"Id":"Ring_20_2","DisplayType":"Show","FacilityType":"Crafting_Handiwork","EquipmentResultId":"Ring_20_2","ConsumableResults":[],"ConsumableIngredients":[{"Id":"Peridot_ZZ","Amount":1},{"Id":"BarPlatinum","Amount":4}]}""",
+            """{"Id":"FishingRod_Tier1","DisplayType":"Show","FacilityType":"Crafting_Handiwork","EquipmentResultId":0,"EquipmentToolResultId":"FishingRod_Tier1","ConsumableResults":[],"ConsumableIngredients":[{"Id":"BarPlatinum","Amount":2}]}""",
+            """{"Id":"Potion_1","DisplayType":"Show","FacilityType":"Crafting_HerbPotion","EquipmentResultId":0,"ConsumableResults":[{"Id":"Potion","Amount":5}],"ConsumableIngredients":[{"Id":"Herb","Amount":3}]}""",
+            """{"Id":"Steak_1","DisplayType":"Show","FacilityType":"Crafting_FoodCooking","EquipmentResultId":0,"ConsumableResults":[{"Id":"Steak","Amount":1}],"ConsumableIngredients":[{"Id":"Herb","Amount":1}]}"""),
+        ["EquipmentMaterialType"] = Sheet("EquipmentMaterialType",
+            """{"Id":"None","DisplayName":"."}""", """{"Id":"HeavyArmor","DisplayName":"중갑"}""", """{"Id":"Cloth","DisplayName":"천옷"}""", """{"Id":"Ring","DisplayName":"반지"}"""),
+        ["EquipmentTool"] = Sheet("EquipmentTool", """{"Id":"FishingRod_Tier1","DisplayName":"낚싯대"}"""),
+        ["Consumable"] = Sheet("Consumable",
+            """{"Id":"BarPlatinum","DisplayName":"백금강괴"}""", """{"Id":"Material_Abyss_Runda_02","DisplayName":"포식의 마력석"}""",
+            """{"Id":"Recipe_SwordAndShield_20_1","DisplayName":"레시피: 해연의 숏소드ZZ"}""", """{"Id":"Peridot_ZZ","DisplayName":"세공된 페리도트ZZ"}""",
+            """{"Id":"Herb","DisplayName":"약초"}""", """{"Id":"Potion","DisplayName":"생명력 포션"}""", """{"Id":"Steak","DisplayName":"스테이크"}"""),
     };
 
     private static string Sheet(string name, params string[] rows) => $$"""{"sheet":"{{name}}","rows":[{{string.Join(",", rows)}}]}""";
@@ -74,6 +94,7 @@ internal static class UnpackDataTests
     {
         await ClassTests();
         await MagicResistanceDatasetTests();
+        await CraftingDatasetTests();
         await SharedCommitTests();
     }
 
@@ -130,6 +151,39 @@ internal static class UnpackDataTests
             "게임 데이터의 해연 장비 범위로 해연 비용 계산 범위 7,200~10,000을 만듦");
         var offStep = new Dictionary<ArcaneEquipmentPart, EquipmentResistanceRange>(data.HaeyeonEquipment) { [ArcaneEquipmentPart.Weapon] = new(840, 1_414) };
         Assert(ThrowsInvalid(() => new HaeyeonGrowth(offStep)), "범위가 감정 단위(무기 28)와 맞지 않으면 계산하지 않음");
+    }
+
+    private static async Task CraftingDatasetTests()
+    {
+        var dataset = new UnpackCraftingDataset();
+        var requested = new List<string>();
+        var table = await dataset.BuildAsync(Fetcher(s_Sheets, requested), default);
+        Assert(table.Items.Select(x => x.Name).SequenceEqual(["해연의 숏소드ZZ", "해연의 비늘 갑옷 투구ZZ", "해연의 페리도트 링ZZ", "낚싯대", "생명력 포션", "스테이크"]),
+            "제작 화면에 항상 보이는 레시피만 담고(레시피 아이템 필요·숨김·퀘스트 제외), 같은 결과물은 시트 순서상 첫 레시피만");
+        Assert(table.ByName["해연의 숏소드ZZ"] is { Category: "무기", Slot: "Weapon", ArmorType: "", Quantity: 1, Id: "SwordAndShield_20_2" } r
+               && r.Ingredients.SequenceEqual([new CraftingIngredient("백금강괴", 5), new CraftingIngredient("포식의 마력석", 15)]),
+            "결과물·재료 이름은 각 시트의 DisplayName, 무기는 장비 부위 Weapon");
+        Assert(table.ByName["해연의 비늘 갑옷 투구ZZ"] is { Category: "방어구", Slot: "Hat", ArmorType: "중갑" }
+               && table.ByName["해연의 페리도트 링ZZ"] is { Category: "장신구", Slot: "Ring", ArmorType: "" },
+            "방어구는 재질(EquipmentMaterialType.DisplayName)을 담고, 장신구는 재질을 담지 않음");
+        Assert(table.ByName["낚싯대"].Category == "도구" && table.ByName["생명력 포션"] is { Category: "아이템", Quantity: 5, Slot: "" } && table.ByName["스테이크"].Category == "음식",
+            "도구·음식·아이템 분류와 결과물 수량");
+        Assert(requested.SequenceEqual(["CraftingRecipe", "Equipment", "EquipmentMaterialType", "EquipmentTool", "Consumable"]), "필요한 시트만 받음");
+
+        var missingName = new Dictionary<string, string>(s_Sheets) { ["Consumable"] = s_Sheets["Consumable"].Replace("\"Herb\"", "\"Herb2\"") };
+        await AssertThrowsAsync<InvalidDataException>(() => dataset.BuildAsync(Fetcher(missingName), default), "재료가 Consumable 시트에 없으면 검증 실패");
+        var missingMaterial = new Dictionary<string, string>(s_Sheets) { ["EquipmentMaterialType"] = s_Sheets["EquipmentMaterialType"].Replace("\"HeavyArmor\"", "\"LightArmor\"") };
+        await AssertThrowsAsync<InvalidDataException>(() => dataset.BuildAsync(Fetcher(missingMaterial), default), "방어구 재질을 찾지 못하면 검증 실패");
+        var zero = new Dictionary<string, string>(s_Sheets) { ["CraftingRecipe"] = s_Sheets["CraftingRecipe"].Replace("{\"Id\":\"Herb\",\"Amount\":3}", "{\"Id\":\"Herb\",\"Amount\":0}") };
+        await AssertThrowsAsync<InvalidDataException>(() => dataset.BuildAsync(Fetcher(zero), default), "재료 수량이 0이면 검증 실패");
+        var hidden = new Dictionary<string, string>(s_Sheets) { ["CraftingRecipe"] = s_Sheets["CraftingRecipe"].Replace("\"DisplayType\":\"Show\"", "\"DisplayType\":\"Hide\"") };
+        await AssertThrowsAsync<InvalidDataException>(() => dataset.BuildAsync(Fetcher(hidden), default), "보이는 레시피가 하나도 없으면 검증 실패");
+
+        var restored = Restore(dataset, table);
+        Assert(restored.Items.Count == table.Items.Count && restored.Items.Zip(table.Items).All(x =>
+                (x.First.Name, x.First.Category, x.First.Slot, x.First.ArmorType, x.First.Quantity, x.First.Id) ==
+                (x.Second.Name, x.Second.Category, x.Second.Slot, x.Second.ArmorType, x.Second.Quantity, x.Second.Id) && x.First.Ingredients.SequenceEqual(x.Second.Ingredients)),
+            "제작 캐시 저장·복원");
     }
 
     private static async Task SharedCommitTests()
