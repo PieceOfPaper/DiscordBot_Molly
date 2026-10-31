@@ -8,6 +8,8 @@ public interface IQuizRoom
     Task<ulong> SendAsync(string text, CancellationToken ct);
     Task DeleteAsync(ulong messageId, CancellationToken ct);
     Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct);
+    // PNG를 Embed 이미지로 붙여 보냅니다(`/이미지퀴즈`).
+    Task<ulong> SendEmbedAsync(string title, string description, uint color, byte[] image, CancellationToken ct);
     Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct);
     Task MarkEndedAsync(CancellationToken ct);
     Task LockAsync(CancellationToken ct);
@@ -117,7 +119,9 @@ public sealed class SpeedQuizService
                 var questionTitle = $"🧩 문제 {i + 1}/{questions.Length}";
                 var body = question.Prompt + (showConsonants ? $"\n\n💡 자음 힌트: {QuizQuestions.ConsonantHint(question.Answer)}" : "");
                 var questionDescription = $"⏱️ 남은 시간: **{seconds}초**\n\n{body}";
-                var messageId = await room.SendEmbedAsync(questionTitle, questionDescription, 0x3498DB, ct);
+                var messageId = question.Image is { } image
+                    ? await room.SendEmbedAsync(questionTitle, questionDescription, 0x3498DB, image, ct)
+                    : await room.SendEmbedAsync(questionTitle, questionDescription, 0x3498DB, ct);
                 var round = new QuizRound(question.Answer, messageId, TimeSpan.FromSeconds(seconds), clock);
                 Volatile.Write(ref session.Round, round);
                 using var timerStop = CancellationTokenSource.CreateLinkedTokenSource(ct);

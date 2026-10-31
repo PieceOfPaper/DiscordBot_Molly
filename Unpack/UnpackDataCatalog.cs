@@ -14,6 +14,10 @@ public interface IUnpackDataset<T> where T : class
     string CacheName { get; }
     /// <summary>필요한 시트를 받아 데이터를 만듭니다. 검증에 실패하면 InvalidDataException을 던집니다.</summary>
     Task<T> BuildAsync(UnpackSheetFetcher sheets, CancellationToken ct);
+    /// <summary>
+    /// 시트 밖의 저장소 파일(월드 배치 등)도 읽는 데이터는 이 메서드를 구현합니다. 보관소는 항상 이 메서드를 부르며, 기본은 시트만 씁니다.
+    /// </summary>
+    Task<T> BuildAsync(UnpackSheetFetcher sheets, UnpackFileFetcher files, CancellationToken ct) => BuildAsync(sheets, ct);
     void Write(Utf8JsonWriter writer, T data);
     T Read(JsonElement data);
     string Describe(T data);
@@ -30,7 +34,7 @@ public sealed record UnpackRefreshResult(UnpackRepoStatus Status, bool Changed =
 
 /// <summary>
 /// 게임 데이터 저장소에서 만든 데이터 하나의 공용 보관소.
-/// - 시작 시 디스크 캐시를 읽고, 이후 <see cref="UnpackDataCatalogs.RunAsync"/>가 주기적으로 시트 폴더의 마지막 커밋만 확인합니다(모든 데이터 합쳐 요청 1회).
+/// - 시작 시 디스크 캐시를 읽고, 이후 <see cref="UnpackDataCatalogs.RunAsync"/>가 주기적으로 version.json의 마지막 커밋만 확인합니다(모든 데이터 합쳐 요청 1회).
 /// - 봇이 시작된 뒤 첫 확인은 커밋과 상관없이 항상 다시 만들어 변환 규칙이 바뀐 코드가 바로 반영되게 합니다.
 ///   캐시는 그 사이와 저장소에 접근하지 못할 때 쓰는 마지막 정상 데이터입니다.
 /// - 이후에는 커밋이 바뀌었을 때만 필요한 시트를 받아 다시 만들고, 검증·캐시 저장까지 성공해야 교체합니다. 실패하면 마지막 정상 데이터를 유지합니다.
@@ -49,6 +53,8 @@ public sealed class UnpackDataCatalog<T> : IUnpackDataCatalog where T : class
     private UnpackSnapshot<T>? m_Current;
     // 이번 실행에서 저장소로 직접 만든 데이터인지. 캐시에서 읽은 데이터는 이전 코드의 변환 규칙으로 만들었을 수 있습니다.
     private bool m_BuiltThisRun;
+    // 파일이 없어 최신 커밋으로 대신 만든 버전 커밋. 버전 커밋이 이 값인 동안은 다시 만들지 않습니다.
+    private string? m_MissingVersionCommit;
 
     public UnpackDataCatalog(UnpackRepoClient client, IUnpackDataset<T> dataset, string dataDirectory, Action<string>? log = null, Func<DateTimeOffset>? now = null)
     {
@@ -84,15 +90,15 @@ public sealed class UnpackDataCatalog<T> : IUnpackDataCatalog where T : class
         finally { m_Gate.Release(); }
     }
 
-    /// <summary>시트 폴더의 마지막 커밋을 확인하고, 바뀌었거나 데이터가 없을 때만 다시 만듭니다.</summary>
+    /// <summary>데이터 버전 커밋을 확인하고, 바뀌었거나 데이터가 없을 때만 다시 만듭니다.</summary>
     public async Task<UnpackRefreshResult> RefreshAsync(CancellationToken ct = default)
     {
-        var head = await m_Client.GetLatestCommitForPathAsync(UnpackSheets.ClientDirectory, ct);
-        if (!head.IsSuccess) return Failed(head.Status, $"시트 커밋 확인 실패({head.Status}): {head.Detail}", head.RetryAfter);
+        var head = await m_Client.GetLatestCommitForPathAsync(UnpackDataCatalogs.VersionPath, ct);
+        if (!head.IsSuccess) return Failed(head.Status, $"데이터 버전 확인 실패({head.Status}): {head.Detail}", head.RetryAfter);
         return await RefreshAsync(head.Value!, ct);
     }
 
-    /// <summary>이미 확인한 시트 폴더 커밋으로 갱신합니다. 여러 데이터가 커밋 확인 한 번을 함께 씁니다(<see cref="UnpackDataCatalogs.RunAsync"/>).</summary>
+    /// <summary>이미 확인한 데이터 버전 커밋으로 갱신합니다. 여러 데이터가 커밋 확인 한 번을 함께 씁니다(<see cref="UnpackDataCatalogs.RunAsync"/>).</summary>
     public async Task<UnpackRefreshResult> RefreshAsync(string commit, CancellationToken ct)
     {
         await m_Gate.WaitAsync(ct);
@@ -110,12 +116,26 @@ public sealed class UnpackDataCatalog<T> : IUnpackDataCatalog where T : class
     private async Task<UnpackRefreshResult> RefreshLockedAsync(string commit, CancellationToken ct)
     {
         var current = Current;
-        if (current is not null && current.Commit == commit && m_BuiltThisRun)
+        if (current is not null && m_BuiltThisRun && (current.Commit == commit || m_MissingVersionCommit == commit))
         {
             LastCheckedAt = m_Now();
             return new UnpackRefreshResult(UnpackRepoStatus.Success);
         }
 
+        var result = await BuildAsync(commit, ct);
+        // 데이터가 하나도 없는데 버전 커밋에 파일이 없으면(version.json이 덤프보다 먼저 올라간 경우 등) 브랜치 최신 커밋으로 한 번 더 만듭니다.
+        // 그 버전 커밋은 기억해 두고, 버전 커밋이 바뀔 때까지 다시 시도하지 않습니다.
+        if (result.Status != UnpackRepoStatus.NotFound || Current is not null) return result;
+        var head = await m_Client.GetHeadCommitAsync(ct);
+        if (!head.IsSuccess || head.Value == commit) return result;
+        m_Log($"버전 커밋 {commit[..7]}에 파일이 없어 데이터가 없으므로 최신 커밋 {head.Value![..7]} 기준으로 만듭니다.");
+        result = await BuildAsync(head.Value, ct);
+        if (result.IsSuccess) m_MissingVersionCommit = commit;
+        return result;
+    }
+
+    private async Task<UnpackRefreshResult> BuildAsync(string commit, CancellationToken ct)
+    {
         // 표시용 패치 정보. 읽지 못해도 데이터는 만듭니다.
         var version = await m_Client.GetVersionAsync(commit, ct);
         T data;
@@ -126,6 +146,12 @@ public sealed class UnpackDataCatalog<T> : IUnpackDataCatalog where T : class
                 var file = await m_Client.GetFileAsync(UnpackSheets.PathOf(sheet), commit, token);
                 if (!file.IsSuccess) throw new UnpackDataException(file.Status, $"{sheet} 시트 받기 실패({file.Status}): {file.Detail}");
                 return UnpackSheets.Parse(sheet, file.Value!);
+            }, async (path, token) =>
+            {
+                var file = await m_Client.GetFileAsync(path, commit, token);
+                if (!file.IsSuccess) throw new UnpackDataException(file.Status, $"{path} 받기 실패({file.Status}): {file.Detail}");
+                try { return JsonDocument.Parse(file.Value!); }
+                catch (JsonException ex) { throw new InvalidDataException($"{path} JSON 해석 실패: {ex.Message}", ex); }
             }, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -215,11 +241,16 @@ public interface IUnpackDataCatalog
 }
 
 /// <summary>
-/// 여러 데이터 보관소의 주기 확인. 데이터 수와 상관없이 확인 1회당 시트 폴더 커밋 요청은 1회이고,
-/// 같은 커밋으로 각 데이터를 차례로 갱신합니다(바뀐 데이터만 시트를 받습니다).
+/// 여러 데이터 보관소의 주기 확인. 데이터 수와 상관없이 확인 1회당 version.json 커밋 요청은 1회이고,
+/// 같은 커밋으로 각 데이터를 차례로 갱신합니다(바뀐 데이터만 시트·파일을 받습니다).
 /// </summary>
 public static class UnpackDataCatalogs
 {
+    /// <summary>
+    /// 데이터 버전 파일. 저장소 갱신 스크립트가 덤프의 마지막 커밋에 올리므로, 이 파일을 마지막으로 바꾼 커밋에는
+    /// 시트·월드 데이터·이미지가 모두 같은 버전으로 들어 있습니다. 모든 파일을 이 커밋 기준으로 받습니다.
+    /// </summary>
+    public const string VersionPath = UnpackRepoClient.VersionPath;
     public static readonly TimeSpan CheckInterval = TimeSpan.FromHours(1);
     public static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(10);
 
@@ -251,12 +282,12 @@ public static class UnpackDataCatalogs
         catch (Exception ex) { Console.WriteLine($"[게임데이터] 주기 확인 중단: {ex}"); }
     }
 
-    /// <summary>시트 폴더 커밋을 한 번 확인하고 모든 데이터를 그 커밋으로 갱신합니다.</summary>
+    /// <summary>데이터 버전 커밋을 한 번 확인하고 모든 데이터를 그 커밋으로 갱신합니다. 목록 순서대로 갱신하므로 다른 데이터에 기대는 보관소는 뒤에 둡니다.</summary>
     public static async Task<IReadOnlyList<UnpackRefreshResult>> RefreshAllAsync(UnpackRepoClient client, IReadOnlyList<IUnpackDataCatalog> catalogs, CancellationToken ct)
     {
-        var head = await client.GetLatestCommitForPathAsync(UnpackSheets.ClientDirectory, ct);
+        var head = await client.GetLatestCommitForPathAsync(VersionPath, ct);
         if (!head.IsSuccess)
-            return catalogs.Select(x => x.Fail(head.Status, $"시트 커밋 확인 실패({head.Status}): {head.Detail}", head.RetryAfter)).ToArray();
+            return catalogs.Select(x => x.Fail(head.Status, $"데이터 버전 확인 실패({head.Status}): {head.Detail}", head.RetryAfter)).ToArray();
         var results = new List<UnpackRefreshResult>();
         foreach (var catalog in catalogs)
             results.Add(await catalog.RefreshAsync(head.Value!, ct));

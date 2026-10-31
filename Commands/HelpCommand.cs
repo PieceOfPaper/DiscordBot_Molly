@@ -12,6 +12,7 @@ public sealed class HelpCommand : InteractionModuleBase<SocketInteractionContext
         [Summary("주제", "자세한 사용법을 볼 컨텐츠 (비우면 전체 명령어 목록)")]
         [Choice("스피드퀴즈", "스피드퀴즈")]
         [Choice("자음퀴즈", "자음퀴즈")]
+        [Choice("이미지퀴즈", "이미지퀴즈")]
         [Choice("진혹거퀴즈", "진혹거퀴즈")]
         [Choice("눈치게임", "눈치게임")]
         [Choice("라이어게임", "라이어게임")]

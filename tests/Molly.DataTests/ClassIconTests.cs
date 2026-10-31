@@ -13,6 +13,12 @@ internal static class ClassIconTests
             var path = ClassIcons.GetPath(id);
             Assert(path is not null && File.ReadAllBytes(path).AsSpan().StartsWith(PngSignature), "클래스 아이콘 PNG 존재: " + id);
         }
+        string[] combatJobs = ["HighWarrior", "GreatSwordWarrior", "SwordMaster", "Knight", "HighArcher", "Arbalist", "LongBowMan", "HighMage", "FireMage", "IceMage",
+            "LightningMage", "HighHealer", "Priest", "Monk", "DarkShaman", "HighBard", "Dancer", "BattleMusician", "HighThief", "Fighter", "DualBlades"];
+        var mapped = combatJobs.Select(ClassIcons.FromCombatJob).ToArray();
+        Assert(mapped.All(x => x is not null && ClassIcons.GetPath(x) is not null) && mapped.Distinct().Count() == ClassIcons.ClassIds.Count,
+            "공개된 전직 클래스(CombatJob.Id) 21개가 서로 다른 클래스 아이콘에 연결");
+        Assert(ClassIcons.FromCombatJob("Warrior") is null && ClassIcons.FromCombatJob("warrior") is null, "견습 클래스·아이콘 ID는 게임 데이터 클래스 매핑 없음");
         Assert(ClassIcons.AttachmentUrl("warrior") == "attachment://warrior.png", "클래스 아이콘 첨부 주소");
         Assert(ClassIcons.GetPath("unknown") is null && ClassIcons.GetPath("../hollymolly") is null && ClassIcons.GetPath("Warrior") is null
             && ClassIcons.CreateAttachment("unknown") is null, "목록 밖 클래스 ID는 아이콘 없음");

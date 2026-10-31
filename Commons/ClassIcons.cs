@@ -18,6 +18,23 @@ public static class ClassIcons
         "thief", "fighter", "dual_blade",
     ];
 
+    /// <summary>
+    /// 게임 데이터 CombatJob.Id → 아이콘 ID. 게임 데이터 클래스 목록으로 아이콘을 찾을 때(`/이미지퀴즈`) 쓴다.
+    /// 새 클래스가 공개되면 아이콘 파일과 함께 추가한다. 없는 클래스는 아이콘 없이 다룬다.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> s_CombatJobIds = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["HighWarrior"] = "warrior", ["GreatSwordWarrior"] = "greatsword_warrior", ["SwordMaster"] = "swordsman", ["Knight"] = "knight",
+        ["HighArcher"] = "archer", ["Arbalist"] = "crossbowman", ["LongBowMan"] = "longbowman",
+        ["HighMage"] = "mage", ["FireMage"] = "fire_mage", ["IceMage"] = "ice_mage", ["LightningMage"] = "lightning_mage",
+        ["HighHealer"] = "healer", ["Priest"] = "priest", ["Monk"] = "monk", ["DarkShaman"] = "dark_mage",
+        ["HighBard"] = "bard", ["Dancer"] = "dancer", ["BattleMusician"] = "musician",
+        ["HighThief"] = "thief", ["Fighter"] = "fighter", ["DualBlades"] = "dual_blade",
+    };
+
+    /// <summary>게임 데이터 CombatJob.Id에 해당하는 아이콘 ID. 매핑이 없으면 null.</summary>
+    public static string? FromCombatJob(string combatJobId) => s_CombatJobIds.GetValueOrDefault(combatJobId);
+
     public static string DirectoryPath => Path.Combine(AppContext.BaseDirectory, "assets", "class_icons");
 
     /// <summary>첨부 파일 이름. 임베드에서는 <see cref="AttachmentUrl"/>로 참조한다.</summary>

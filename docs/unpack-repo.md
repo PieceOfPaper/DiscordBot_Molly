@@ -108,11 +108,11 @@ sudo bash -c 'set -a; . /etc/molly/molly.env; curl -fsS -H "Authorization: Beare
 | 파일 | 역할 |
 | --- | --- |
 | `UnpackRepoOptions.cs` | 설정 읽기와 검증 |
-| `UnpackRepoClient.cs` | 인증 헤더, 최신 커밋 SHA·경로별 마지막 커밋·파일 원본·`version.json` 조회, 401/403/404/한도 처리 |
-| `UnpackSheets.cs` | `Patch/Sheetdata/client/<시트>.json` 형식 확인과 행·참조 값 읽기 도우미 |
+| `UnpackRepoClient.cs` | 인증 헤더, 최신 커밋 SHA·경로별 마지막 커밋·파일 원본·폴더 항목과 blob SHA(`GetTreeAsync`)·`version.json` 조회, 401/403/404/한도 처리 |
+| `UnpackSheets.cs` | `Patch/Sheetdata/client/<시트>.json` 형식 확인과 행·참조 값 읽기 도우미, 시트·파일 받기 위임(`UnpackSheetFetcher`·`UnpackFileFetcher`) |
 | `UnpackDataCatalog.cs` | 기능별 데이터 보관소(`IUnpackDataset<T>`): 디스크 캐시, 검증 후 교체, 데이터 없음 안내 문구(`UnpackDataMessages`). 여러 보관소의 주기 확인(`UnpackDataCatalogs`)은 커밋 확인 한 번을 함께 쓴다 |
 
-- 한 번의 갱신 안에서는 `GetHeadCommitAsync`로 받은 SHA를 모든 파일 조회의 `gitRef`로 넘긴다. 푸시 도중 다른 커밋의 파일이 섞이지 않는다.
+- 한 번의 갱신 안에서는 `version.json`을 마지막으로 바꾼 커밋 SHA(`GetLatestCommitForPathAsync`)를 모든 파일 조회의 `gitRef`로 넘긴다. 푸시 도중 다른 커밋의 파일이 섞이지 않는다.
 - 파일 원본은 raw 응답(`application/vnd.github.raw+json`)으로 받는다. 파일당 100MB까지 가능하다.
 - 요청 수: 확인 1회당 커밋 SHA 1회(+ 바뀌었을 때 `version.json` 1회와 필요한 파일 수). 길드 수와 무관하다. 인증 요청 한도는 시간당 5,000회다.
 
@@ -123,27 +123,33 @@ sudo bash -c 'set -a; . /etc/molly/molly.env; curl -fsS -H "Authorization: Beare
 | 단계 | 동작 |
 | --- | --- |
 | 시작 | `MOLLY_DATA_DIR/unpack/<데이터>.json` 캐시를 먼저 읽어 바로 쓴다(요청 0회). 이어서 `RunAsync`가 백그라운드로 새 데이터를 만든다. 저장소에 접근하지 못하면 캐시를 계속 쓴다. |
-| 변경 확인 | 시작 후 1시간마다 `Patch/Sheetdata/client` 폴더의 마지막 커밋 SHA만 조회한다(데이터 수와 상관없이 요청 1회, `UnpackDataCatalogs.RunAsync`). 같은 커밋으로 각 데이터를 차례로 확인한다. 저장소는 덤프 중 커밋이 수십 개로 나뉘어 올라가지만 시트는 한 커밋에 함께 올라가므로, 브랜치 최신 커밋이 아니라 이 폴더의 커밋으로 판단한다. |
-| 다시 만들기 | 봇 시작 후 첫 확인은 커밋과 상관없이 항상 다시 만든다(변환 규칙을 고친 코드가 재시작만으로 반영된다). 이후에는 커밋이 바뀌었을 때만 `version.json`과 필요한 시트를 **그 커밋 기준으로** 받는다. 검증·캐시 저장까지 성공해야 교체한다. |
+| 변경 확인 | 시작 후 1시간마다 `version.json`을 마지막으로 바꾼 커밋 SHA만 조회한다(데이터 수와 상관없이 요청 1회, `UnpackDataCatalogs.RunAsync`). 같은 커밋으로 각 데이터를 목록 순서대로 확인한다. 저장소는 덤프 중 커밋이 수십 개로 나뉘어 올라가므로, 브랜치 최신 커밋이 아니라 이 커밋으로 판단한다. |
+| 다시 만들기 | 봇 시작 후 첫 확인은 커밋과 상관없이 항상 다시 만든다(변환 규칙을 고친 코드가 재시작만으로 반영된다). 이후에는 커밋이 바뀌었을 때만 `version.json`과 필요한 시트·파일을 **그 커밋 기준으로** 받는다. 검증·캐시 저장까지 성공해야 교체한다. |
 | 실패 | 통신 오류·검증 실패·캐시 저장 실패면 마지막 정상 데이터를 유지하고 10분 뒤(한도 초과면 reset 시각까지) 다시 확인한다. 토큰 미설정·거부(401/403)면 확인을 멈추고 캐시만 쓴다. |
+
+**저장소 갱신 규칙**: 저장소 갱신 스크립트는 `version.json`을 덤프의 **마지막 커밋**에 올린다. 그래서 `version.json`을 바꾼 커밋에는 시트·월드 데이터·이미지가 모두 같은 버전으로 들어 있다. `version.json`이 덤프 중간에 먼저 올라가면, 몰리는 그 커밋 기준으로 아직 올라가지 않은 시트·파일을 찾지 못한다(404). 이때 마지막 정상 데이터가 있으면 그대로 쓰고 10분마다 다시 시도한다. 데이터가 하나도 없으면(캐시 없음) 브랜치 최신 커밋으로 한 번 더 만들고, 버전 커밋이 바뀔 때까지 그 데이터를 쓴다. NPC 이미지는 NPC·지역 데이터를 만든 커밋 기준으로 받는다.
 
 ### 데이터 없음 규칙
 
-게임 데이터 저장소의 데이터를 쓰는 명령은 **캐시도 없고 저장소에도 접근하지 못해 데이터가 하나도 없으면** 다른 처리 없이 `UnpackDataMessages.NoData(이름)`으로 응답한다(예: "룬 데이터가 없어서 지금은 이 명령을 사용할 수 없어요…"). 마지막 정상 데이터가 있으면 저장소 접근이 실패해도 그 데이터로 계속 동작한다. 같은 명령 안에서 저장소 데이터가 필요 없는 선택지(예: `/자음퀴즈`의 NPC·클래스·지역)는 막지 않는다.
+게임 데이터 저장소의 데이터를 쓰는 명령은 **캐시도 없고 저장소에도 접근하지 못해 데이터가 하나도 없으면** 다른 처리 없이 `UnpackDataMessages.NoData(이름)`으로 응답한다(예: "룬 데이터가 없어서 지금은 이 명령을 사용할 수 없어요…"). 마지막 정상 데이터가 있으면 저장소 접근이 실패해도 그 데이터로 계속 동작한다. 같은 명령 안에서 그 데이터가 필요 없는 선택지(예: 클래스 데이터만 없을 때 `/자음퀴즈`의 룬·NPC·지역 종목)는 막지 않는다.
 
 ### 현재 사용하는 데이터
 
 | 데이터 | 데이터셋 | 시트 | 한 번 다시 만들 때 | 사용하는 명령 |
 | --- | --- | --- | --- | --- |
 | 룬 | `Runes/UnpackRuneDataset.cs` | Rune, Socketable, CombatJob, RuneOption, RuneTranscend(초월 단계별 수치), MagicEffect, Buff, SkillEffect | 요청 9회(버전·시트 8개), 약 28MB | `/룬`, `/스피드퀴즈`, `/진혹거퀴즈`, `/자음퀴즈`(룬 종목) |
-| 클래스 | `Classes/UnpackClassDataset.cs` | CombatJob(전직 클래스 중 `ShowClass=true`만, 견습·미공개 제외) | 요청 2회(버전·시트 1개), 약 34KB | `/자음퀴즈`(클래스·NPC+클래스+지역 종목) |
+| 클래스 | `Classes/UnpackClassDataset.cs` | CombatJob(전직 클래스 중 `ShowClass=true`만, 견습·미공개 제외) | 요청 2회(버전·시트 1개), 약 34KB | `/자음퀴즈`(클래스·NPC+클래스+지역 종목), `/이미지퀴즈`(클래스 종목, 아이콘은 배포 에셋 `assets/class_icons`) |
 | 마도저항 | `MagicResistance/UnpackMagicResistanceDataset.cs` | AbyssDungeonGroup, AbyssDungeonDifficulty, AbyssDungeon, Equipment, EquipmentArcaneResistance | 요청 6회(버전·시트 5개), 약 3.3MB | `/마도저항확인`, `/해연비용계산` |
 | 제작 | `Crafting/UnpackCraftingDataset.cs` | CraftingRecipe(제작 화면에 항상 보이는 레시피만), Equipment, EquipmentMaterialType, EquipmentTool, Consumable | 요청 6회(버전·시트 5개), 약 21MB | `/해연시세`, `/해연시세알림`, `/해연비용계산` |
+| NPC·지역 | `World/UnpackWorldDataset.cs` | QuickNavigatorShortcut, Channel, GameSpace, NPC + 지역 월드의 `WorldData/<월드>/NPCDeploy.sjon.json` | 요청 19회(버전·시트 4개·배치 파일 14개), 약 1.7MB | `/자음퀴즈`(NPC·지역·NPC+클래스+지역 종목), `/이미지퀴즈`(NPC 종목) |
+| NPC 이미지 | `World/NpcPortraitCache.cs` | NPC·지역 데이터의 `NPC.ProfileImage` 파일(`Patch/AssetPackages/Assets/PatchableAssets/Sprites/NPCProfile/*.png`) | 이미지 폴더 트리 1회 + blob SHA가 바뀐 파일 수(처음엔 95개, 약 1MB) | `/이미지퀴즈`(NPC 종목) |
 
-- 커밋이 바뀐 회차의 요청 수는 커밋 확인 1회에 위 표에서 다시 만드는 데이터의 요청 수를 더한 값이다(현재 네 데이터 모두면 1 + 9 + 2 + 6 + 6 = 24회, 약 53MB).
+- 커밋이 바뀐 회차의 요청 수는 커밋 확인 1회에 위 표에서 다시 만드는 데이터의 요청 수를 더한 값이다(현재 여섯 데이터 모두면 1 + 9 + 2 + 6 + 6 + 19 + 1 = 44회 + 바뀐 NPC 이미지 수, 이미지를 빼고 약 55MB).
+- **NPC·지역 규칙**: 지역은 지도 빠른 이동(`QuickNavigatorShortcut.ChannelSheetData`)이 있는 채널의 GameSpace 중 채널 규칙이 `Field`(마을) 또는 `BattleField`(사냥터)인 곳이다(2026-11-01 기준 14곳, 개발 중인 글란 등은 빠른 이동이 없어 제외). NPC는 이 지역 월드의 배치 파일에 있는 NPC 중 칭호(`Title`)가 `-`가 아닌 NPC만 담는다(게시판·보관함·이름 없는 엑스트라 제외, 이벤트·퀘스트로만 나오는 NPC는 배치 파일에 없어 제외). 같은 이름은 하나로 합치고 배치 지역을 모두 담는다(2026-11-01 기준 95명). 프로필 이미지가 기본 실루엣(`Sprites/NPCProfile/Extra.png`)이면 이미지 없음으로 둔다.
+- **NPC 이미지 캐시**: `MOLLY_DATA_DIR/unpack/npc-portraits/<blob SHA>.png`와 `manifest.json`(에셋 경로 → SHA)에 둔다. 파일 이름이 SHA라 내용이 같으면 다시 받지 않고, 필요 없어진 파일은 지운다. 일부를 받지 못하면 받은 이미지만 쓰고 10분 뒤 다시 시도한다. 이미지퀴즈는 여러 NPC가 같은 그림을 쓰면 정답이 갈리므로 내지 않는다.
 
 - 하루 요청 수는 확인 24회(데이터 수와 무관)에 봇 시작과 데이터가 바뀐 날만 다시 만들기 요청이 더해진다. 길드·사용자 수와 무관하고, 명령 실행은 저장소를 호출하지 않는다.
 - 큰 시트(MagicEffect·Buff·SkillEffect 각 5~10MB, Consumable 약 13MB)는 한 번에 하나씩 받아 필요한 행만 남기고 바로 버린다.
-- 실제 저장소로 확인: `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --runes-live runes.tsv`(룬), `-- --unpack-data-live`(클래스·마도저항·제작)
+- 실제 저장소로 확인: `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --runes-live runes.tsv`(룬), `-- --unpack-data-live`(클래스·마도저항·제작·NPC·지역·NPC 이미지, 뒤에 커밋 SHA를 붙이면 `version.json` 확인 없이 그 커밋 기준)
 - Google Sheets의 배틀 원본(`클래스`·`스킬`·`패시브스킬`·`생활스킬` 탭)은 배틀용 데이터를 재가공하는 원본이라 언팩 데이터로 바꾸지 않는다.
-- Google Sheets의 `제작` 탭은 제작 데이터로 교체해 읽지 않는다. `가공` 탭은 쓰는 기능이 없어 교체하지 않았다(게임 데이터는 `Altering` 시트이며, 2026-10-31 기준 결과물 수량 `Result.Amount`가 0으로 나와 쓰려면 먼저 확인해야 한다).
+- Google Sheets의 `NPC`·`지역` 탭은 NPC·지역 데이터로 교체해 읽지 않는다(자음퀴즈의 클래스는 이미 `CombatJob`을 쓴다). Google Sheets의 `제작` 탭은 제작 데이터로 교체해 읽지 않는다. `가공` 탭은 쓰는 기능이 없어 교체하지 않았다(게임 데이터는 `Altering` 시트이며, 2026-10-31 기준 결과물 수량 `Result.Amount`가 0으로 나와 쓰려면 먼저 확인해야 한다).

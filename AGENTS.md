@@ -6,7 +6,7 @@
 - 콘텐츠의 제품 방향과 채택 기준은 `docs/content-planning-guidelines.md`를 따른다.
 - 콘텐츠는 게임에 접속하지 않은 동안 대신 관찰·기록·알림을 제공하는 편의 기능과, Discord에서 부담 없이 짧게 즐기는 놀이 기능을 중심으로 한다.
 - Google Sheets의 룬·클래스·스킬·생활스킬·제작·가공 등 원본 데이터를 읽고 검증한다. 요청된 범위만 작업한다.
-- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬(`Runes/`), 자음퀴즈 클래스(`Classes/`), 마도저항 기준값(`MagicResistance/`), 제작 레시피(`Crafting/`)는 교체를 마쳤다. `가공` 시트는 쓰는 기능이 없어 교체하지 않았다. 배틀 관련 시트(`클래스`·`스킬`·`패시브스킬`·`생활스킬`·`배틀*`)는 배틀용 데이터를 재가공하는 원본이므로 Google Sheets에 그대로 두고 교체하지 않는다.
+- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬(`Runes/`), 퀴즈용 클래스(`Classes/`), 퀴즈용 NPC·지역(`World/`), 마도저항 기준값(`MagicResistance/`), 제작 레시피(`Crafting/`)는 교체를 마쳤다. `가공` 시트는 쓰는 기능이 없어 교체하지 않았다. 배틀 관련 시트(`클래스`·`스킬`·`패시브스킬`·`생활스킬`·`배틀*`)는 배틀용 데이터를 재가공하는 원본이므로 Google Sheets에 그대로 두고 교체하지 않는다.
 - 모비라이프 OpenAPI(https://open.mabimobi.life/docs)를 쓰는 작업은 `docs/mobilife-openapi.md`의 이용약관·출처 표기·요청 한도·중단 대비 규칙을 따른다. 기능은 `MobiLife/`의 공용 클라이언트를 도메인 인터페이스 뒤에서만 사용한다.
 - 배틀(자동전투) 기능의 설계는 `docs/battle/README.md`를 따른다. 클래스·스킬 시트에 새 클래스 원본 데이터가 추가되어 배틀 관련 시트에 반영할 때는 `docs/battle/new-class-workflow.md`의 절차를 따른다.
 
@@ -40,9 +40,10 @@
 - MobiShop.cs, Commons/CsvTable.cs: 상점 테이블과 CSV 매핑.
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
-- Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`), 여러 보관소가 커밋 확인 1회를 함께 쓰는 주기 확인(`UnpackDataCatalogs`). 새 데이터는 Program.cs의 보관소 목록에 추가한다. clone하지 않고 시트 폴더 커밋 SHA·`version.json`·필요한 파일만 REST API로 받는다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
+- Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`), 여러 보관소가 커밋 확인 1회를 함께 쓰는 주기 확인(`UnpackDataCatalogs`). 새 데이터는 Program.cs의 보관소 목록에 추가한다. clone하지 않고 `version.json`을 마지막으로 바꾼 커밋 SHA로 변경을 확인하고, 그 커밋 기준으로 `version.json`·필요한 시트·파일(시트 밖 파일은 `UnpackFileFetcher`, 폴더 목록·blob SHA는 `GetTreeAsync`)만 REST API로 받는다. 다른 데이터에 기대는 보관소는 목록에서 뒤에 둔다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
 - Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption·RuneTranscend 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석과 초월 단계 수치의 `기본/1초월/2초월` 슬래시 표기(RuneEffectText), 검색(RuneSearch).
-- Classes/: 게임 데이터 저장소의 CombatJob으로 공개된 전직 클래스 목록을 만드는 데이터셋(UnpackClassDataset). `/자음퀴즈` 클래스 종목이 쓴다(배틀은 쓰지 않음).
+- Classes/: 게임 데이터 저장소의 CombatJob으로 공개된 전직 클래스 목록을 만드는 데이터셋(UnpackClassDataset). `/자음퀴즈`·`/이미지퀴즈` 클래스 종목이 쓴다(배틀은 쓰지 않음). 이미지퀴즈 아이콘은 `Commons/ClassIcons`의 CombatJob.Id 매핑으로 배포 에셋을 찾는다.
+- World/: 게임 데이터 저장소의 빠른 이동·채널·GameSpace·NPC 시트와 월드 NPC 배치 파일로 열린 지역(마을·사냥터)과 배치된 NPC 목록을 만드는 데이터셋(UnpackWorldDataset), NPC 프로필 이미지를 blob SHA로 비교해 바뀐 것만 받는 캐시(NpcPortraitCache). `/자음퀴즈` NPC·지역 종목과 `/이미지퀴즈` NPC 종목이 쓴다. 기획은 `docs/image-quiz.md`.
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
 - Crafting/: 게임 데이터 저장소의 CraftingRecipe 등으로 만드는 공용 제작 레시피 데이터셋(UnpackCraftingDataset, 여러 기능에서 재사용). 분류·장비 부위·방어구 재질(중갑·경갑·천옷)을 담는다. HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.
 - HaeyeonCost/: /해연비용계산의 계산 가정·부위 매핑(HaeyeonCostRules)과 게임 데이터 장비 범위로 만든 성장 규칙(HaeyeonGrowth), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). 부위 그룹은 제작 레시피의 장비 부위로 정한다. 모비라이프 API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.

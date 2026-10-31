@@ -33,6 +33,11 @@ public sealed record UnpackRepoResult<T>(UnpackRepoStatus Status, T? Value, stri
     public static UnpackRepoResult<T> Fail(UnpackRepoStatus status, string? detail = null, TimeSpan? retryAfter = null) => new(status, default, detail, retryAfter);
 }
 
+/// <param name="Name">폴더 안 이름(경로 아님).</param>
+/// <param name="Type">blob(파일) 또는 tree(폴더).</param>
+/// <param name="Sha">git blob SHA. 내용이 같으면 커밋이 달라도 같습니다.</param>
+public sealed record UnpackTreeEntry(string Name, string Type, string Sha, long Size);
+
 /// <summary>저장소 루트의 version.json 중 갱신 판단과 표시에 쓰는 값.</summary>
 public sealed record UnpackVersion(DateTimeOffset GeneratedAt, string AppVersion, string PatchDisplay, string BuildBranch);
 
@@ -131,6 +136,30 @@ public sealed class UnpackRepoClient : IDisposable
         var relative = $"repos/{m_Options.Repository}/contents/{string.Join('/', segments.Select(Uri.EscapeDataString))}" +
                        $"?ref={Uri.EscapeDataString(gitRef ?? m_Options.Branch)}";
         return SendAsync(relative, "application/vnd.github.raw+json", ct);
+    }
+
+    /// <summary>
+    /// 폴더 바로 아래 항목(하위 폴더 미포함)의 이름·종류·blob SHA. 파일 목록과 변경 여부를 요청 1회로 확인합니다.
+    /// gitRef는 커밋 SHA입니다. 목록이 잘린 응답(truncated)은 불완전하므로 InvalidResponse로 돌려줍니다.
+    /// </summary>
+    public async Task<UnpackRepoResult<IReadOnlyList<UnpackTreeEntry>>> GetTreeAsync(string path, string gitRef, CancellationToken ct = default)
+    {
+        var segments = SplitPath(path);
+        var result = await SendAsync($"repos/{m_Options.Repository}/git/trees/{Uri.EscapeDataString(gitRef)}:{string.Join('/', segments.Select(Uri.EscapeDataString))}",
+            "application/vnd.github+json", ct);
+        if (!result.IsSuccess) return UnpackRepoResult<IReadOnlyList<UnpackTreeEntry>>.Fail(result.Status, result.Detail, result.RetryAfter);
+        try
+        {
+            var dto = JsonSerializer.Deserialize<TreeDto>(result.Value!, s_Json);
+            if (dto?.Tree is null) return OnInvalid<IReadOnlyList<UnpackTreeEntry>>($"{path} 트리 응답에 tree가 없음");
+            if (dto.Truncated) return OnInvalid<IReadOnlyList<UnpackTreeEntry>>($"{path} 트리 목록이 잘려서 옴");
+            var entries = dto.Tree
+                .Where(x => x is { Path.Length: > 0, Type.Length: > 0, Sha.Length: 40 })
+                .Select(x => new UnpackTreeEntry(x.Path!, x.Type!, x.Sha!, x.Size ?? 0))
+                .ToArray();
+            return UnpackRepoResult<IReadOnlyList<UnpackTreeEntry>>.Ok(entries);
+        }
+        catch (JsonException ex) { return OnInvalid<IReadOnlyList<UnpackTreeEntry>>($"{path} 트리 해석 실패: {ex.Message}"); }
     }
 
     public async Task<UnpackRepoResult<UnpackVersion>> GetVersionAsync(string? gitRef = null, CancellationToken ct = default)
@@ -234,6 +263,15 @@ public sealed class UnpackRepoClient : IDisposable
     private static string Truncate(string text) => text.Length <= 200 ? text : text[..200] + "…";
 
     public void Dispose() => m_Http.Dispose();
+
+    private sealed record TreeDto(
+        [property: JsonPropertyName("tree")] IReadOnlyList<TreeEntryDto>? Tree,
+        [property: JsonPropertyName("truncated")] bool Truncated);
+    private sealed record TreeEntryDto(
+        [property: JsonPropertyName("path")] string? Path,
+        [property: JsonPropertyName("type")] string? Type,
+        [property: JsonPropertyName("sha")] string? Sha,
+        [property: JsonPropertyName("size")] long? Size);
 
     private sealed record VersionDto(
         [property: JsonPropertyName("generatedAt")] DateTimeOffset? GeneratedAt,

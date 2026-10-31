@@ -211,7 +211,7 @@ internal static class UnpackDataTests
             var first = await UnpackDataCatalogs.RefreshAllAsync(client, [classes, resistance], default);
             Assert(first.All(x => x is { IsSuccess: true, Changed: true }) && commitRequests == 1 && classes.Data!.Items.Count == 2 && resistance.Data!.AbyssHell.Count == 2
                    && File.Exists(Path.Combine(dir, "unpack", "classes.json")) && File.Exists(Path.Combine(dir, "unpack", "magic-resistance.json")),
-                "여러 데이터가 시트 폴더 커밋 확인 1회를 함께 쓰고 각자 캐시에 저장");
+                "여러 데이터가 데이터 버전 커밋 확인 1회를 함께 쓰고 각자 캐시에 저장");
             var before = handler.Requests;
             var second = await UnpackDataCatalogs.RefreshAllAsync(client, [classes, resistance], default);
             Assert(second.All(x => x is { IsSuccess: true, Changed: false }) && handler.Requests == before + 1, "커밋이 같으면 데이터 수와 상관없이 요청 1회");

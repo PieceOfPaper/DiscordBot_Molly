@@ -97,6 +97,22 @@ internal static class QuizFlowTests
             _ => Task.FromResult<IQuizRoom>(new Room(new Clock())), (_, _) => Task.CompletedTask, 99);
         Assert(!blocked.Started && blocked.ChannelId == exclusiveRoom.Id, "길드 내 스피드퀴즈·자음퀴즈 동시 진행 차단");
         await exclusiveService.StopAsync();
+
+        var imageClock = new Clock();
+        var imageRoom = new Room(imageClock);
+        var imageService = new SpeedQuizService((duration, ct) => duration.TotalSeconds == 6 ? Task.Delay(Timeout.Infinite, ct) : imageClock.Delay(duration, ct), clock: imageClock);
+        byte[] png = [0x89, 0x50, 0x4E, 0x47];
+        var answered = false;
+        imageRoom.Send = text =>
+        {
+            if (text.Contains("문제 1 남은 시간") && !answered) answered = imageService.Submit(5, imageRoom.Id, 7, 999, "글리니스");
+        };
+        await imageService.StartAsync(5, "이미지퀴즈", "NPC: 이미지를 보고 맞혀주세요.", new[] { new QuizQuestion("종류: **NPC**\n💡 힌트: 지역: 던바튼", "글리니스", png) }, 6,
+            _ => Task.FromResult<IQuizRoom>(imageRoom), (_, _) => Task.CompletedTask, 99);
+        await imageRoom.Finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert(imageRoom.Images.Count == 1 && ReferenceEquals(imageRoom.Images[0].Image, png) && imageRoom.Images[0].Title.StartsWith("🧩") && answered && imageRoom.Final.Contains("<@7>: 1점"),
+            "이미지 문제는 문제 Embed에만 이미지를 붙이고 정답 판정은 같게 진행");
+        await imageService.StopAsync();
     }
 
     private static void Assert(bool condition, string name)
@@ -154,6 +170,12 @@ internal static class QuizFlowTests
             if (title.StartsWith("🧩")) QuestionTimes.Add(clock.Seconds);
             if (title.Contains("종료")) Final = description;
             return Task.FromResult(++id);
+        }
+        public List<(string Title, byte[] Image)> Images = new();
+        public Task<ulong> SendEmbedAsync(string title, string description, uint color, byte[] image, CancellationToken ct)
+        {
+            Images.Add((title, image));
+            return SendEmbedAsync(title, description, color, ct);
         }
         public Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct)
             => SendEmbedAsync(title, description, color, ct);

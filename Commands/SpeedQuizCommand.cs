@@ -131,6 +131,23 @@ internal sealed class DiscordQuizRoom(IThreadChannel channel) : IQuizRoom
         return message.Id;
     }
 
+    public async Task<ulong> SendEmbedAsync(string title, string description, uint color, byte[] image, CancellationToken ct)
+    {
+        // 파일 이름이 정답을 드러내지 않도록 항상 같은 이름으로 붙입니다.
+        const string fileName = "quiz.png";
+        var embed = new EmbedBuilder()
+            .WithTitle(title)
+            .WithDescription(description)
+            .WithColor(new Color(color))
+            .WithImageUrl("attachment://" + fileName)
+            .WithTimestamp(DateTimeOffset.UtcNow)
+            .Build();
+        using var stream = new MemoryStream(image, writable: false);
+        var message = await channel.SendFileAsync(new FileAttachment(stream, fileName), embed: embed, allowedMentions: AllowedMentions.None,
+            options: new RequestOptions { CancelToken = ct });
+        return message.Id;
+    }
+
     public async Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct)
     {
         var embed = new EmbedBuilder().WithTitle(title).WithDescription(description)

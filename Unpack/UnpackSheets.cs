@@ -8,7 +8,7 @@ namespace Molly.Unpack;
 /// </summary>
 public static class UnpackSheets
 {
-    // 본 서비스 시트 묶음. 모든 시트가 한 커밋으로 함께 올라가므로 이 폴더의 마지막 커밋이 데이터 버전입니다.
+    // 본 서비스 시트 묶음. 데이터 버전은 이 폴더가 아니라 version.json의 마지막 커밋으로 판단합니다(UnpackDataCatalogs).
     public const string ClientDirectory = "Patch/Sheetdata/client";
 
     public static string PathOf(string sheet) => $"{ClientDirectory}/{sheet}.json";
@@ -58,6 +58,12 @@ public static class UnpackSheets
 
 /// <summary>필요한 시트를 받아 문서로 돌려줍니다. 실패하면 <see cref="UnpackDataException"/>을 던집니다.</summary>
 public delegate Task<JsonDocument> UnpackSheetFetcher(string sheet, CancellationToken ct);
+
+/// <summary>
+/// 시트 밖의 저장소 JSON 파일(예: 월드 배치 <c>NPCDeploy.sjon.json</c>)을 받아 문서로 돌려줍니다. path는 저장소 루트 기준 경로입니다.
+/// 실패하면 <see cref="UnpackDataException"/>을 던집니다(파일이 없으면 Status가 NotFound).
+/// </summary>
+public delegate Task<JsonDocument> UnpackFileFetcher(string path, CancellationToken ct);
 
 public sealed class UnpackDataException(UnpackRepoStatus status, string message) : Exception(message)
 {

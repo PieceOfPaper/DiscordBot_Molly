@@ -1,6 +1,7 @@
 using System.Text;
 using Molly.Classes;
 using Molly.Runes;
+using Molly.World;
 
 namespace Molly.Quiz;
 
@@ -14,12 +15,16 @@ public enum QuizTopic
     Season2NonAccessoryRuneEffect,
     Season2AccessoryRuneNameClass
 }
-public sealed record QuizQuestion(string Prompt, string Answer);
+/// <param name="Image">문제와 함께 보여줄 PNG(`/이미지퀴즈`). 출제할 때 읽어 두어, 진행 중 캐시가 바뀌어도 문제는 그대로입니다.</param>
+public sealed record QuizQuestion(string Prompt, string Answer, byte[]? Image = null);
 
 public static class QuizQuestions
 {
-    /// <param name="classes">게임 데이터 저장소의 클래스 목록. 클래스 종목에서만 쓰며 <see cref="UsesClasses"/>가 false면 비어 있어도 됩니다.</param>
-    public static IReadOnlyList<QuizQuestion> PickConsonant(ConsonantTopic topic, IEnumerable<RuneData> runes, ConsonantTable table, IEnumerable<ClassData> classes, int count)
+    /// <param name="npcs">게임 데이터 저장소의 NPC 목록. <see cref="UsesWorld"/>가 false면 비어 있어도 됩니다.</param>
+    /// <param name="regions">게임 데이터 저장소의 지역 목록. <see cref="UsesWorld"/>가 false면 비어 있어도 됩니다.</param>
+    /// <param name="classes">게임 데이터 저장소의 클래스 목록. <see cref="UsesClasses"/>가 false면 비어 있어도 됩니다.</param>
+    public static IReadOnlyList<QuizQuestion> PickConsonant(ConsonantTopic topic, IEnumerable<RuneData> runes, IEnumerable<NpcData> npcs,
+        IEnumerable<RegionData> regions, IEnumerable<ClassData> classes, int count)
     {
         if (count < 1) throw new ArgumentException("문제수는 최소 1개입니다.");
         var questions = topic switch
@@ -30,12 +35,12 @@ public static class QuizQuestions
             ConsonantTopic.Season2EmblemRune => runes.Where(r => r.Season == 2 && r.Category == RuneCategory.Emblem).Select(CreateRuneQuestion),
             ConsonantTopic.Season2AccessoryRune => runes.Where(r => r.Season == 2 && r.Category == RuneCategory.Accessory).Select(CreateRuneQuestion),
             ConsonantTopic.Season2NonAccessoryRune => runes.Where(r => r.Season == 2 && r.Category != RuneCategory.Accessory).Select(CreateRuneQuestion),
-            ConsonantTopic.Npc => table.Npcs.Select(n => CreateQuestion("NPC", n.Name, $"지역: {(string.IsNullOrWhiteSpace(n.Region) ? "불명" : n.Region)}")),
+            ConsonantTopic.Npc => npcs.Select(n => CreateQuestion("NPC", n.Name, NpcHint(n))),
             ConsonantTopic.Class => classes.Select(c => CreateQuestion("클래스", c.Name, null)),
-            ConsonantTopic.Region => table.Regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}")),
-            ConsonantTopic.NpcClassRegion => table.Npcs.Select(n => CreateQuestion("NPC", n.Name, $"지역: {(string.IsNullOrWhiteSpace(n.Region) ? "불명" : n.Region)}"))
+            ConsonantTopic.Region => regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}")),
+            ConsonantTopic.NpcClassRegion => npcs.Select(n => CreateQuestion("NPC", n.Name, NpcHint(n)))
                 .Concat(classes.Select(c => CreateQuestion("클래스", c.Name, null)))
-                .Concat(table.Regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}"))),
+                .Concat(regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}"))),
             _ => throw new ArgumentException("지원하지 않는 자음퀴즈 문제종목입니다.")
         };
         var pool = questions.Where(q => !string.IsNullOrWhiteSpace(q.Answer) && !string.IsNullOrWhiteSpace(ConsonantHint(q.Answer))).ToArray();
@@ -49,15 +54,57 @@ public static class QuizQuestions
 
     public static bool UsesClasses(ConsonantTopic topic) => topic is ConsonantTopic.Class or ConsonantTopic.NpcClassRegion;
 
+    public static bool UsesWorld(ConsonantTopic topic) => topic is ConsonantTopic.Npc or ConsonantTopic.Region or ConsonantTopic.NpcClassRegion;
+
+    /// <summary>
+    /// 이미지를 보고 이름을 맞히는 문제. 이미지를 읽지 못한 항목은 건너뛰고, 여러 NPC가 같은 그림을 쓰면 정답이 갈리므로 내지 않습니다.
+    /// </summary>
+    /// <param name="classIcon">CombatJob.Id → 아이콘 PNG. 없으면 null.</param>
+    /// <param name="npcPortrait">NPC 프로필 이미지 에셋 경로 → PNG. 없으면 null.</param>
+    public static IReadOnlyList<QuizQuestion> PickImage(ImageQuizTopic topic, IEnumerable<ClassData> classes, IEnumerable<NpcData> npcs,
+        Func<string, byte[]?> classIcon, Func<string, byte[]?> npcPortrait, int count)
+    {
+        if (count < 1) throw new ArgumentException("문제수는 최소 1개입니다.");
+        var candidates = topic switch
+        {
+            ImageQuizTopic.Class => classes.Select(c => (Prompt: CreatePrompt("클래스", null, consonants: null), c.Name, Load: (Func<byte[]?>)(() => classIcon(c.Id)))).ToArray(),
+            ImageQuizTopic.Npc => UniquePortraits(npcs)
+                .Select(n => (Prompt: CreatePrompt("NPC", NpcHint(n), consonants: null), n.Name, Load: (Func<byte[]?>)(() => npcPortrait(n.ProfileImage!)))).ToArray(),
+            _ => throw new ArgumentException("지원하지 않는 이미지퀴즈 문제종목입니다.")
+        };
+        Random.Shared.Shuffle(candidates);
+        var picked = new List<QuizQuestion>();
+        foreach (var (prompt, name, load) in candidates)
+        {
+            if (picked.Count == count) break;
+            if (string.IsNullOrWhiteSpace(name) || load() is not { Length: > 0 } image) continue;
+            picked.Add(new QuizQuestion(prompt, name.Trim(), image));
+        }
+        if (picked.Count == 0) throw new ArgumentException("현재 출제 가능한 문제가 없습니다.");
+        return picked.AsReadOnly();
+    }
+
+    private static IEnumerable<NpcData> UniquePortraits(IEnumerable<NpcData> npcs)
+    {
+        var withImage = npcs.Where(n => n.ProfileImage is not null).ToArray();
+        var shared = withImage.GroupBy(n => n.ProfileImage!, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
+        return withImage.Where(n => !shared.Contains(n.ProfileImage!));
+    }
+
+    private static string NpcHint(NpcData npc) => $"지역: {(npc.Regions.Count == 0 ? "불명" : string.Join(", ", npc.Regions))}";
+
     private static QuizQuestion CreateRuneQuestion(RuneData rune)
         => CreateQuestion("룬", rune.Name.TrimEnd('+').Trim(), $"{rune.Category.Display()}룬");
 
     private static QuizQuestion CreateQuestion(string kind, string answer, string? hint)
+        => new(CreatePrompt(kind, hint, ConsonantHint(answer)), answer.TrimEnd('+').Trim());
+
+    private static string CreatePrompt(string kind, string? hint, string? consonants)
     {
         var lines = new List<string> { $"종류: **{kind}**" };
         if (hint is not null) lines.Add($"💡 힌트: {hint}");
-        lines.Add($"🔤 자음: **{ConsonantHint(answer)}**");
-        return new(string.Join('\n', lines), answer.TrimEnd('+').Trim());
+        if (consonants is not null) lines.Add($"🔤 자음: **{consonants}**");
+        return string.Join('\n', lines);
     }
 
     public static string Description(QuizTopic topic) => topic switch
@@ -126,4 +173,10 @@ public enum ConsonantTopic
     Class,
     Region,
     NpcClassRegion
+}
+
+public enum ImageQuizTopic
+{
+    Class,
+    Npc
 }

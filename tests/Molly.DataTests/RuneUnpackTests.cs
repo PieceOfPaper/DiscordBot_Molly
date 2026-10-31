@@ -277,10 +277,10 @@ internal static class RuneUnpackTests
             Assert(first is { IsSuccess: true, Changed: true } && catalog.Data!.Items.Count == 4 &&
                    catalog.Current is { Commit: FirstCommit, PatchDisplay: "R840cbf8_A4525d21", AppVersion: "3.4.40011" } &&
                    File.Exists(Path.Combine(dir, "unpack", "runes.json")),
-                "시트 폴더의 마지막 커밋 기준으로 룬을 만들고 캐시에 저장");
-            Assert(handler.Paths.Any(x => x.Contains("/commits") && x.Contains("path=Patch%2FSheetdata%2Fclient") && x.Contains("per_page=1")) &&
+                "version.json의 마지막 커밋 기준으로 룬을 만들고 캐시에 저장");
+            Assert(handler.Paths.Any(x => x.Contains("/commits") && x.Contains("path=version.json") && x.Contains("per_page=1")) &&
                    handler.Paths.Where(x => x.Contains("/contents/")).All(x => x.EndsWith("ref=" + FirstCommit, StringComparison.Ordinal)),
-                "변경 확인은 시트 폴더 커밋 1회, 파일은 같은 커밋 기준으로 받음");
+                "변경 확인은 version.json 커밋 1회, 파일은 같은 커밋 기준으로 받음");
 
             var before = handler.Requests;
             var unchanged = await catalog.RefreshAsync();
