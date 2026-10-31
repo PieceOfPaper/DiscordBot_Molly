@@ -116,10 +116,9 @@ Discord__GuildId=TEST_GUILD_ID
 MOLLY_DATA_DIR=/var/lib/molly
 PLAYWRIGHT_BROWSERS_PATH=/opt/molly/playwright
 GoogleSheets__SpreadsheetId=19kRuVIlZ1LEhU5lixEjRqYvZKbdGnXk0tjY6qznSRf0
-GoogleSheets__RuneSheetId=0
 # 선택: 모비라이프 OpenAPI 서비스용 키 (docs/mobilife-openapi.md)
 MobiLife__ApiKey=MOBILIFE_SERVICE_API_KEY
-# 선택: 게임 데이터 저장소(private) 읽기 토큰 (docs/unpack-repo.md)
+# 게임 데이터 저장소(private) 읽기 토큰 (docs/unpack-repo.md). 없으면 룬 명령은 데이터 없음으로 응답
 Unpack__Token=GITHUB_FINE_GRAINED_TOKEN
 # 선택: 공식 소식 수집 끄기 (docs/official-news.md). 기본은 켜짐
 # OfficialNews__Enabled=false

@@ -6,6 +6,7 @@
 - 콘텐츠의 제품 방향과 채택 기준은 `docs/content-planning-guidelines.md`를 따른다.
 - 콘텐츠는 게임에 접속하지 않은 동안 대신 관찰·기록·알림을 제공하는 편의 기능과, Discord에서 부담 없이 짧게 즐기는 놀이 기능을 중심으로 한다.
 - Google Sheets의 룬·클래스·스킬·생활스킬·제작·가공 등 원본 데이터를 읽고 검증한다. 요청된 범위만 작업한다.
+- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬은 교체를 마쳤다(`Runes/`).
 - 모비라이프 OpenAPI(https://open.mabimobi.life/docs)를 쓰는 작업은 `docs/mobilife-openapi.md`의 이용약관·출처 표기·요청 한도·중단 대비 규칙을 따른다. 기능은 `MobiLife/`의 공용 클라이언트를 도메인 인터페이스 뒤에서만 사용한다.
 - 배틀(자동전투) 기능의 설계는 `docs/battle/README.md`를 따른다. 클래스·스킬 시트에 새 클래스 원본 데이터가 추가되어 배틀 관련 시트에 반영할 때는 `docs/battle/new-class-workflow.md`의 절차를 따른다.
 
@@ -39,7 +40,8 @@
 - MobiShop.cs, Commons/CsvTable.cs: 상점 테이블과 CSV 매핑.
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
-- Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트. clone하지 않고 최신 커밋 SHA·`version.json`·필요한 파일만 REST API로 받는다. 토큰·확인 절차는 `docs/unpack-repo.md`.
+- Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`). clone하지 않고 시트 폴더 커밋 SHA·`version.json`·필요한 파일만 REST API로 받는다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
+- Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석(RuneEffectText), 검색(RuneSearch).
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.
 - Crafting/: 제작 시트 공용 레시피 카탈로그(여러 기능에서 재사용). HaeyeonMarket/: /해연시세알림 판정·저장·정각 수집.
 - HaeyeonCost/: /해연비용계산의 장비 성장 수치·부위 매핑(HaeyeonCostRules), 해연 시세 캐시 평균 단가(HaeyeonCostPricing), 그룹 배낭 DP(HaeyeonCostPlanner). API를 호출하지 않고 해연 정각 수집 캐시만 읽는다. 기획은 `docs/haeyeon-cost.md`.
@@ -59,6 +61,7 @@
   - 주제는 명령 하나가 아니라 컨텐츠 단위로 묶는다(예: 배틀 = `/캐릭터등록`·`/배틀`·`/배틀종료`). `Commands`에 관련 명령을 모두 적는다.
   - 새 주제는 `HelpTopic`을 추가하고 `Commands/HelpCommand.cs`의 `주제` Choice에 같은 이름·순서로 추가한다. README `/도움말` 행의 주제 목록도 갱신한다.
   - 게임 규칙·시간·기본값·알림 조건 등 동작을 바꾸면 해당 주제의 본문도 실제 코드와 맞게 고친다. 본문은 사용자 대상 한국어로 쓰고 필드 1024자·임베드 전체 길이 제한을 지킨다(회귀 테스트가 검사).
+- 게임 데이터 저장소(언팩 데이터)를 쓰는 명령은 데이터가 하나도 없으면(캐시 없음 + 저장소 접근 실패) `UnpackDataMessages.NoData`로 사용할 수 없다고 응답한다. 새 기능도 `UnpackDataCatalog<T>`를 재사용한다. Google Sheets의 수집 데이터를 언팩 데이터로 바꿀 때는 기존 기능이 동작하는 범위면 되며 시트와 100% 같을 필요는 없다.
 - Discord Interaction은 응답을 지연할 작업이면 먼저 DeferAsync하고, 중복 응답을 피한다.
 - 게임 상태는 서버·채널별로 분리하고 동시 제출과 시간 초과를 고려한다.
 - 테이블 갱신은 새 데이터를 검증한 뒤 교체하고 실패 시 마지막 정상 데이터를 유지한다.

@@ -108,10 +108,35 @@ sudo bash -c 'set -a; . /etc/molly/molly.env; curl -fsS -H "Authorization: Beare
 | 파일 | 역할 |
 | --- | --- |
 | `UnpackRepoOptions.cs` | 설정 읽기와 검증 |
-| `UnpackRepoClient.cs` | 인증 헤더, 최신 커밋 SHA·파일 원본·`version.json` 조회, 401/403/404/한도 처리 |
+| `UnpackRepoClient.cs` | 인증 헤더, 최신 커밋 SHA·경로별 마지막 커밋·파일 원본·`version.json` 조회, 401/403/404/한도 처리 |
+| `UnpackSheets.cs` | `Patch/Sheetdata/client/<시트>.json` 형식 확인과 행·참조 값 읽기 도우미 |
+| `UnpackDataCatalog.cs` | 기능별 데이터 보관소(`IUnpackDataset<T>`): 디스크 캐시, 주기 확인, 검증 후 교체, 데이터 없음 안내 문구(`UnpackDataMessages`) |
 
 - 한 번의 갱신 안에서는 `GetHeadCommitAsync`로 받은 SHA를 모든 파일 조회의 `gitRef`로 넘긴다. 푸시 도중 다른 커밋의 파일이 섞이지 않는다.
 - 파일 원본은 raw 응답(`application/vnd.github.raw+json`)으로 받는다. 파일당 100MB까지 가능하다.
 - 요청 수: 확인 1회당 커밋 SHA 1회(+ 바뀌었을 때 `version.json` 1회와 필요한 파일 수). 길드 수와 무관하다. 인증 요청 한도는 시간당 5,000회다.
 
-주기적 갱신·데이터 교체 범위는 정해지면 이 문서에 추가한다.
+## 6. 기능 데이터 갱신 (`UnpackDataCatalog<T>`)
+
+기능 하나가 쓰는 데이터는 `IUnpackDataset<T>` 하나로 정의한다. 데이터셋은 필요한 시트만 받아 기능에 필요한 값만 골라 작은 데이터로 만들고, 검증에 실패하면 `InvalidDataException`을 던진다. 시트 사이 관계는 저장소의 `Docs/SheetRelations.md`를 기준으로 한다.
+
+| 단계 | 동작 |
+| --- | --- |
+| 시작 | `MOLLY_DATA_DIR/unpack/<데이터>.json` 캐시를 먼저 읽어 바로 쓴다(요청 0회). 이어서 `RunAsync`가 백그라운드로 새 데이터를 만든다. 저장소에 접근하지 못하면 캐시를 계속 쓴다. |
+| 변경 확인 | 시작 후 1시간마다 `Patch/Sheetdata/client` 폴더의 마지막 커밋 SHA만 조회한다(요청 1회). 저장소는 덤프 중 커밋이 수십 개로 나뉘어 올라가지만 시트는 한 커밋에 함께 올라가므로, 브랜치 최신 커밋이 아니라 이 폴더의 커밋으로 판단한다. |
+| 다시 만들기 | 봇 시작 후 첫 확인은 커밋과 상관없이 항상 다시 만든다(변환 규칙을 고친 코드가 재시작만으로 반영된다). 이후에는 커밋이 바뀌었을 때만 `version.json`과 필요한 시트를 **그 커밋 기준으로** 받는다. 검증·캐시 저장까지 성공해야 교체한다. |
+| 실패 | 통신 오류·검증 실패·캐시 저장 실패면 마지막 정상 데이터를 유지하고 10분 뒤(한도 초과면 reset 시각까지) 다시 확인한다. 토큰 미설정·거부(401/403)면 확인을 멈추고 캐시만 쓴다. |
+
+### 데이터 없음 규칙
+
+게임 데이터 저장소의 데이터를 쓰는 명령은 **캐시도 없고 저장소에도 접근하지 못해 데이터가 하나도 없으면** 다른 처리 없이 `UnpackDataMessages.NoData(이름)`으로 응답한다(예: "룬 데이터가 없어서 지금은 이 명령을 사용할 수 없어요…"). 마지막 정상 데이터가 있으면 저장소 접근이 실패해도 그 데이터로 계속 동작한다. 같은 명령 안에서 저장소 데이터가 필요 없는 선택지(예: `/자음퀴즈`의 NPC·클래스·지역)는 막지 않는다.
+
+### 현재 사용하는 데이터
+
+| 데이터 | 데이터셋 | 시트 | 한 번 다시 만들 때 | 사용하는 명령 |
+| --- | --- | --- | --- | --- |
+| 룬 | `Runes/UnpackRuneDataset.cs` | Rune, Socketable, CombatJob, RuneOption, MagicEffect, Buff, SkillEffect | 요청 9회(커밋·버전·시트 7개), 약 27MB | `/룬`, `/스피드퀴즈`, `/진혹거퀴즈`, `/자음퀴즈`(룬 종목) |
+
+- 하루 요청 수는 확인 24회에 봇 시작과 데이터가 바뀐 날만 다시 만들기 요청이 더해진다. 길드·사용자 수와 무관하고, 명령 실행은 저장소를 호출하지 않는다.
+- 큰 시트(MagicEffect·Buff·SkillEffect, 각 5~10MB)는 한 번에 하나씩 받아 필요한 행만 남기고 바로 버린다.
+- 실제 저장소로 확인: `dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuration Release -- --runes-live runes.tsv`

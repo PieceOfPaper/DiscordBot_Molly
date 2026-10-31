@@ -2,6 +2,7 @@ using Discord;
 using Discord.Interactions;
 using Molly.Quiz;
 using Molly.Runes;
+using Molly.Unpack;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -52,14 +53,19 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
             await RespondAsync("문제수와 제한시간은 최소 1이어야 합니다.", ephemeral: true);
             return;
         }
+        var runes = Program.instance.Runes.Data;
+        if (runes is null)
+        {
+            await RespondAsync(UnpackDataMessages.NoData(Program.instance.Runes.Name), ephemeral: true);
+            return;
+        }
         // 스레드 생성과 권한 확인은 Discord API 왕복이 필요하므로
         // 3초 Interaction 응답 제한을 넘기지 않도록 먼저 즉시 응답합니다.
         await RespondAsync("스피드퀴즈 스레드를 준비하고 있어요. 잠시만 기다려주세요.", ephemeral: false);
         Console.WriteLine($"[스피드퀴즈] 초기 응답 완료 guild={Context.Guild.Id}");
         try
         {
-            await Program.instance.Runes.EnsureFreshAsync(TimeSpan.FromMinutes(10));
-            var questions = QuizQuestions.Pick(selectedTopic.Value, Program.instance.Runes.Current.Items, count);
+            var questions = QuizQuestions.Pick(selectedTopic.Value, runes.Items, count);
             var result = await Program.instance.Quizzes.StartAsync(Context.Guild.Id, selectedTopic.Value, questions, seconds,
                 async ct =>
                 {

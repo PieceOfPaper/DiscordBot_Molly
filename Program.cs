@@ -26,7 +26,8 @@ class Program
 {
     private readonly DiscordSocketClient m_Client;
     public DiscordSocketClient client => m_Client;
-    public RuneCatalog Runes { get; private set; } = null!;
+    // 룬은 게임 데이터 저장소에서 만듭니다. 캐시도 없고 저장소에도 접근하지 못하면 Data가 null이고 룬 명령은 데이터 없음으로 응답합니다.
+    public UnpackDataCatalog<RuneTable> Runes { get; private set; } = null!;
     public ConsonantCatalog Consonants { get; private set; } = null!;
     public MessageBottleCatalog MessageBottles { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
@@ -241,32 +242,31 @@ class Program
         OfficialNews = new OfficialNewsService(newsStore, newsWorker,
             new OfficialNewsCollector(newsStore, new MobiEventHttpSource(), newsWorker.Signal, status: statusTracker), newsSender, newsEnabled);
 
-        using var runeHttp = new HttpClient();
+        using var sheetHttp = new HttpClient();
         var dataDirectory = MollyDataPaths.RootDirectory;
-        Runes = new RuneCatalog(new GoogleSheetsRuneSource(runeHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
-            m_Config["GoogleSheets:RuneSheetId"] ?? "0"),
-            dataDirectory);
+        Runes = new UnpackDataCatalog<RuneTable>(Unpack, new UnpackRuneDataset(), dataDirectory);
         await Runes.InitializeAsync(appCts.Token);
-        Consonants = new ConsonantCatalog(new GoogleSheetsConsonantSource(runeHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId),
+        // 시트 폴더의 마지막 커밋을 시작 직후와 이후 1시간마다 확인하고, 바뀌었을 때만 다시 받습니다. 실패해도 다른 기능은 그대로 시작합니다.
+        _ = Runes.RunAsync(appCts.Token);
+        Consonants = new ConsonantCatalog(new GoogleSheetsConsonantSource(sheetHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId),
             dataDirectory);
         await Consonants.InitializeAsync(appCts.Token);
-        MessageBottles = new MessageBottleCatalog(new GoogleSheetsMessageBottleSource(runeHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
+        MessageBottles = new MessageBottleCatalog(new GoogleSheetsMessageBottleSource(sheetHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId,
             m_Config["GoogleSheets:MessageBottleSheetName"] ?? GoogleSheetsMessageBottleSource.DefaultSheetName),
             dataDirectory);
         await MessageBottles.InitializeAsync(appCts.Token);
-        Battles = new BattleCatalog(new GoogleSheetsBattleSource(runeHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId), dataDirectory);
+        Battles = new BattleCatalog(new GoogleSheetsBattleSource(sheetHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId), dataDirectory);
         await Battles.InitializeAsync(appCts.Token);
-        Crafting = new CraftingCatalog(new GoogleSheetsCraftingSource(runeHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
+        Crafting = new CraftingCatalog(new GoogleSheetsCraftingSource(sheetHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId,
             m_Config["GoogleSheets:CraftingSheetName"] ?? GoogleSheetsCraftingSource.DefaultSheetName),
             dataDirectory);
         await Crafting.InitializeAsync(appCts.Token);
-        TokenRules = new TokenRuleCatalog(new GoogleSheetsTokenRuleSource(runeHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsRuneSource.DefaultSpreadsheetId,
+        TokenRules = new TokenRuleCatalog(new GoogleSheetsTokenRuleSource(sheetHttp,
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId,
             m_Config["GoogleSheets:TokenRuleSheetId"] ?? GoogleSheetsTokenRuleSource.DefaultSheetId),
             dataDirectory);
         await TokenRules.InitializeAsync(appCts.Token);

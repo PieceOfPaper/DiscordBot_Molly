@@ -2,6 +2,7 @@ using System.Text;
 using Discord;
 using Discord.Interactions;
 using Molly.Runes;
+using Molly.Unpack;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -16,28 +17,34 @@ public class RuneCommand : InteractionModuleBase<SocketInteractionContext>
             return;
         }
 
-        await Program.instance.Runes.EnsureFreshAsync(TimeSpan.FromMinutes(10));
-        var table = Program.instance.Runes.Current;
-        if (table.Items.Count == 0)
+        var snapshot = Program.instance.Runes.Current;
+        if (snapshot is null)
         {
-            await RespondAsync("룬 데이터를 아직 준비하지 못했어요. 잠시 후 다시 시도해주세요.", ephemeral: true);
+            await RespondAsync(UnpackDataMessages.NoData(Program.instance.Runes.Name), ephemeral: true);
             return;
         }
 
         await DeferAsync();
-        var results = RuneSearch.Find(table, keyword);
+        var results = RuneSearch.Find(snapshot.Data, keyword);
         if (results.Count == 0)
         {
-            await ModifyOriginalResponseAsync(m => m.Content = "이름에 해당 검색어가 포함된 룬을 찾지 못했어요.");
+            await ModifyOriginalResponseAsync(m => m.Content = "🔍 이름에 해당 검색어가 포함된 룬을 찾지 못했어요.");
             return;
         }
 
-        var text = RuneSearch.Format(results);
-        var chunks = RuneSearch.SplitMessages(text);
-        // 아주 많은 결과도 누락하지 않고 한 파일에 제공합니다.
-        if (chunks.Count > 5)
+        var footer = snapshot.PatchDisplay.Length > 0 ? $"몰리 • 게임 데이터 패치 {snapshot.PatchDisplay}" : "몰리 • 게임 데이터 기준";
+        var header = RuneMessages.Header(keyword, results.Count);
+        var pages = RuneMessages.BuildPages(results, RankingCommand.ClassLabel, footer);
+        // 메시지가 너무 많아지는 결과는 이름 목록과 전체 결과 파일로 누락 없이 제공합니다.
+        if (pages is null)
         {
-            await ModifyOriginalResponseAsync(m => m.Content = $"룬 {results.Count}개를 찾았어요. 전체 결과는 첨부 파일에서 확인해주세요.");
+            await ModifyOriginalResponseAsync(m =>
+            {
+                m.Content = header;
+                m.Embed = RuneMessages.BuildSummary(keyword, results, footer);
+                m.AllowedMentions = AllowedMentions.None;
+            });
+            var text = RuneSearch.Format(results);
             using var file = new MemoryStream(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(text)).ToArray());
             await FollowupWithFileAsync(file, "룬-검색결과.txt", allowedMentions: AllowedMentions.None);
             return;
@@ -45,10 +52,11 @@ public class RuneCommand : InteractionModuleBase<SocketInteractionContext>
 
         await ModifyOriginalResponseAsync(m =>
         {
-            m.Content = chunks[0];
+            m.Content = header;
+            m.Embeds = pages[0].ToArray();
             m.AllowedMentions = AllowedMentions.None;
         });
-        foreach (var chunk in chunks.Skip(1))
-            await FollowupAsync(chunk, allowedMentions: AllowedMentions.None);
+        foreach (var page in pages.Skip(1))
+            await FollowupAsync(embeds: page.ToArray(), allowedMentions: AllowedMentions.None);
     }
 }

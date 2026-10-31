@@ -96,14 +96,38 @@ public sealed class UnpackRepoClient : IDisposable
     }
 
     /// <summary>
+    /// path 아래를 마지막으로 바꾼 커밋 SHA. 저장소는 덤프 중 커밋이 수십 개로 나뉘어 올라가므로,
+    /// 데이터 변경 판단은 브랜치 최신 커밋이 아니라 필요한 폴더의 마지막 커밋으로 합니다(요청 1회).
+    /// </summary>
+    public async Task<UnpackRepoResult<string>> GetLatestCommitForPathAsync(string path, CancellationToken ct = default)
+    {
+        var segments = SplitPath(path);
+        var result = await SendAsync($"repos/{m_Options.Repository}/commits?sha={Uri.EscapeDataString(m_Options.Branch)}" +
+                                     $"&path={Uri.EscapeDataString(string.Join('/', segments))}&per_page=1", "application/vnd.github+json", ct);
+        if (!result.IsSuccess) return UnpackRepoResult<string>.Fail(result.Status, result.Detail, result.RetryAfter);
+        string? sha;
+        try
+        {
+            using var document = JsonDocument.Parse(result.Value!);
+            sha = document.RootElement is { ValueKind: JsonValueKind.Array } list && list.GetArrayLength() > 0 &&
+                  list[0].TryGetProperty("sha", out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException ex) { return OnInvalid<string>($"{path} 커밋 목록 해석 실패: {ex.Message}"); }
+        if (sha is null) return UnpackRepoResult<string>.Fail(UnpackRepoStatus.NotFound, $"{path}를 바꾼 커밋이 없음");
+        return sha.Length == 40 && sha.All(char.IsAsciiHexDigitLower)
+            ? UnpackRepoResult<string>.Ok(sha)
+            : OnInvalid<string>($"커밋 SHA 형식이 아님: {Truncate(sha)}");
+    }
+
+    /// <summary>
     /// 저장소 파일 원본. path는 저장소 루트 기준 '/' 구분 경로, gitRef는 커밋 SHA(없으면 기본 브랜치)입니다.
     /// GitHub raw 응답 한도는 파일당 100MB입니다.
     /// </summary>
     public Task<UnpackRepoResult<byte[]>> GetFileAsync(string path, string? gitRef = null, CancellationToken ct = default)
     {
-        var segments = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0 || segments.Any(s => s is "." or ".."))
-            throw new ArgumentException($"잘못된 저장소 경로: {path}", nameof(path));
+        var segments = SplitPath(path);
         var relative = $"repos/{m_Options.Repository}/contents/{string.Join('/', segments.Select(Uri.EscapeDataString))}" +
                        $"?ref={Uri.EscapeDataString(gitRef ?? m_Options.Branch)}";
         return SendAsync(relative, "application/vnd.github.raw+json", ct);
@@ -197,6 +221,14 @@ public sealed class UnpackRepoClient : IDisposable
     {
         m_Log(detail);
         return UnpackRepoResult<T>.Fail(UnpackRepoStatus.InvalidResponse, detail);
+    }
+
+    private static string[] SplitPath(string path)
+    {
+        var segments = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || segments.Any(s => s is "." or ".."))
+            throw new ArgumentException($"잘못된 저장소 경로: {path}", nameof(path));
+        return segments;
     }
 
     private static string Truncate(string text) => text.Length <= 200 ? text : text[..200] + "…";

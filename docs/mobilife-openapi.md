@@ -79,7 +79,7 @@ dotnet run --project tests/Molly.DataTests/Molly.DataTests.csproj --configuratio
 
 ## 4. 기능을 추가할 때의 규칙
 
-1. **도메인 인터페이스로 분리한다.** 기능은 `MobiLifeApiClient`를 직접 호출하지 않는다. 예: 시세 기능이면 `IMarketPriceSource`(도메인 모델 반환)를 정의하고 `MobiLifeMarketPriceSource`가 이를 구현한다. API가 사라지면 구현체만 교체하거나 제거한다. 룬 데이터의 `IRuneSource`, 이벤트의 `IMobiEventPageSource`와 같은 방식이다.
+1. **도메인 인터페이스로 분리한다.** 기능은 `MobiLifeApiClient`를 직접 호출하지 않는다. 예: 시세 기능이면 `IMarketPriceSource`(도메인 모델 반환)를 정의하고 `MobiLifeMarketPriceSource`가 이를 구현한다. API가 사라지면 구현체만 교체하거나 제거한다. 게임 데이터 저장소의 `IUnpackDataset<T>`, 이벤트의 `IMobiEventPageSource`와 같은 방식이다.
 2. **캐시와 마지막 정상 데이터를 둔다.** 같은 조회는 캐시(시세는 원본이 약 5분 간격 갱신이므로 최소 1~5분)를 공유하고, 동시 요청은 한 번의 호출로 합친다. 실패하면 마지막 정상 데이터를 "수집 시각"과 함께 보여준다(`MobiEventService` 참고). 새 데이터는 검증 후 교체한다.
 3. **시작을 막지 않는다.** 시작 시 네트워크 호출을 하지 않거나, 하더라도 실패를 삼키고 다른 기능을 계속 시작한다. 키가 없는 개발 환경에서도 봇이 떠야 한다.
 4. **Interaction은 먼저 `DeferAsync`한다.** 네트워크 호출(최대 30초)이 있으므로 3초 응답 제한을 넘길 수 있다.

@@ -1,77 +1,51 @@
 using System.Collections.ObjectModel;
-using System.Globalization;
-using Microsoft.VisualBasic.FileIO;
 
 namespace Molly.Runes;
 
-public sealed record RuneKey(int Season, string Grade, string Category, string Name);
+// 몰리가 다루는 룬 등급. 게임 데이터의 Rarity 중 전설·신화만 담습니다.
+public enum RuneGrade { Legendary, Mythic }
 
-public sealed record RuneData(int Season, string Grade, string Category, string Class, string Name, string Effect)
+// 게임 데이터의 RuneAttachableType(Weapon·Armor·Emblem·AccessoryAndRing).
+public enum RuneCategory { Weapon, Armor, Emblem, Accessory }
+
+public static class RuneNames
 {
-    public RuneKey Key => new(Season, Grade, Category, Name);
+    public static string Display(this RuneGrade grade) => grade switch
+    {
+        RuneGrade.Legendary => "전설",
+        RuneGrade.Mythic => "신화",
+        _ => throw new ArgumentOutOfRangeException(nameof(grade)),
+    };
+
+    // 게임 표시 이름은 '엠블럼 룬'이지만 몰리 명령·퀴즈 종목은 '앰블럼'으로 써 왔으므로 그대로 둡니다.
+    public static string Display(this RuneCategory category) => category switch
+    {
+        RuneCategory.Weapon => "무기",
+        RuneCategory.Armor => "방어구",
+        RuneCategory.Emblem => "앰블럼",
+        RuneCategory.Accessory => "장신구",
+        _ => throw new ArgumentOutOfRangeException(nameof(category)),
+    };
 }
+
+/// <param name="Id">게임 데이터의 Rune.Id(예: Rune_Weapon_v30_Tier10_A01).</param>
+/// <param name="Season">RuneSeasonType의 숫자(Season02 → 2).</param>
+/// <param name="Class">전용 클래스 표시 이름. 공용 룬은 빈 문자열입니다.</param>
+/// <param name="Name">'무기 룬: ' 같은 접두어를 뺀 표시 이름. 같은 이름의 상위 룬은 끝에 '+'가 붙습니다.</param>
+/// <param name="Effect">옵션 설명을 줄바꿈으로 이은 문장. 수치를 찾지 못한 자리는 '?'입니다.</param>
+public sealed record RuneData(string Id, int Season, RuneGrade Grade, RuneCategory Category, string Class, string Name, string Effect);
 
 public sealed class RuneTable
 {
     public IReadOnlyList<RuneData> Items { get; }
-    public IReadOnlyDictionary<RuneKey, RuneData> ByKey { get; }
+    public IReadOnlyDictionary<string, RuneData> ById { get; }
+    // 만들 때 제외했거나 수치를 다 찾지 못한 룬. 로그용이며 캐시에는 저장하지 않습니다.
     public IReadOnlyList<string> Warnings { get; }
-    public DateTimeOffset LoadedAt { get; }
 
-    internal RuneTable(IEnumerable<RuneData> items, IEnumerable<string> warnings, DateTimeOffset loadedAt)
+    public RuneTable(IEnumerable<RuneData> items, IEnumerable<string>? warnings = null)
     {
         Items = Array.AsReadOnly(items.ToArray());
-        ByKey = new ReadOnlyDictionary<RuneKey, RuneData>(Items.ToDictionary(x => x.Key));
-        Warnings = Array.AsReadOnly(warnings.ToArray());
-        LoadedAt = loadedAt;
-    }
-
-    public static RuneTable Empty { get; } = new([], [], DateTimeOffset.MinValue);
-}
-
-public static class RuneCsvReader
-{
-    public static RuneTable Parse(string csv, DateTimeOffset loadedAt)
-    {
-        using var parser = new TextFieldParser(new StringReader(csv.TrimStart('\uFEFF')))
-        {
-            TextFieldType = FieldType.Delimited,
-            HasFieldsEnclosedInQuotes = true,
-            TrimWhiteSpace = false
-        };
-        parser.SetDelimiters(",");
-        var headers = parser.ReadFields() ?? throw new InvalidDataException("룬 테이블 헤더가 없습니다.");
-        headers = headers.Select(x => x.Trim()).ToArray();
-        string[] required = ["시즌", "등급", "분류", "클래스", "이름", "효과"];
-        if (headers.Distinct(StringComparer.Ordinal).Count() != headers.Length || required.Any(x => !headers.Contains(x)))
-            throw new InvalidDataException("룬 테이블에 중복 헤더가 있거나 필수 헤더(시즌·등급·분류·클래스·이름·효과)가 없습니다.");
-        var indexes = required.Select(x => Array.IndexOf(headers, x)).ToArray();
-        var items = new List<RuneData>();
-        var warnings = new List<string>();
-        var keys = new HashSet<RuneKey>();
-        while (!parser.EndOfData)
-        {
-            var line = parser.LineNumber;
-            var fields = parser.ReadFields()!;
-            if (fields.All(string.IsNullOrWhiteSpace)) continue;
-            if (fields.Length != headers.Length)
-                throw new InvalidDataException($"룬 CSV {line}행의 열 수가 헤더와 다릅니다.");
-            var values = indexes.Select(i => fields[i].Trim()).ToArray();
-            if (!int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var season) || season < 1)
-                throw new InvalidDataException($"룬 CSV {line}행의 시즌은 양의 정수여야 합니다.");
-            if (values[1] is not ("신화" or "전설") || values[2] is not ("무기" or "방어구" or "앰블럼" or "장신구") || values[4].Length == 0)
-                throw new InvalidDataException($"룬 CSV {line}행의 등급·분류·이름을 확인하세요.");
-            var item = new RuneData(season, values[1], values[2], values[3], values[4], values[5]);
-            if (!keys.Add(item.Key))
-                throw new InvalidDataException($"룬 CSV {line}행에 같은 시즌·등급·분류·이름이 중복됩니다.");
-            if (item.Effect.Length == 0)
-            {
-                warnings.Add($"{line}행 '{item.Name}': 효과가 비어 있어 제외했습니다.");
-                continue;
-            }
-            items.Add(item);
-        }
-        if (items.Count == 0) throw new InvalidDataException("사용 가능한 룬이 없어 기존 데이터를 유지합니다.");
-        return new RuneTable(items, warnings, loadedAt);
+        ById = new ReadOnlyDictionary<string, RuneData>(Items.ToDictionary(x => x.Id, StringComparer.Ordinal));
+        Warnings = Array.AsReadOnly((warnings ?? []).ToArray());
     }
 }

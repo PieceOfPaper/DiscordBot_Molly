@@ -23,11 +23,11 @@ public static class QuizQuestions
         var questions = topic switch
         {
             ConsonantTopic.Season2Rune => runes.Where(r => r.Season == 2).Select(CreateRuneQuestion),
-            ConsonantTopic.Season2WeaponRune => runes.Where(r => r.Season == 2 && r.Category == "무기").Select(CreateRuneQuestion),
-            ConsonantTopic.Season2ArmorRune => runes.Where(r => r.Season == 2 && r.Category == "방어구").Select(CreateRuneQuestion),
-            ConsonantTopic.Season2EmblemRune => runes.Where(r => r.Season == 2 && r.Category == "앰블럼").Select(CreateRuneQuestion),
-            ConsonantTopic.Season2AccessoryRune => runes.Where(r => r.Season == 2 && r.Category == "장신구").Select(CreateRuneQuestion),
-            ConsonantTopic.Season2NonAccessoryRune => runes.Where(r => r.Season == 2 && r.Category != "장신구").Select(CreateRuneQuestion),
+            ConsonantTopic.Season2WeaponRune => runes.Where(r => r.Season == 2 && r.Category == RuneCategory.Weapon).Select(CreateRuneQuestion),
+            ConsonantTopic.Season2ArmorRune => runes.Where(r => r.Season == 2 && r.Category == RuneCategory.Armor).Select(CreateRuneQuestion),
+            ConsonantTopic.Season2EmblemRune => runes.Where(r => r.Season == 2 && r.Category == RuneCategory.Emblem).Select(CreateRuneQuestion),
+            ConsonantTopic.Season2AccessoryRune => runes.Where(r => r.Season == 2 && r.Category == RuneCategory.Accessory).Select(CreateRuneQuestion),
+            ConsonantTopic.Season2NonAccessoryRune => runes.Where(r => r.Season == 2 && r.Category != RuneCategory.Accessory).Select(CreateRuneQuestion),
             ConsonantTopic.Npc => table.Npcs.Select(n => CreateQuestion("NPC", n.Name, $"지역: {(string.IsNullOrWhiteSpace(n.Region) ? "불명" : n.Region)}")),
             ConsonantTopic.Class => table.Classes.Select(c => CreateQuestion("클래스", c.Name, null)),
             ConsonantTopic.Region => table.Regions.Select(r => CreateQuestion("지역", r.Name, $"분류: {r.Category}")),
@@ -42,8 +42,11 @@ public static class QuizQuestions
         return Array.AsReadOnly(pool[..Math.Min(count, pool.Length)]);
     }
 
+    public static bool UsesRunes(ConsonantTopic topic) => topic is ConsonantTopic.Season2Rune or ConsonantTopic.Season2WeaponRune or
+        ConsonantTopic.Season2ArmorRune or ConsonantTopic.Season2EmblemRune or ConsonantTopic.Season2AccessoryRune or ConsonantTopic.Season2NonAccessoryRune;
+
     private static QuizQuestion CreateRuneQuestion(RuneData rune)
-        => CreateQuestion("룬", rune.Name.TrimEnd('+').Trim(), $"{rune.Category}룬");
+        => CreateQuestion("룬", rune.Name.TrimEnd('+').Trim(), $"{rune.Category.Display()}룬");
 
     private static QuizQuestion CreateQuestion(string kind, string answer, string? hint)
     {
@@ -72,11 +75,11 @@ public static class QuizQuestions
         var pool = runes.Where(r => r.Season == 2 && !string.IsNullOrWhiteSpace(r.Name) && !string.IsNullOrWhiteSpace(r.Effect))
             .Where(r => topic switch
             {
-                QuizTopic.Season2WeaponRuneEffect => r.Category == "무기",
-                QuizTopic.Season2ArmorRuneEffect => r.Category == "방어구",
-                QuizTopic.Season2EmblemRuneEffect => r.Category == "앰블럼",
-                QuizTopic.Season2AccessoryRuneEffect or QuizTopic.Season2AccessoryRuneNameClass => r.Category == "장신구",
-                QuizTopic.Season2NonAccessoryRuneEffect => r.Category != "장신구",
+                QuizTopic.Season2WeaponRuneEffect => r.Category == RuneCategory.Weapon,
+                QuizTopic.Season2ArmorRuneEffect => r.Category == RuneCategory.Armor,
+                QuizTopic.Season2EmblemRuneEffect => r.Category == RuneCategory.Emblem,
+                QuizTopic.Season2AccessoryRuneEffect or QuizTopic.Season2AccessoryRuneNameClass => r.Category == RuneCategory.Accessory,
+                QuizTopic.Season2NonAccessoryRuneEffect => r.Category != RuneCategory.Accessory,
                 _ => true
             })
             .Where(r => topic != QuizTopic.Season2AccessoryRuneNameClass || !string.IsNullOrWhiteSpace(r.Class))

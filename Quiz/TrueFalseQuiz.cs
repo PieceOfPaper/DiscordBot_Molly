@@ -38,11 +38,11 @@ public static class TrueFalseQuestions
         var pool = runes.Where(r => r.Season == 2 && !string.IsNullOrWhiteSpace(r.Name) && !string.IsNullOrWhiteSpace(r.Effect))
             .Where(r => topic switch
             {
-                TrueFalseTopic.Season2WeaponRune => r.Category == "무기",
-                TrueFalseTopic.Season2ArmorRune => r.Category == "방어구",
-                TrueFalseTopic.Season2EmblemRune => r.Category == "앰블럼",
-                TrueFalseTopic.Season2AccessoryRune => r.Category == "장신구",
-                TrueFalseTopic.Season2NonAccessoryRune => r.Category != "장신구",
+                TrueFalseTopic.Season2WeaponRune => r.Category == RuneCategory.Weapon,
+                TrueFalseTopic.Season2ArmorRune => r.Category == RuneCategory.Armor,
+                TrueFalseTopic.Season2EmblemRune => r.Category == RuneCategory.Emblem,
+                TrueFalseTopic.Season2AccessoryRune => r.Category == RuneCategory.Accessory,
+                TrueFalseTopic.Season2NonAccessoryRune => r.Category != RuneCategory.Accessory,
                 _ => true
             }).ToArray();
         if (pool.Length == 0) throw new ArgumentException("현재 출제 가능한 룬이 없습니다.");

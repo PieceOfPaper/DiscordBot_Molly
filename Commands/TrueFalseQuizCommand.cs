@@ -1,6 +1,7 @@
 using Discord;
 using Discord.Interactions;
 using Molly.Quiz;
+using Molly.Unpack;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -33,11 +34,16 @@ public sealed class TrueFalseQuizCommand : InteractionModuleBase<SocketInteracti
             await RespondAsync("문제종목을 선택하고 문제수와 제한시간을 1 이상으로 입력해주세요.", ephemeral: true);
             return;
         }
+        var runes = Program.instance.Runes.Data;
+        if (runes is null)
+        {
+            await RespondAsync(UnpackDataMessages.NoData(Program.instance.Runes.Name), ephemeral: true);
+            return;
+        }
         await RespondAsync("진혹거퀴즈 스레드를 준비하고 있어요. 잠시만 기다려주세요.");
         try
         {
-            await Program.instance.Runes.EnsureFreshAsync(TimeSpan.FromMinutes(10));
-            var questions = TrueFalseQuestions.Pick(selected.Value, Program.instance.Runes.Current.Items, count);
+            var questions = TrueFalseQuestions.Pick(selected.Value, runes.Items, count);
             var result = await Program.instance.TrueFalseQuizzes.StartAsync(Context.Guild.Id, selected.Value, questions, seconds,
                 async ct =>
                 {
