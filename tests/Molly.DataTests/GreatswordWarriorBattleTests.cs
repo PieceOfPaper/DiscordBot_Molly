@@ -4,7 +4,7 @@ using Molly.Battle;
 /// 대검전사의 검 자세(앞·뒤)와 전투 템포, 어깨 치기↔발구르기, 대검술 템포별 파생(대지 휩쓸기·심장 찌르기·바람 가르기), 바람 가르기 추가 사용,
 /// 필사의 일격, 불굴·보복·난투·뭉개진 상처 흐름을 실제 시트 행으로 검사한다.
 /// Sheets의 클래스별 시트는 2026-10-03 배틀 시트에서 대검전사 행(과 참조하는 공용 행)만 추린 사본이다. 시트의 대검전사 행을 바꾸면 이 사본도 함께 갱신한다.
-/// 배틀규칙·배틀스킬AI·돌발 이벤트·생활스킬 시트는 석궁사수 사본을 그대로 쓴다(AI 가산 없이 같은 가중치면 마지막 후보가 뽑힌다).
+/// 배틀규칙·배틀스킬AI·돌발 이벤트·배틀생활스킬 시트는 석궁사수 사본을 그대로 쓴다(AI 가산 없이 같은 가중치면 마지막 후보가 뽑힌다).
 /// </summary>
 internal static class GreatswordWarriorBattleTests
 {
@@ -165,7 +165,7 @@ internal static class GreatswordWarriorBattleTests
         public double NextDouble() { if (!first) return value; first = false; return 0; }
     }
 
-    public static readonly IReadOnlyDictionary<string, string> Sheets = new Dictionary<string, string>(CrossbowBattleTests.Sheets.Where(x => x.Key is "배틀규칙" or "배틀스킬AI" or "배틀돌발이벤트" or "배틀돌발이벤트효과" or "생활스킬" or "배틀생활스킬" or "배틀생활스킬효과"))
+    public static readonly IReadOnlyDictionary<string, string> Sheets = new Dictionary<string, string>(CrossbowBattleTests.Sheets.Where(x => x.Key is "배틀규칙" or "배틀스킬AI" or "배틀돌발이벤트" or "배틀돌발이벤트효과" or "배틀생활스킬" or "배틀생활스킬효과"))
     {
         ["클래스"] = """"
 ID,이름,계열,설명,스킬1,스킬2,스킬3,스킬4,스킬5,궁극기,패시브1,패시브2,패시브3,패시브4,패시브5,패시브6

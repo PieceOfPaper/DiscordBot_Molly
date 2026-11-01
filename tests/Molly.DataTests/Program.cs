@@ -173,7 +173,7 @@ if (args.Length == 1 && args[0] == "--skill-quiz-live")
 }
 if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
 {
-    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
+    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지·생활스킬 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
     // 두 번째 인자로 커밋 SHA를 주면 version.json 커밋 확인 없이 그 커밋 기준으로 만듭니다(저장소 갱신 중 확인용).
     var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
     using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
@@ -187,12 +187,13 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
         var worldCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.World.WorldTable>(unpack, new Molly.World.UnpackWorldDataset(), liveDir, Console.WriteLine);
         var portraits = new Molly.World.NpcPortraitCache(unpack, worldCatalog, liveDir, Console.WriteLine);
         var bottleCatalog = new Molly.Unpack.UnpackDataCatalog<MessageBottleTable>(unpack, new UnpackMessageBottleDataset(), liveDir, Console.WriteLine);
-        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits, bottleCatalog];
+        var lifeSkillCatalog = new Molly.Unpack.UnpackDataCatalog<LifeSkillTable>(unpack, new UnpackLifeSkillDataset(), liveDir, Console.WriteLine);
+        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits, bottleCatalog, lifeSkillCatalog];
         var results = new List<Molly.Unpack.UnpackRefreshResult>();
         if (args.Length == 2)
             foreach (var catalog in liveCatalogs) results.Add(await catalog.RefreshAsync(args[1], default));
         else results.AddRange(await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, liveCatalogs, default));
-        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null || bottleCatalog.Data is null)
+        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null || bottleCatalog.Data is null || lifeSkillCatalog.Data is null)
         {
             Console.WriteLine("데이터 만들기 실패: " + string.Join(" / ", results.Select(x => $"{x.Status} {x.Detail}")));
             Environment.Exit(1);
@@ -223,6 +224,7 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
         Console.WriteLine($"아이콘이 연결된 클래스 {classIcons}/{classCatalog.Data.Items.Count}개");
         foreach (var bottle in bottleCatalog.Data.Items)
             Console.WriteLine($"{bottle.Id} | {bottle.Message.Replace("\n", " / ")}");
+        Console.WriteLine("생활스킬: " + string.Join(", ", lifeSkillCatalog.Data.Items.Select(x => $"{x.Name}({x.Id})")));
     }
     finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
     return;
@@ -643,6 +645,7 @@ await UnpackDataTests.RunAsync();
 await RuneEnhanceTests.RunAsync();
 await WorldDataTests.RunAsync();
 await MessageBottleDataTests.RunAsync();
+await LifeSkillDataTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await HaeyeonCostTests.RunAsync();
 await KeywordMarketTests.RunAsync();

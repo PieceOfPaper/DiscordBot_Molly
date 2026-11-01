@@ -4,7 +4,7 @@ using Molly.Battle;
 /// 듀얼블레이드의 질풍의 기운과 강화 스킬 전환(스플릿 다운·라이징 크레센트·스크류 러시·하울링 템페스트·라이트닝 퓨리), 방어력 무시 중첩,
 /// 브레이크 대상 크레센트 2배 피해, 하울링 게일 받는 피해 감소, 글라이딩 퓨리 치명타 추가 타격, 파이널 히트와 패시브 흐름을 실제 시트 행으로 검사한다.
 /// Sheets의 클래스별 시트는 2026-10-03 배틀 시트에서 듀얼블레이드 행(과 참조하는 공용 행)만 추린 사본이다. 시트의 듀얼블레이드 행을 바꾸면 이 사본도 함께 갱신한다.
-/// 배틀규칙·배틀스킬AI·돌발 이벤트·생활스킬 시트는 석궁사수 사본을 그대로 쓴다.
+/// 배틀규칙·배틀스킬AI·돌발 이벤트·배틀생활스킬 시트는 석궁사수 사본을 그대로 쓴다.
 /// </summary>
 internal static class DualBladeBattleTests
 {
@@ -158,7 +158,7 @@ internal static class DualBladeBattleTests
         public double NextDouble() { if (!first) return value; first = false; return 0; }
     }
 
-    public static readonly IReadOnlyDictionary<string, string> Sheets = new Dictionary<string, string>(CrossbowBattleTests.Sheets.Where(x => x.Key is "배틀규칙" or "배틀스킬AI" or "배틀돌발이벤트" or "배틀돌발이벤트효과" or "생활스킬" or "배틀생활스킬" or "배틀생활스킬효과"))
+    public static readonly IReadOnlyDictionary<string, string> Sheets = new Dictionary<string, string>(CrossbowBattleTests.Sheets.Where(x => x.Key is "배틀규칙" or "배틀스킬AI" or "배틀돌발이벤트" or "배틀돌발이벤트효과" or "배틀생활스킬" or "배틀생활스킬효과"))
     {
         ["클래스"] = """"
 ID,이름,계열,설명,스킬1,스킬2,스킬3,스킬4,스킬5,궁극기,패시브1,패시브2,패시브3,패시브4,패시브5,패시브6

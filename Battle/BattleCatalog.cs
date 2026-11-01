@@ -14,7 +14,7 @@ public interface IBattleDataSource
 /// <summary>전투용 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
 public sealed class GoogleSheetsBattleSource(HttpClient client, string spreadsheetId) : IBattleDataSource
 {
-    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"];
+    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과", "배틀생활스킬", "배틀생활스킬효과"];
     public string CacheKey => spreadsheetId;
 
     public async Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct)
@@ -43,14 +43,17 @@ public sealed class BattleCatalog
     private readonly IBattleDataSource source;
     private readonly string cachePath;
     private readonly Action<string> log;
+    // 게임 데이터의 생활스킬 이름 목록. 없으면(언팩 데이터 없음) 배틀생활스킬 이름 확인을 건너뜁니다.
+    private readonly Func<IReadOnlyCollection<string>?> lifeSkillNames;
     private readonly SemaphoreSlim gate = new(1, 1);
     private BattleDataSnapshot current = BattleDataSnapshot.Empty;
     public BattleDataSnapshot Current => Volatile.Read(ref current);
 
-    public BattleCatalog(IBattleDataSource source, string dataDirectory, Action<string>? log = null)
+    public BattleCatalog(IBattleDataSource source, string dataDirectory, Action<string>? log = null, Func<IReadOnlyCollection<string>?>? lifeSkillNames = null)
     {
         this.source = source;
         this.log = log ?? Console.WriteLine;
+        this.lifeSkillNames = lifeSkillNames ?? (() => null);
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source.CacheKey)));
         cachePath = Path.Combine(dataDirectory, "battle", key + ".json");
     }
@@ -65,7 +68,7 @@ public sealed class BattleCatalog
                 try
                 {
                     var tables = JsonSerializer.Deserialize<Dictionary<string, string>>(await File.ReadAllTextAsync(cachePath, ct).ConfigureAwait(false));
-                    if (tables is not null) Volatile.Write(ref current, Parse(tables, File.GetLastWriteTimeUtc(cachePath)));
+                    if (tables is not null) Volatile.Write(ref current, Parse(tables, File.GetLastWriteTimeUtc(cachePath), LifeSkillNames(), log));
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { log($"[배틀] 로컬 캐시 로딩 실패: {ex.Message}"); }
@@ -81,7 +84,7 @@ public sealed class BattleCatalog
         try
         {
             var tables = await source.FetchAsync(ct).ConfigureAwait(false);
-            var snapshot = Parse(tables, DateTimeOffset.UtcNow);
+            var snapshot = Parse(tables, DateTimeOffset.UtcNow, LifeSkillNames(), log);
             var json = JsonSerializer.Serialize(tables);
             Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
             var temporary = cachePath + ".tmp-" + Guid.NewGuid().ToString("N");
@@ -96,7 +99,16 @@ public sealed class BattleCatalog
         finally { gate.Release(); }
     }
 
-    public static BattleDataSnapshot Parse(IReadOnlyDictionary<string, string> tables, DateTimeOffset loadedAt)
+    private IReadOnlyCollection<string>? LifeSkillNames()
+    {
+        var names = lifeSkillNames();
+        if (names is null) log("[배틀] 게임 데이터 생활스킬 목록이 없어 배틀생활스킬 이름 확인을 건너뜁니다.");
+        return names;
+    }
+
+    /// <param name="lifeSkillNames">게임 데이터(LivingSkill)의 생활스킬 이름. null이면 배틀생활스킬 이름 확인을 건너뜁니다.</param>
+    /// <param name="warn">데이터를 거부하지 않는 경고(배틀생활스킬이 아직 없는 생활스킬 등)를 남깁니다.</param>
+    public static BattleDataSnapshot Parse(IReadOnlyDictionary<string, string> tables, DateTimeOffset loadedAt, IReadOnlyCollection<string>? lifeSkillNames = null, Action<string>? warn = null)
     {
         foreach (var name in GoogleSheetsBattleSource.SheetNames)
             if (!tables.ContainsKey(name)) throw new InvalidDataException($"전투 데이터에 {name} 시트가 없습니다.");
@@ -112,7 +124,7 @@ public sealed class BattleCatalog
         var statuses = BattleCsv.Read(tables["배틀상태효과"], "배틀상태효과");
         var rules = BattleCsv.Read(tables["배틀규칙"], "배틀규칙");
         // 나머지 표도 누락/깨진 CSV를 허용하지 않습니다. 상세 효과는 이후 엔진 단계에서 공통 모델로 확장합니다.
-        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "생활스킬", "배틀생활스킬", "배틀생활스킬효과"])) BattleCsv.Read(tables[name], name);
+        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀생활스킬", "배틀생활스킬효과"])) BattleCsv.Read(tables[name], name);
         BattleCsv.Headers(classes, "클래스", "ID", "이름", "스킬1", "스킬2", "스킬3", "스킬4", "스킬5", "궁극기", "패시브1", "패시브2", "패시브3", "패시브4", "패시브5", "패시브6");
         BattleCsv.Headers(skills, "스킬", "ID", "이름", "스킬구분", "부모스킬ID");
         BattleCsv.Headers(passiveSkills, "패시브스킬", "ID", "이름");
@@ -244,7 +256,7 @@ public sealed class BattleCatalog
         if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "상대상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
         if (derivationList.FirstOrDefault(x => x.ConditionType == "상대상태효과보유" && (x.ConditionValue is null || !statusMap.ContainsKey(x.ConditionValue))) is { } unknownStatus) throw new InvalidDataException($"배틀스킬파생 '{unknownStatus.Id}'의 상대상태효과보유 조건값이 존재하지 않는 상태 ID입니다.");
         var skillAiRules = ParseSkillAiRules(BattleCsv.Read(tables["배틀스킬AI"], "배틀스킬AI"), skillMap, resourceMap, statusMap);
-        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, SkillAiRules = skillAiRules, LifeSkills = ParseLifeSkills(tables), LoadedAt = loadedAt };
+        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, SkillAiRules = skillAiRules, LifeSkills = ParseLifeSkills(tables, lifeSkillNames, warn ?? (_ => { })), LoadedAt = loadedAt };
     }
 
     /// <summary>수치를 비교하는 AI 조건. 비례 가산(단계당가산)은 이 조건에서만 쓸 수 있다.</summary>
@@ -325,16 +337,13 @@ public sealed class BattleCatalog
         ["다음스킬피해증가"] = "비율", ["다음스킬치명타확률증가"] = "비율", ["다음스킬치명타피해증가"] = "비율"
     };
 
-    private static IReadOnlyList<BattleLifeSkill> ParseLifeSkills(IReadOnlyDictionary<string, string> tables)
+    private static IReadOnlyList<BattleLifeSkill> ParseLifeSkills(IReadOnlyDictionary<string, string> tables, IReadOnlyCollection<string>? sourceNames, Action<string> warn)
     {
-        var sourceRows = BattleCsv.Read(tables["생활스킬"], "생활스킬");
         var skillRows = BattleCsv.Read(tables["배틀생활스킬"], "배틀생활스킬");
         var effectRows = BattleCsv.Read(tables["배틀생활스킬효과"], "배틀생활스킬효과");
         // BattleCsv.Headers는 첫 행에서 헤더를 읽는다. 행이 없는 시트는 불러올 배틀생활스킬이 없다는 뜻이므로 헤더 검사를 건너뛴다.
-        if (sourceRows.Count > 0) BattleCsv.Headers(sourceRows, "생활스킬", "이름");
         if (skillRows.Count > 0) BattleCsv.Headers(skillRows, "배틀생활스킬", "ID", "생활스킬이름", "활성화", "기본사용확률", "생활력기준값", "생활력확률보정계수", "최대사용확률", "전투당최대횟수", "선택가중치", "조건대상", "조건유형", "조건연산자", "조건값", "행동문구");
         if (effectRows.Count > 0) BattleCsv.Headers(effectRows, "배틀생활스킬효과", "ID", "배틀생활스킬ID", "실행순서", "효과유형", "대상", "계수기준", "계수", "고정값", "생활력비례", "생활력기준값", "생활력최소배율", "생활력최대배율", "횟수", "지속턴", "효과문구");
-        var sourceNames = sourceRows.Select((x, i) => x.Required("이름", "생활스킬", i + 2)).ToHashSet(StringComparer.Ordinal);
 
         var effects = new List<BattleLifeSkillEffect>();
         foreach (var (row, index) in Unique(effectRows, "배틀생활스킬효과").Select((x, i) => (x, i + 2)))
@@ -367,7 +376,7 @@ public sealed class BattleCatalog
             const string sheet = "배틀생활스킬";
             var id = row["ID"];
             var name = row.Required("생활스킬이름", sheet, index);
-            if (!sourceNames.Contains(name)) throw new InvalidDataException($"{sheet} 시트 {index}행의 생활스킬이름 '{name}'이(가) 생활스킬 시트에 없습니다.");
+            if (sourceNames is not null && !sourceNames.Contains(name)) throw new InvalidDataException($"{sheet} 시트 {index}행의 생활스킬이름 '{name}'이(가) 게임 데이터 생활스킬에 없습니다.");
             if (NonBattleLifeSkillNames.Contains(name)) throw new InvalidDataException($"{sheet} 시트 {index}행의 '{name}'은(는) 생활력과 무관해 배틀생활스킬로 만들지 않습니다.");
             if (!usedNames.Add(name)) throw new InvalidDataException($"{sheet} 시트의 생활스킬이름 '{name}'이(가) 중복되었습니다.");
             var conditionTarget = row.Required("조건대상", sheet, index);
@@ -386,8 +395,9 @@ public sealed class BattleCatalog
             if (skill.Enabled && skillEffects.Length == 0) throw new InvalidDataException($"배틀생활스킬 '{id}'가 활성화되어 있지만 효과가 하나도 없습니다.");
             result.Add(skill);
         }
-        var missing = sourceNames.Where(x => !NonBattleLifeSkillNames.Contains(x) && !usedNames.Contains(x)).ToArray();
-        if (missing.Length > 0) throw new InvalidDataException($"배틀생활스킬 시트에 생활스킬이 누락되었습니다: {string.Join(", ", missing)}");
+        // 게임 패치로 생활스킬이 새로 생기면 배틀생활스킬 행을 만들 때까지 배틀에 나오지 않을 뿐이므로, 배틀 데이터 전체를 거부하지 않고 알립니다.
+        var missing = sourceNames?.Where(x => !NonBattleLifeSkillNames.Contains(x) && !usedNames.Contains(x)).ToArray() ?? [];
+        if (missing.Length > 0) warn($"[배틀] 배틀생활스킬 시트에 없는 생활스킬이 있어 배틀에 나오지 않습니다: {string.Join(", ", missing)}");
         var knownIds = result.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
         if (effects.FirstOrDefault(x => !knownIds.Contains(x.LifeSkillId)) is { } orphan) throw new InvalidDataException($"배틀생활스킬효과 '{orphan.Id}'가 존재하지 않는 배틀생활스킬 ID '{orphan.LifeSkillId}'를 참조합니다.");
         // 사용 판정은 후보를 고르기 전에 한 번만 하므로, 행마다 다른 판정 값이 있으면 어느 값을 쓸지 정의되지 않는다.

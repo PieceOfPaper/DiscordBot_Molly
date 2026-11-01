@@ -216,8 +216,9 @@ dotnet run
 | NPC·지역 | QuickNavigatorShortcut, Channel, GameSpace, NPC, 지역 월드의 NPC 배치 파일(`WorldData/<월드>/NPCDeploy`) | `/자음퀴즈`(NPC·지역 종목), `/이미지퀴즈`(NPC 종목) |
 | NPC 이미지 | NPC·지역 데이터의 프로필 이미지(`Sprites/NPCProfile/*.png`, 바뀐 파일만 받아 `MOLLY_DATA_DIR/unpack/npc-portraits`에 보관) | `/이미지퀴즈`(NPC 종목) |
 | 병 속에 든 쪽지 | 문자열 테이블(`Patch/StringTables/compiled.strings.json`)의 `EasterEgg` 그룹 `GlassBottleLetter_번호` 문구 | `/병속에든쪽지` |
+| 생활스킬 | LivingSkill(이름) | `/배틀`(배틀생활스킬 이름 확인) |
 
-배틀의 `클래스`·`스킬`·`패시브스킬`·`생활스킬` 탭은 배틀용 데이터를 만드는 원본이라 Google Sheets에 그대로 둡니다. Google Sheets의 `제작`·`NPC`·`지역`·`병 속에 든 쪽지` 탭은 더 이상 읽지 않고, `가공` 탭은 쓰는 기능이 없어 옮기지 않았습니다.
+배틀의 `클래스`·`스킬`·`패시브스킬` 탭은 배틀용 데이터를 만드는 원본이라 Google Sheets에 그대로 둡니다. Google Sheets의 `제작`·`NPC`·`지역`·`병 속에 든 쪽지`·`생활스킬` 탭은 더 이상 읽지 않고, `가공` 탭은 쓰는 기능이 없어 옮기지 않았습니다.
 
 ## 해연 시세 모니터링
 

@@ -2,14 +2,14 @@ using Molly.Battle;
 
 /// <summary>
 /// 배틀생활스킬(기획서 7.2) 로딩 검증과 엔진 동작을 검사한다.
-/// LifeSheets는 2026-09-25 배틀생활스킬·배틀생활스킬효과 시트의 사본이고, 생활스킬은 이름 열만 남긴 사본이다. 시트를 바꾸면 이 사본도 함께 갱신한다.
+/// LifeSheets는 2026-09-25 배틀생활스킬·배틀생활스킬효과 시트의 사본이고, GameLifeSkillNames는 게임 데이터 생활스킬 이름 사본이다. 시트를 바꾸면 이 사본도 함께 갱신한다.
 /// 엔진 검사는 방어·편차·치명타·추가타를 끈 규칙으로 피해 비율을 정확히 비교한다.
 /// </summary>
 internal static class LifeSkillBattleTests
 {
     public static void Run()
     {
-        var data = BattleCatalog.Parse(Tables(), DateTimeOffset.UtcNow);
+        var data = BattleCatalog.Parse(Tables(), DateTimeOffset.UtcNow, GameLifeSkillNames);
         ParseTests(data);
         FormulaTests(data);
         DamageTests(data);
@@ -24,8 +24,8 @@ internal static class LifeSkillBattleTests
             "배틀생활스킬 시트는 연금술을 제외한 생활스킬 19개를 모두 불러온다");
         Assert(Life(data, "fishing").Effects.Count == 3 && Life(data, "fishing").Effects.All(x => x.SelectionGroup == "catch") && Life(data, "daily_gathering").Effects.Count == 4,
             "낚시·일상 채집의 무작위 결과 행은 같은 선택그룹으로 불러온다");
-        Assert(Throws(() => Tables(("배틀생활스킬", "\"나무 베기\"", "\"나무베기\""))).Contains("생활스킬 시트에 없습니다"),
-            "생활스킬 시트에 없는 이름은 로드 오류다");
+        Assert(Throws(() => Tables(("배틀생활스킬", "\"나무 베기\"", "\"나무베기\""))).Contains("게임 데이터 생활스킬에 없습니다"),
+            "게임 데이터 생활스킬에 없는 이름은 로드 오류다");
         Assert(Throws(() => Tables(("배틀생활스킬", "\"아르바이트\"", "\"연금술\""))).Contains("연금술"),
             "생활력과 무관한 연금술은 배틀생활스킬로 만들 수 없다");
         Assert(Throws(() => Tables(("배틀생활스킬", "\"핸디크래프트\"", "\"아르바이트\""))).Contains("중복"),
@@ -41,7 +41,12 @@ internal static class LifeSkillBattleTests
         var withoutPartTime = Tables();
         withoutPartTime["배틀생활스킬"] = string.Join("\n", withoutPartTime["배틀생활스킬"].Split('\n').Where(x => !x.StartsWith("\"part_time_job\"", StringComparison.Ordinal)));
         withoutPartTime["배틀생활스킬효과"] = string.Join("\n", withoutPartTime["배틀생활스킬효과"].Split('\n').Where(x => !x.StartsWith("\"part_time_job_", StringComparison.Ordinal)));
-        Assert(Throws(() => withoutPartTime).Contains("누락"), "연금술 외 생활스킬이 배틀생활스킬 시트에서 빠지면 로드 오류다");
+        var warnings = new List<string>();
+        var partial = BattleCatalog.Parse(withoutPartTime, DateTimeOffset.UtcNow, GameLifeSkillNames, warnings.Add);
+        Assert(partial.LifeSkills.Count == 18 && warnings.Count == 1 && warnings[0].Contains("아르바이트") && !warnings[0].Contains("연금술"),
+            "게임에 새로 생긴 생활스킬처럼 배틀생활스킬 행이 없는 생활스킬은 로드를 막지 않고 경고만 남긴다(연금술 제외)");
+        var withoutGameNames = BattleCatalog.Parse(Tables(("배틀생활스킬", "\"나무 베기\"", "\"나무베기\"")), DateTimeOffset.UtcNow);
+        Assert(withoutGameNames.LifeSkills.Any(x => x.Name == "나무베기"), "게임 데이터 생활스킬 목록이 없으면 이름 확인을 건너뛰고 배틀 데이터를 불러온다");
     }
 
     private static void FormulaTests(BattleDataSnapshot data)
@@ -198,7 +203,7 @@ internal static class LifeSkillBattleTests
 
     private static string Throws(Func<Dictionary<string, string>> tables)
     {
-        try { BattleCatalog.Parse(tables(), DateTimeOffset.UtcNow); }
+        try { BattleCatalog.Parse(tables(), DateTimeOffset.UtcNow, GameLifeSkillNames); }
         catch (InvalidDataException ex) { return ex.Message; }
         return "(예외 없음)";
     }
@@ -217,31 +222,11 @@ internal static class LifeSkillBattleTests
         public double NextDouble() => values.Count == 0 ? .5 : values.Dequeue();
     }
 
+    // 게임 데이터 LivingSkill.DisplayName 사본(2026-11-01). 배틀생활스킬 이름은 이 목록으로 확인한다.
+    private static readonly string[] GameLifeSkillNames = ["일상 채집", "나무 베기", "광석 캐기", "약초 채집", "양털 깎기", "추수", "호미질", "곤충 채집", "낚시", "대장 기술", "목공", "매직 크래프트", "중갑 제작", "경갑 제작", "천옷 제작", "물약 조제", "요리", "핸디크래프트", "연금술", "아르바이트"];
+
     private static readonly IReadOnlyDictionary<string, string> LifeSheets = new Dictionary<string, string>
     {
-        ["생활스킬"] = """"
-        "이름","설명","기타"
-        "일상 채집","",""
-        "나무 베기","",""
-        "광석 캐기","",""
-        "약초 채집","",""
-        "양털 깎기","",""
-        "추수","",""
-        "호미질","",""
-        "곤충 채집","",""
-        "낚시","",""
-        "대장 기술","",""
-        "목공","",""
-        "매직 크래프트","",""
-        "중갑 제작","",""
-        "경갑 제작","",""
-        "천옷 제작","",""
-        "물약 조제","",""
-        "요리","",""
-        "핸디크래프트","",""
-        "연금술","",""
-        "아르바이트","",""
-        """",
         ["배틀생활스킬"] = """"
         "ID","생활스킬이름","활성화","기본사용확률","생활력기준값","생활력확률보정계수","최대사용확률","전투당최대횟수","선택가중치","조건대상","조건유형","조건연산자","조건값","행동문구","비고"
         "daily_gathering","일상 채집","TRUE","0.06","30000","0.05","0.16","1","1","자신","HP비율","<","0.8","{caster}가 주변을 뒤져 손에 잡히는 것을 집어 듭니다!","무작위 채집물 1개(달걀·사과·거미줄·황금 네잎클로버). 원본: 맨손으로 달걀·사과·거미줄 등 채집"

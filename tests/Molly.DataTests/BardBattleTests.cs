@@ -3,7 +3,7 @@ using Molly.Battle;
 /// <summary>
 /// 음유시인 악상 흐름(멜로디 쇼크·브레이크된 적 공격 → 용맹, 연주 스킬 사용 완료 → 희망, 죽은 척 → 반격, 먼저 떠올린 악상 하나만 유지, 바즈 테일이 악상의 변주곡으로 바뀌고 변주곡이 악상을 소모)을 실제 시트 행으로 검사한다.
 /// Sheets의 클래스별 시트는 2026-10-02 배틀 시트에서 음유시인 행(과 참조하는 공용 행)만 추린 사본이다. 시트의 음유시인 행을 바꾸면 이 사본도 함께 갱신한다.
-/// 배틀규칙·배틀스킬AI·돌발 이벤트·생활스킬 시트는 석궁사수 사본을 그대로 쓴다.
+/// 배틀규칙·배틀스킬AI·돌발 이벤트·배틀생활스킬 시트는 석궁사수 사본을 그대로 쓴다.
 /// </summary>
 internal static class BardBattleTests
 {
@@ -122,7 +122,7 @@ internal static class BardBattleTests
         public double NextDouble() { if (!first) return value; first = false; return 0; }
     }
 
-    public static readonly IReadOnlyDictionary<string, string> Sheets = new Dictionary<string, string>(CrossbowBattleTests.Sheets.Where(x => x.Key is "배틀규칙" or "배틀스킬AI" or "배틀돌발이벤트" or "배틀돌발이벤트효과" or "생활스킬" or "배틀생활스킬" or "배틀생활스킬효과"))
+    public static readonly IReadOnlyDictionary<string, string> Sheets = new Dictionary<string, string>(CrossbowBattleTests.Sheets.Where(x => x.Key is "배틀규칙" or "배틀스킬AI" or "배틀돌발이벤트" or "배틀돌발이벤트효과" or "배틀생활스킬" or "배틀생활스킬효과"))
     {
         ["클래스"] = """"
 ID,이름,계열,설명,스킬1,스킬2,스킬3,스킬4,스킬5,궁극기,패시브1,패시브2,패시브3,패시브4,패시브5,패시브6

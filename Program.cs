@@ -41,6 +41,7 @@ class Program
     public UnpackDataCatalog<SkillQuizTable> SkillQuiz { get; private set; } = null!;
     public SkillIconCache SkillIcons { get; private set; } = null!;
     public UnpackDataCatalog<MessageBottleTable> MessageBottles { get; private set; } = null!;
+    public UnpackDataCatalog<LifeSkillTable> LifeSkills { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
     public TrueFalseQuizService TrueFalseQuizzes { get; } = new();
     public NunchiGameService NunchiGames { get; } = new();
@@ -265,8 +266,9 @@ class Program
         SkillQuiz = new UnpackDataCatalog<SkillQuizTable>(Unpack, new UnpackSkillQuizDataset(), dataDirectory);
         SkillIcons = new SkillIconCache(Unpack, SkillQuiz, dataDirectory);
         MessageBottles = new UnpackDataCatalog<MessageBottleTable>(Unpack, new UnpackMessageBottleDataset(), dataDirectory);
+        LifeSkills = new UnpackDataCatalog<LifeSkillTable>(Unpack, new UnpackLifeSkillDataset(), dataDirectory);
         // NPC 이미지는 NPC·지역 데이터로 받을 목록을 정하므로 그 뒤에 둡니다.
-        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, RuneEnhance, Crafting, World, NpcPortraits, SkillQuiz, SkillIcons, MessageBottles];
+        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, RuneEnhance, Crafting, World, NpcPortraits, SkillQuiz, SkillIcons, MessageBottles, LifeSkills];
         await Runes.InitializeAsync(appCts.Token);
         await Classes.InitializeAsync(appCts.Token);
         await MagicResistance.InitializeAsync(appCts.Token);
@@ -277,11 +279,14 @@ class Program
         await SkillQuiz.InitializeAsync(appCts.Token);
         await SkillIcons.InitializeAsync(appCts.Token);
         await MessageBottles.InitializeAsync(appCts.Token);
+        await LifeSkills.InitializeAsync(appCts.Token);
         // version.json의 마지막 커밋을 시작 직후와 이후 1시간마다 한 번 확인하고(데이터 수와 무관), 바뀐 데이터만 다시 받습니다.
         // 실패해도 다른 기능은 그대로 시작합니다.
         _ = UnpackDataCatalogs.RunAsync(Unpack, unpackCatalogs, appCts.Token);
         Battles = new BattleCatalog(new GoogleSheetsBattleSource(sheetHttp,
-            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId), dataDirectory);
+            m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId), dataDirectory,
+            // 배틀생활스킬 이름은 게임 데이터 생활스킬로 확인합니다. 배틀 데이터는 시작할 때만 읽으므로 캐시에 있던 목록을 씁니다.
+            lifeSkillNames: () => LifeSkills.Data?.Names);
         await Battles.InitializeAsync(appCts.Token);
         TokenRules = new TokenRuleCatalog(new GoogleSheetsTokenRuleSource(sheetHttp,
             m_Config["GoogleSheets:SpreadsheetId"] ?? GoogleSheetsDocument.DefaultSpreadsheetId,
