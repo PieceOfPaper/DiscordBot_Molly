@@ -27,6 +27,10 @@ public static class RuneNames
         _ => throw new ArgumentOutOfRangeException(nameof(category)),
     };
 
+    // 명령 옵션의 부위 이름(무기·방어구·엠블럼·장신구)을 분류로 바꿉니다.
+    public static RuneCategory? ParseCategory(string? text) =>
+        Enum.GetValues<RuneCategory>().Cast<RuneCategory?>().FirstOrDefault(x => x!.Value.Display() == text?.Trim());
+
     // 초월 수치 표기 순서. 2 → '기본/1초월/2초월'
     public static string TranscendLegend(int levels) =>
         string.Join("/", Enumerable.Range(0, levels + 1).Select(level => level == 0 ? "기본" : $"{level}초월"));
@@ -38,7 +42,14 @@ public static class RuneNames
 /// <param name="Name">'무기 룬: ' 같은 접두어를 뺀 표시 이름. 같은 이름의 상위 룬은 끝에 '+'가 붙습니다.</param>
 /// <param name="Effect">옵션 설명을 줄바꿈으로 이은 문장. 수치를 찾지 못한 자리는 '?'이고, 초월로 바뀌는 수치는 '24%/26%/28%'처럼 단계별로 적습니다.</param>
 /// <param name="TranscendLevels">효과 문장에 함께 적은 초월 단계 수. 초월로 바뀌는 수치가 없으면 0입니다.</param>
-public sealed record RuneData(string Id, int Season, RuneGrade Grade, RuneCategory Category, string Class, string Name, string Effect, int TranscendLevels = 0);
+public sealed record RuneData(string Id, int Season, RuneGrade Grade, RuneCategory Category, string Class, string Name, string Effect, int TranscendLevels = 0)
+{
+    /// <summary>
+    /// /룬 검색에만 쓰는 효과 문장. 수치·계산식 표현을 지운 자리마다 줄을 나눕니다(<see cref="RuneEffectText.SearchText"/>).
+    /// 사용자에게 보여주지 않습니다. 지정하지 않으면 표시 문장으로 추정합니다.
+    /// </summary>
+    public string SearchEffect { get; init; } = RuneEffectText.SearchTextFromDisplay(Effect);
+}
 
 public sealed class RuneTable
 {

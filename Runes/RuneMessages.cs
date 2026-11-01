@@ -29,7 +29,12 @@ public static class RuneMessages
         _ => "🔹",
     };
 
-    public static string Header(string keyword, int count) => $"🔍 **{Format.Sanitize(keyword.Trim())}** 룬 검색 결과 **{count}개**";
+    /// <param name="conditions">적용한 시즌·부위(<see cref="RuneSearch.Conditions"/>).</param>
+    public static string Header(string query, string conditions, int count) =>
+        $"🔍 검색어 **{Format.Sanitize(query.Trim())}** · {conditions} · 룬 검색 결과 **{count}개**";
+
+    public static string NoResult(string query, string conditions) =>
+        $"🔍 검색어 **{Format.Sanitize(query.Trim())}** · {conditions} 조건에 맞는 룬을 찾지 못했어요.";
 
     /// <param name="classLabel">클래스 이름을 이모지가 붙은 표기로 바꿉니다(예: 랭킹·배틀과 같은 클래스 이모지).</param>
     /// <param name="footer">마지막 Embed에 붙일 출처 문구(예: 게임 데이터 패치).</param>
@@ -73,7 +78,7 @@ public static class RuneMessages
     }
 
     /// <summary>결과가 너무 많을 때 보내는 이름 목록 Embed. 시즌·부위별로 묶고 전체 효과는 첨부 파일로 안내합니다.</summary>
-    public static Embed BuildSummary(string keyword, IReadOnlyList<RuneData> runes, string? footer = null)
+    public static Embed BuildSummary(string query, IReadOnlyList<RuneData> runes, string? footer = null)
     {
         var lines = runes.GroupBy(r => (r.Season, r.Category))
             .Select(g => $"**시즌 {g.Key.Season} · {CategoryEmoji(g.Key.Category)} {g.Key.Category.Display()}** ({g.Count()}개)\n" +
@@ -81,7 +86,7 @@ public static class RuneMessages
         var description = "결과가 많아 이름만 보여드려요. 전체 효과는 첨부 파일에서 확인해주세요.\n\n" + string.Join("\n\n", lines);
         if (description.Length > MaxDescriptionLength) description = description[..(MaxDescriptionLength - 1)] + "…";
         var embed = new EmbedBuilder()
-            .WithTitle($"🔍 '{keyword.Trim()}' 룬 {runes.Count}개")
+            .WithTitle($"🔍 '{query.Trim()}' 룬 {runes.Count}개")
             .WithDescription(description)
             .WithColor(Legendary);
         if (footer is not null) embed.WithFooter(footer);

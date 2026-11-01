@@ -21,6 +21,7 @@ public sealed class HelpCommand : InteractionModuleBase<SocketInteractionContext
         [Choice("랭킹", "랭킹")]
         [Choice("이벤트", "이벤트")]
         [Choice("공식소식", "공식소식")]
+        [Choice("룬", "룬")]
         [Choice("마도저항", "마도저항")]
         [Choice("룬강화비용", "룬강화비용")]
         [Choice("해연시세", "해연시세")]

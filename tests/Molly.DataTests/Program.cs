@@ -434,20 +434,7 @@ Check(liarTie.Accuse(1, 2) && liarTie.Accuse(2, 1) && liarTie.Accuse(3, 2) && li
     "라이어게임 지목 동률은 라이어 승리");
 var liarNoVote = new LiarGameRound([1, 2, 3]);
 Check(!liarNoVote.Decide(1).LiarFound, "라이어게임 지목자가 없으면 라이어 승리");
-var searchTable = TestRunes.Table("2,전설,무기,전사,거대한 분노,효과\n2,전설,방어구,궁수,분노의 힘,효과\n1,신화,장신구,,분노,효과\n2,전설,무기,전사,평온,분노가 증가한다");
-Check(RuneSearch.Find(searchTable, " 분노 ").Count == 3, "이름 부분 일치 전체 검색 및 앞뒤 공백 제거");
-Check(RuneSearch.Find(searchTable, "분노".Normalize(System.Text.NormalizationForm.FormD)).Count == 3, "한글 유니코드 정규화 검색");
-Check(RuneSearch.Find(searchTable, "없는이름").Count == 0, "검색 결과 없음");
-Check(RuneSearch.Find(searchTable, "거대한분노").Count == 1, "룬 이름의 띄어쓰기를 무시하고 검색");
-Check(RuneSearch.Find(searchTable, "분 노 의 힘").Count == 1, "검색어의 띄어쓰기도 무시");
-foreach (var empty in new string?[] { null, "", " ", "\t\r\n", "　" })
-{
-    try { RuneSearch.Find(searchTable, empty); throw new Exception("빈 검색어 허용"); }
-    catch (ArgumentException) { }
-}
-Console.WriteLine("PASS 누락·빈 문자열·공백 검색어 거부");
-var resultText = RuneSearch.Format(RuneSearch.Find(searchTable, "분노"));
-Check(resultText.Contains("3개") && resultText.Contains("시즌 1 · 신화 · 장신구") && resultText.Contains("· 전사") && !resultText.Contains("평온"), "검색 결과 상세 정보와 클래스·이름만 검색");
+await RuneSearchTests.RunAsync();
 var longText = new string('가', 1899) + "😀" + new string('나', 4000) + "\n마지막";
 var messages = RuneSearch.SplitMessages(longText);
 Check(messages.All(x => x.Length is > 0 and <= 1900 && !char.IsHighSurrogate(x[^1])) && string.Concat(messages) == longText, "긴 결과 누락 없이 분할 및 이모지 보존");

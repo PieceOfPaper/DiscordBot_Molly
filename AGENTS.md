@@ -41,7 +41,7 @@
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
 - assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
 - Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`), 여러 보관소가 커밋 확인 1회를 함께 쓰는 주기 확인(`UnpackDataCatalogs`). 새 데이터는 Program.cs의 보관소 목록에 추가한다. clone하지 않고 `version.json`을 마지막으로 바꾼 커밋 SHA로 변경을 확인하고, 그 커밋 기준으로 `version.json`·필요한 시트·파일(시트 밖 파일은 `UnpackFileFetcher`, 폴더 목록·blob SHA는 `GetTreeAsync`)만 REST API로 받는다. 다른 데이터에 기대는 보관소는 목록에서 뒤에 둔다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
-- Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption·RuneTranscend 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석과 초월 단계 수치의 `기본/1초월/2초월` 슬래시 표기(RuneEffectText), 검색(RuneSearch).
+- Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption·RuneTranscend 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석과 초월 단계 수치의 `기본/1초월/2초월` 슬래시 표기와 수치·계산식을 뺀 검색용 효과 문장(RuneEffectText), `/룬` AND·OR·괄호 검색식 해석(RuneQuery), 시즌·부위·검색식 검색과 이름 일치 우선 정렬(RuneSearch).
 - Classes/: 게임 데이터 저장소의 CombatJob으로 공개된 전직 클래스 목록을 만드는 데이터셋(UnpackClassDataset). `/자음퀴즈`·`/이미지퀴즈` 클래스 종목이 쓴다(배틀은 쓰지 않음). 이미지퀴즈 아이콘은 `Commons/ClassIcons`의 CombatJob.Id 매핑으로 배포 에셋을 찾는다.
 - World/: 게임 데이터 저장소의 빠른 이동·채널·GameSpace·NPC 시트와 월드 NPC 배치 파일로 열린 지역(마을·사냥터)과 배치된 NPC 목록을 만드는 데이터셋(UnpackWorldDataset), NPC 프로필 이미지를 blob SHA로 비교해 바뀐 것만 받는 캐시(NpcPortraitCache). `/자음퀴즈` NPC·지역 종목과 `/이미지퀴즈` NPC 종목이 쓴다. 기획은 `docs/image-quiz.md`.
 - MobiLife/: 모비라이프 OpenAPI 클라이언트·출처 표기. Market/: 거래소 시세 도메인 인터페이스.

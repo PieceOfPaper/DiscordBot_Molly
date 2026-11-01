@@ -9,6 +9,7 @@ namespace Molly.Runes;
 /// - Rune: 등급(Rarity)·시즌(Season)·부위(RuneAttachableType)·전용 클래스(CombatJobSheetId)·옵션(Option1~4)
 /// - Socketable.DisplayName: 이름('무기 룬: 눈부신 잔영') / CombatJob.DisplayName: 클래스 이름
 /// - RuneOption.Description: 효과 문장. 수치는 MagicEffect·Buff·SkillEffect 값으로 채웁니다(RuneEffectText).
+///   검색용 효과 문장은 같은 설명에서 수치 템플릿·숫자·계산식을 통째로 지워 따로 만듭니다(RuneEffectText.SearchText).
 ///   MagicEffect 참조 Id가 없으면 게임 클라이언트처럼 RuneOption.MagicEffectList[0]을 대신 씁니다.
 /// - RuneTranscend: 옵션(RootRuneOptionSheetId)의 초월 단계(Level1·Level2…)별 값. 단계마다 다른 수치는 '기본/1초월/2초월'로 함께 적습니다.
 ///   RuneOption.Transcendable은 실제 초월 행과 맞지 않아(시즌 3 룬은 false인데 행이 있음) 쓰지 않고 행이 있는지로 판단합니다.
@@ -148,9 +149,11 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
             }
             var unresolved = 0;
             var transcendLevels = 0;
-            var effect = string.Join("\n", candidate.Options
+            var options = candidate.Options
                 .Select(id => (Id: id, Description: descriptions.TryGetValue(id, out var description) ? description : "", Fallback: fallbacks.GetValueOrDefault(id)))
                 .Where(option => option.Description.Length > 0)
+                .ToArray();
+            var effect = string.Join("\n", options
                 .Select(option =>
                 {
                     var levels = LevelValues(option.Id);
@@ -177,7 +180,8 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
                 warnings.Add($"{name}({candidate.Id}): 수치 {unresolved}개를 찾지 못해 '{RuneEffectText.Unknown}'로 표시");
             }
             var className = candidate.CombatJob is { } job && classes.TryGetValue(job, out var display) ? display : "";
-            items.Add(new RuneData(candidate.Id, candidate.Season, candidate.Grade, candidate.Category, className, name, effect, transcendLevels));
+            var searchEffect = string.Join(RuneEffectText.SearchBoundary, options.Select(option => RuneEffectText.SearchText(option.Description)).Where(text => text.Length > 0));
+            items.Add(new RuneData(candidate.Id, candidate.Season, candidate.Grade, candidate.Category, className, name, effect, transcendLevels) { SearchEffect = searchEffect });
         }
 
         foreach (var category in Enum.GetValues<RuneCategory>())
@@ -263,22 +267,28 @@ public sealed class UnpackRuneDataset : IUnpackDataset<RuneTable>
             writer.WriteString("name", rune.Name);
             writer.WriteString("effect", rune.Effect);
             writer.WriteNumber("transcendLevels", rune.TranscendLevels);
+            writer.WriteString("searchEffect", rune.SearchEffect);
             writer.WriteEndObject();
         }
         writer.WriteEndArray();
     }
 
+    // searchEffect가 없는 구버전 캐시는 표시 문장으로 검색용 문장을 추정해 쓰고, 봇 시작 후 첫 갱신에서 원본 설명으로 다시 만듭니다.
     public RuneTable Read(JsonElement data)
     {
-        var items = data.EnumerateArray().Select(x => new RuneData(
-            x.GetProperty("id").GetString()!,
-            x.GetProperty("season").GetInt32(),
-            Enum.Parse<RuneGrade>(x.GetProperty("grade").GetString()!),
-            Enum.Parse<RuneCategory>(x.GetProperty("category").GetString()!),
-            x.GetProperty("class").GetString()!,
-            x.GetProperty("name").GetString()!,
-            x.GetProperty("effect").GetString()!,
-            x.TryGetProperty("transcendLevels", out var levels) ? levels.GetInt32() : 0)).ToArray();
+        var items = data.EnumerateArray().Select(x =>
+        {
+            var rune = new RuneData(
+                x.GetProperty("id").GetString()!,
+                x.GetProperty("season").GetInt32(),
+                Enum.Parse<RuneGrade>(x.GetProperty("grade").GetString()!),
+                Enum.Parse<RuneCategory>(x.GetProperty("category").GetString()!),
+                x.GetProperty("class").GetString()!,
+                x.GetProperty("name").GetString()!,
+                x.GetProperty("effect").GetString()!,
+                x.TryGetProperty("transcendLevels", out var levels) ? levels.GetInt32() : 0);
+            return x.TryGetProperty("searchEffect", out var search) && search.GetString() is { } searchEffect ? rune with { SearchEffect = searchEffect } : rune;
+        }).ToArray();
         if (items.Length == 0) throw new InvalidDataException("캐시에 룬이 없습니다.");
         return new RuneTable(items);
     }

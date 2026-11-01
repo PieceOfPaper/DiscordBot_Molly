@@ -152,6 +152,62 @@ public static class RuneEffectText
             i % 2 == 0 || parts.All(p => p[i] == parts[0][i]) ? parts[0][i] : string.Join("/", parts.Select(p => p[i]))));
     }
 
+    // 검색용 텍스트에서 수치 표현을 지운 자리. 검색어는 이 경계를 넘어 이어 붙여 일치시키지 않습니다.
+    public const char SearchBoundary = '\n';
+
+    // 설명에 템플릿 없이 적힌 숫자. '5/10/20명'처럼 슬래시로 이은 수치와 바로 뒤 단위(%·초·m)까지 한 덩어리이고,
+    // [mhp] 템플릿과 같은 '최대 체력의 N%'는 앞말까지 지웁니다.
+    private static readonly Regex s_PlainNumber = new(
+        @"(?:최대 체력의\s*)?(?<![\d.])[+-]?\d+(?:\.\d+)?(?:%|초|m)?(?:\s*[/~]\s*[+-]?\d+(?:\.\d+)?(?:%|초|m)?)*", RegexOptions.CultureInvariant);
+    // 표시 문장에 남은 수치 표현. 구버전 캐시처럼 원본 설명이 없을 때만 씁니다.
+    private static readonly Regex s_RenderedValue = new(
+        @"\(공격력x[^)]*\)|최대 체력의 [\d.?/]+%|(?<![\d.])\?(?:%|초|m)?", RegexOptions.CultureInvariant);
+    // '전력 수치 × (계수)'처럼 지운 수치와 곱해지는 피연산자 한 단어와 연산자.
+    private static readonly Regex s_TrailingOperand = new(@"\S*\s*[×*]\s*$", RegexOptions.CultureInvariant);
+    private static readonly Regex s_LeadingOperand = new(@"^\s*[×*]\s*\S*", RegexOptions.CultureInvariant);
+    // 템플릿 바로 뒤에 따로 적힌 단위('$…확률$% 확률로', '$…$초 동안').
+    private static readonly Regex s_LeadingUnit = new(@"^(?:%|초|m(?![A-Za-z]))", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// RuneOption.Description으로 검색에만 쓰는 문장을 만듭니다. 화면 표시용 <see cref="Render(string, RuneTooltipValues, string?)"/>와 달리
+    /// 수치 템플릿·숫자 값·<c>&lt;&lt; 식 &gt;&gt;</c>을 통째로 지워, 렌더링으로 생기는 '(공격력x12.5%)'·'최대 체력의 5%'의 단어도 남기지 않습니다.
+    /// 지운 자리는 <see cref="SearchBoundary"/>로 나눠 앞뒤 단어가 이어져 검색되지 않게 하고, 색상 태그는 지웁니다.
+    /// </summary>
+    public static string SearchText(string description)
+    {
+        var text = s_RichTag.Replace(description, "");
+        text = s_Expression.Replace(text, Removed);
+        text = s_Template.Replace(text, Removed);
+        text = s_Literal.Replace(text, Removed);
+        return SearchSegments(text);
+    }
+
+    /// <summary>표시용 효과 문장(<see cref="RuneData.Effect"/>)으로 검색용 문장을 추정합니다. 원본 설명이 없는 구버전 캐시용입니다.</summary>
+    public static string SearchTextFromDisplay(string effect) =>
+        SearchSegments(s_RenderedValue.Replace(s_RichTag.Replace(effect, ""), Removed));
+
+    // 수치 표현을 지운 자리. 설명의 원래 줄바꿈과 구분해야 줄 첫머리('초월 각인')를 단위로 잘못 지우지 않습니다.
+    private const string Removed = "\u0001";
+
+    private static string SearchSegments(string text)
+    {
+        var segments = new List<string>();
+        foreach (var line in s_PlainNumber.Replace(text.Replace("\r\n", "\n"), Removed).Split('\n'))
+        {
+            var parts = line.Split(Removed);
+            for (var i = 0; i < parts.Length; i++)
+            {
+                // 지운 수치에 붙어 있던 단위와 곱셈 피연산자만 지웁니다.
+                if (i < parts.Length - 1) parts[i] = s_TrailingOperand.Replace(parts[i], "");
+                if (i > 0) parts[i] = s_LeadingOperand.Replace(s_LeadingUnit.Replace(parts[i], ""), "");
+            }
+            segments.AddRange(parts);
+        }
+        return string.Join(SearchBoundary, segments
+            .Select(segment => Regex.Replace(segment, @"\s+", " ").Trim())
+            .Where(segment => segment.Any(char.IsLetterOrDigit)));
+    }
+
     private static double? Lookup(RuneTooltipValues values, string sheet, string id, string field, string? fallbackMagicEffect)
     {
         switch (sheet)

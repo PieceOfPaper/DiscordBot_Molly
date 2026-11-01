@@ -112,7 +112,10 @@ internal static class RuneUnpackTests
         var transcendRune = runes[0] with { Effect = "공격력이 20%/22%/24% 증가한다.", TranscendLevels = 2 };
         Assert(RuneMessages.Build(transcendRune, Label).Description!.EndsWith("▸ 공격력이 20%/22%/24% 증가한다.\n-# 수치는 기본/1초월/2초월 순서예요."),
             "초월 수치가 있는 룬은 효과 아래에 수치 순서 안내");
-        Assert(RuneMessages.Header(" 분*노 ", 5) == "🔍 **분\\*노** 룬 검색 결과 **5개**", "검색어의 마크다운 문자는 이스케이프");
+        Assert(RuneMessages.Header(" 분*노 ", RuneSearch.Conditions(2, null), 5) == "🔍 검색어 **분\\*노** · 시즌 2 · 전체 부위 · 룬 검색 결과 **5개**",
+            "결과 머리말에 검색어(마크다운 이스케이프)·시즌·전체 부위·건수 표시");
+        Assert(RuneMessages.NoResult("보호막", RuneSearch.Conditions(0, RuneCategory.Armor)) == "🔍 검색어 **보호막** · 시즌 0 · 방어구 조건에 맞는 룬을 찾지 못했어요.",
+            "결과가 없어도 적용한 검색어·시즌·부위 표시");
 
         var many = TestRunes.Table(string.Join("\n", Enumerable.Range(0, 23).Select(i => $"2,전설,방어구,,룬 {i},{new string('가', 300)}"))).Items;
         var pages = RuneMessages.BuildPages(many, Label, "출처")!;
@@ -231,9 +234,24 @@ internal static class RuneUnpackTests
         using (var writer = new Utf8JsonWriter(buffer)) dataset.Write(writer, table);
         using var document = JsonDocument.Parse(buffer.ToArray());
         var restored = dataset.Read(document.RootElement);
-        Assert(restored.Items.SequenceEqual(table.Items), "캐시 저장·복원 시 룬 정보 보존");
+        Assert(restored.Items.SequenceEqual(table.Items) && restored.ById["W1"].SearchEffect == weapon.SearchEffect, "캐시 저장·복원 시 룬 정보와 검색용 효과 보존");
 
-        var search = RuneSearch.Format(RuneSearch.Find(table, "눈부신"));
+        Assert(weapon.SearchEffect == "스킬 사용 시\n의 피해를 주고,\n공격 속도가\n증가한다." &&
+               table.ById["A1"].SearchEffect == "마다\n동안 최대\n회" && table.ById["E1"].SearchEffect == "공격력이\n증가한다.",
+            "검색용 효과는 원본 설명에서 수치 템플릿·초월 수치·'(공격력x…)'를 통째로 지우고 지운 자리로 나눔");
+        Assert(RuneSearch.Find(table, Query("공격력"), 2).Count == 0 && RuneSearch.Find(table, Query("147"), 2).Count == 0 &&
+               RuneSearch.Find(table, Query("공격 속도"), 2).Select(x => x.Id).SequenceEqual(["W1"]) &&
+               RuneSearch.Find(table, Query("공격력"), 1).Select(x => x.Id).SequenceEqual(["E1"]),
+            "데이터셋으로 만든 룬도 수치 표현의 '공격력'·숫자로는 검색되지 않고 일반 문장은 검색됨");
+
+        // 구버전 캐시(searchEffect 없음)는 표시 문장으로 검색용 효과를 추정합니다.
+        var legacy = """[{"id":"W1","season":2,"grade":"Legendary","category":"Weapon","class":"","name":"눈부신 잔영","effect":"스킬 사용 시 (공격력x147%/155.5%/164%)의 피해를 주고,\n공격 속도가 10%/12%/14% 증가한다.","transcendLevels":2}]""";
+        using var legacyDocument = JsonDocument.Parse(legacy);
+        var legacyRune = dataset.Read(legacyDocument.RootElement).Items[0];
+        Assert(legacyRune.Effect == weapon.Effect && legacyRune.SearchEffect == weapon.SearchEffect,
+            "검색용 효과가 없는 구버전 캐시도 읽고 표시 문장에서 수치 표현을 지워 검색에 사용");
+
+        var search = RuneSearch.Format(RuneSearch.Find(table, Query("눈부신"), 2));
         Assert(search.Contains("눈부신 잔영 · 시즌 2 · 전설 · 무기 · 수치 기본/1초월/2초월") && search.Contains("\n스킬 사용 시"), "검색 결과에 시즌·등급·분류와 여러 줄 효과 표시");
     }
 
@@ -322,6 +340,8 @@ internal static class RuneUnpackTests
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
     }
+
+    private static RuneQuery Query(string text) => RuneQuery.Parse(text, out var error) ?? throw new Exception(error);
 
     private static HttpResponseMessage Json(string body) =>
         new(HttpStatusCode.OK) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
