@@ -27,6 +27,11 @@ public sealed class SkillIconCache : IUnpackDataCatalog
             var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(); var path = Path.Combine(dir, sha + ".png");
             if (!File.Exists(path)) { Directory.CreateDirectory(dir); await File.WriteAllBytesAsync(path, bytes, ct); downloaded++; }
             next[icon] = sha;
+            // 첫 동기화가 길어도 이미 받은 정상 PNG는 즉시 출제에 쓸 수 있게 공개·저장한다.
+            // 다음 재시작도 이 시점까지 받은 것만 재사용하고 나머지는 다음 확인 때 이어서 받는다.
+            files = new Dictionary<string, string>(next, StringComparer.Ordinal);
+            try { await SaveAsync(snapshot.Commit, files, ct); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Fail(UnpackRepoStatus.Unavailable, ex.Message); }
         }
         try { await SaveAsync(snapshot.Commit, next, ct); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return Fail(UnpackRepoStatus.Unavailable, ex.Message); }
         files = next; synced = snapshot.Commit; log($"확인 완료: {next.Count}개(새로 받음 {downloaded}) (커밋 {snapshot.Commit[..7]})"); return new(UnpackRepoStatus.Success, downloaded > 0 || next.Count != previous.Count);
@@ -34,7 +39,7 @@ public sealed class SkillIconCache : IUnpackDataCatalog
     private async Task<byte[]?> ReadIconAsync(string icon, string commit, CancellationToken ct)
     {
         // Skill.Icon이 .asset이면 CommonIconAsset JSON 안의 PNG 리소스를 찾는다. ID/파일명 조합을 하지 않는다.
-        var path = icon.StartsWith("Patch/", StringComparison.Ordinal) ? icon : AssetRoot + "/" + icon.TrimStart('/');
+        var path = ResolveAssetPath(icon);
         if (path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) return await FetchPng(path, commit, ct);
         var asset = await client.GetFileAsync(path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? path : path + ".json", commit, ct);
         if (!asset.IsSuccess) return null;
@@ -45,7 +50,10 @@ public sealed class SkillIconCache : IUnpackDataCatalog
         catch (JsonException) { return null; }
     }
     private static IEnumerable<string> FindPng(JsonElement e) { if (e.ValueKind == JsonValueKind.String && e.GetString() is { } s && s.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) yield return s; else if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) foreach (var x in FindPng(p.Value)) yield return x; else if (e.ValueKind == JsonValueKind.Array) foreach (var x in e.EnumerateArray()) foreach (var y in FindPng(x)) yield return y; }
-    private async Task<byte[]?> FetchPng(string path, string commit, CancellationToken ct) { if (path.Length == 0) return null; var p = path.StartsWith("Patch/", StringComparison.Ordinal) ? path : AssetRoot + "/" + path.TrimStart('/'); var r = await client.GetFileAsync(p, commit, ct); return r.IsSuccess && r.Value!.Length > 8 && r.Value.AsSpan().StartsWith(new byte[]{137,80,78,71,13,10,26,10}) ? r.Value! : null; }
+    private async Task<byte[]?> FetchPng(string path, string commit, CancellationToken ct) { if (path.Length == 0) return null; var r = await client.GetFileAsync(ResolveAssetPath(path), commit, ct); return r.IsSuccess && r.Value!.Length > 8 && r.Value.AsSpan().StartsWith(new byte[]{137,80,78,71,13,10,26,10}) ? r.Value! : null; }
+    private static string ResolveAssetPath(string path) => path.StartsWith("Patch/", StringComparison.Ordinal) ? path
+        : path.StartsWith("Icons/", StringComparison.Ordinal) ? "Patch/AssetPackages/Assets/PatchableAssets/" + path.TrimStart('/')
+        : AssetRoot + "/" + path.TrimStart('/');
     private async Task SaveAsync(string commit, IReadOnlyDictionary<string,string> map, CancellationToken ct) { Directory.CreateDirectory(dir); using var s = new MemoryStream(); using (var w = new Utf8JsonWriter(s)) { w.WriteStartObject(); w.WriteString("commit", commit); w.WriteStartObject("images"); foreach (var x in map) w.WriteString(x.Key,x.Value); w.WriteEndObject(); w.WriteEndObject(); } await File.WriteAllBytesAsync(Path.Combine(dir,"manifest.json"),s.ToArray(),ct); }
     void IUnpackDataCatalog.LogStopped(string reason) => log(reason + (Count == 0 ? " 받아 둔 이미지가 없어 스킬 아이콘 문제는 낼 수 없습니다." : " 받아 둔 이미지를 계속 사용합니다."));
     UnpackRefreshResult IUnpackDataCatalog.Fail(UnpackRepoStatus status, string detail, TimeSpan? retryAfter) => Fail(status, detail, retryAfter);
