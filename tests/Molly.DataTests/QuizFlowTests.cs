@@ -177,6 +177,12 @@ internal static class QuizFlowTests
             Images.Add((title, image));
             return SendEmbedAsync(title, description, color, ct);
         }
+        public Task ModifyEmbedAsync(ulong messageId, string title, string description, uint color, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Messages.Add("MODIFY " + description);
+            return Task.CompletedTask;
+        }
         public Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct)
             => SendEmbedAsync(title, description, color, ct);
         public Task MarkEndedAsync(CancellationToken ct)

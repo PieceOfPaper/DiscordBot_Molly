@@ -10,6 +10,8 @@ public interface IQuizRoom
     Task<ulong> SendEmbedAsync(string title, string description, uint color, CancellationToken ct);
     // PNG를 Embed 이미지로 붙여 보냅니다(`/이미지퀴즈`).
     Task<ulong> SendEmbedAsync(string title, string description, uint color, byte[] image, CancellationToken ct);
+    // 문제 본문의 늦은 힌트처럼 이미 보낸 Embed를 안전하게 고칩니다.
+    Task ModifyEmbedAsync(ulong messageId, string title, string description, uint color, CancellationToken ct);
     Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct);
     Task MarkEndedAsync(CancellationToken ct);
     Task LockAsync(CancellationToken ct);
@@ -127,6 +129,10 @@ public sealed class SpeedQuizService
                 using var timerStop = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 var timeout = delay(TimeSpan.FromSeconds(seconds), timerStop.Token);
                 var countdown = QuizCountdown.RunAsync(room, seconds, $"문제 {i + 1} 남은 시간", true, delay, timerStop.Token, clock);
+                // 스킬 아이콘 문제만 15초 뒤 이름 힌트를 같은 문제 Embed에 붙입니다. 실패는 게임을 멈추지 않습니다.
+                var hint = question.TimedHint is not null && seconds > 15
+                    ? RevealHintAsync(room, messageId, questionTitle, questionDescription, question.TimedHint, round, timerStop.Token)
+                    : Task.CompletedTask;
                 try
                 {
                     await Task.WhenAny(round.Completion, timeout, countdown);
@@ -143,13 +149,15 @@ public sealed class SpeedQuizService
                     catch (OperationCanceledException) when (timerStop.IsCancellationRequested) { }
                     try { await timeout; }
                     catch (OperationCanceledException) when (timerStop.IsCancellationRequested) { }
+                    try { await hint; }
+                    catch (OperationCanceledException) when (timerStop.IsCancellationRequested) { }
                 }
                 ct.ThrowIfCancellationRequested();
                 var winner = await round.Completion;
                 var outcome = winner is ulong id ? $"🎉 <@{id}>님 정답! {round.ElapsedSeconds:0.0}초 만에 맞혀 1점을 얻었습니다." : "⏰ 아무도 맞추지 못했어요.";
                 var scoreText = i + 1 < questions.Length ? $"\n{FormatScores(scores)}" : "";
                 var resultTitle = "📣 문제 결과";
-                var resultDescription = $"{outcome}\n\n✅ 정답: {question.Answer}{scoreText}";
+                var resultDescription = $"{outcome}\n\n✅ 정답: {question.AnswerReveal ?? question.Answer}{scoreText}";
                 await room.SendEmbedAsync(resultTitle, resultDescription, winner is ulong ? 0x57F287u : 0xED4245u, ct);
                 if (i + 1 < questions.Length)
                     await QuizCountdown.RunAsync(room, BetweenQuestionsSeconds, "다음 문제까지", false, delay, ct, clock);
@@ -178,6 +186,16 @@ public sealed class SpeedQuizService
             await ReportFailureAsync(session, "메시지를 전송하지 못해 스피드퀴즈를 종료했습니다. 채널 권한을 확인해주세요.");
         }
         finally { Release(guildId, session); }
+    }
+
+    private async Task RevealHintAsync(IQuizRoom room, ulong messageId, string title, string description, string hint, QuizRound round, CancellationToken ct)
+    {
+        await delay(TimeSpan.FromSeconds(15), ct);
+        // 정답·시간 초과·강제 종료 뒤, 또는 다음 문제에서는 고치지 않습니다.
+        if (ct.IsCancellationRequested || round.Completion.IsCompleted) return;
+        try { await room.ModifyEmbedAsync(messageId, title, description + $"\n\n💡 힌트: **{hint}**", 0x3498DB, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { log($"[스피드퀴즈] 힌트 표시 실패: {ex.Message}"); }
     }
 
     public static string FormatScores(IReadOnlyDictionary<ulong, int> scores)

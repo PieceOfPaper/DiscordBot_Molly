@@ -151,6 +151,26 @@ if (args.Length is 1 or 2 && args[0] == "--runes-live")
     finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
     return;
 }
+if (args.Length == 1 && args[0] == "--skill-quiz-live")
+{
+    // 실제 봇·Discord 연결 없이 최신 언팩의 스킬 슬롯과 필요한 아이콘만 검증한다.
+    var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
+    using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
+    var liveDir = Path.Combine(Path.GetTempPath(), "molly-skill-quiz-live-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var catalog = new Molly.Unpack.UnpackDataCatalog<Molly.SkillQuiz.SkillQuizTable>(unpack, new Molly.SkillQuiz.UnpackSkillQuizDataset(), liveDir, Console.WriteLine);
+        var icons = new Molly.SkillQuiz.SkillIconCache(unpack, catalog, liveDir, Console.WriteLine);
+        var result = await catalog.RefreshAsync();
+        if (!result.IsSuccess || catalog.Data is null) throw new Exception($"스킬 퀴즈 데이터 만들기 실패: {result.Status} {result.Detail}");
+        var imageResult = await icons.RefreshAsync(catalog.Current!.Commit, default);
+        Console.WriteLine(catalog.Data.Items.GroupBy(x => x.ClassName).OrderBy(x => x.Key).Select(g =>
+            $"{g.Key}: 액티브 {g.Count(x => !x.Passive)}, 패시브 {g.Count(x => x.Passive)}, 룬 변형 {g.Count(x => x.RuneModified)}").Aggregate((a,b) => a + Environment.NewLine + b));
+        Console.WriteLine($"연결 {catalog.Data.Items.Count}개, 캐시 아이콘 {icons.Count}개, 이미지 갱신 {imageResult.Status}");
+    }
+    finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
+    return;
+}
 if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
 {
     // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
@@ -513,6 +533,20 @@ Check(classImageQuestions.Count == 1 && classImageQuestions[0].Answer == "전사
 Check(QuizQuestions.PickImage(ImageQuizTopic.Class, quizClasses, [], _ => fakePng, _ => null, 1).Count == 1, "이미지퀴즈 문제수 제한");
 try { QuizQuestions.PickImage(ImageQuizTopic.Npc, [], imageNpcs, _ => null, _ => null, 10); throw new Exception("이미지가 하나도 없으면 출제 거부"); }
 catch (ArgumentException) { Console.WriteLine("PASS 이미지가 하나도 없으면 출제 거부"); }
+
+var skillQuizEntries = new Molly.SkillQuiz.SkillQuizEntry[]
+{
+    new("Warrior", "전사", "Slash", "베기", false, "slash.png", false),
+    new("Warrior", "전사", "SlashRune", "강화 베기", false, "slash-rune.png", true), // 같은 PNG: 기본 대표
+    new("Mage", "마법사", "Fire", "파이어볼트", false, "fire.png", false),
+    new("Mage", "마법사", "MagicMastery", "전투숙련", true, "shared.png", false),
+    new("Knight", "기사", "Guard", "가드", true, "shared.png", false), // 클래스 간 공유: 제외
+};
+var imageBySkill = new Dictionary<string, byte[]> { ["slash.png"] = fakePng, ["slash-rune.png"] = fakePng, ["fire.png"] = [1, 2, 3], ["shared.png"] = [7, 7, 7] };
+var skillQuestions = QuizQuestions.PickSkillImage(skillQuizEntries, path => imageBySkill[path], 10);
+Check(skillQuestions.Count == 2 && skillQuestions.Select(x => x.Answer).Order().SequenceEqual(["마법사", "전사"]) &&
+      skillQuestions.Any(x => x.Prompt.Contains("종류: **액티브**") && x.TimedHint == "베기" && x.AnswerReveal == "전사 · 스킬: 베기"),
+    "스킬 아이콘은 같은 클래스 중복을 합치고 공유 이미지를 빼며 힌트·정답을 고정");
 
 var storageDir = Path.Combine(Path.GetTempPath(), "molly-storage-tests-" + Guid.NewGuid().ToString("N"));
 try

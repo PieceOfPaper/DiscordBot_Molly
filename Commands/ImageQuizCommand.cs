@@ -2,6 +2,7 @@ using Discord;
 using Discord.Interactions;
 using Molly.Quiz;
 using Molly.Unpack;
+using Molly.SkillQuiz;
 
 namespace DiscordBot_Molly.Commands;
 
@@ -11,7 +12,8 @@ public class ImageQuizCommand : InteractionModuleBase<SocketInteractionContext>
     public async Task Start(
         [Summary("문제종목", "진행할 문제 종목")]
         [Choice("클래스", "클래스")]
-        [Choice("NPC", "NPC")] string topic,
+        [Choice("NPC", "NPC")]
+        [Choice("스킬아이콘으로클래스", "스킬아이콘으로클래스")] string topic,
         [Summary("문제수", "출제할 문제 수 (기본 10개)"), MinValue(1)] int count = 10,
         [Summary("제한시간", "문제 하나당 제한시간 (기본 30초)"), MinValue(1)] int seconds = 30)
     {
@@ -19,6 +21,7 @@ public class ImageQuizCommand : InteractionModuleBase<SocketInteractionContext>
         {
             "클래스" => ImageQuizTopic.Class,
             "NPC" => ImageQuizTopic.Npc,
+            "스킬아이콘으로클래스" => ImageQuizTopic.SkillIconClass,
             _ => (ImageQuizTopic?)null
         };
         if (selected is null || count < 1 || seconds < 1)
@@ -45,10 +48,19 @@ public class ImageQuizCommand : InteractionModuleBase<SocketInteractionContext>
             await RespondAsync(UnpackDataMessages.NoData(portraits.Name), ephemeral: true);
             return;
         }
+        var skills = Program.instance.SkillQuiz.Data;
+        var skillIcons = Program.instance.SkillIcons;
+        if (selected == ImageQuizTopic.SkillIconClass && (skills is null || skillIcons.Count == 0))
+        {
+            await RespondAsync(UnpackDataMessages.NoData(skills is null ? Program.instance.SkillQuiz.Name : skillIcons.Name), ephemeral: true);
+            return;
+        }
         await RespondAsync("이미지퀴즈 스레드를 준비하고 있어요. 잠시만 기다려주세요.", ephemeral: false);
         try
         {
-            var questions = QuizQuestions.PickImage(selected.Value, classes?.Items ?? [], world?.Npcs ?? [],
+            var questions = selected == ImageQuizTopic.SkillIconClass
+                ? QuizQuestions.PickSkillImage(skills!.Items, icon => TryRead(skillIcons.GetPath(icon)), count)
+                : QuizQuestions.PickImage(selected.Value, classes?.Items ?? [], world?.Npcs ?? [],
                 id => ClassIcons.FromCombatJob(id) is { } iconId ? TryRead(ClassIcons.GetPath(iconId)) : null,
                 image => TryRead(portraits.GetPath(image)), count);
             var result = await Program.instance.Quizzes.StartAsync(Context.Guild.Id, "이미지퀴즈",

@@ -25,6 +25,7 @@ using Molly.Attendance;
 using Molly.Prediction;
 using Molly.OfficialNews;
 using Molly.Status;
+using Molly.SkillQuiz;
 
 class Program
 {
@@ -37,6 +38,8 @@ class Program
     public UnpackDataCatalog<RuneEnhanceData> RuneEnhance { get; private set; } = null!;
     public UnpackDataCatalog<WorldTable> World { get; private set; } = null!;
     public NpcPortraitCache NpcPortraits { get; private set; } = null!;
+    public UnpackDataCatalog<SkillQuizTable> SkillQuiz { get; private set; } = null!;
+    public SkillIconCache SkillIcons { get; private set; } = null!;
     public UnpackDataCatalog<MessageBottleTable> MessageBottles { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
     public TrueFalseQuizService TrueFalseQuizzes { get; } = new();
@@ -259,9 +262,11 @@ class Program
         Crafting = new UnpackDataCatalog<CraftingTable>(Unpack, new UnpackCraftingDataset(), dataDirectory);
         World = new UnpackDataCatalog<WorldTable>(Unpack, new UnpackWorldDataset(), dataDirectory);
         NpcPortraits = new NpcPortraitCache(Unpack, World, dataDirectory);
+        SkillQuiz = new UnpackDataCatalog<SkillQuizTable>(Unpack, new UnpackSkillQuizDataset(), dataDirectory);
+        SkillIcons = new SkillIconCache(Unpack, SkillQuiz, dataDirectory);
         MessageBottles = new UnpackDataCatalog<MessageBottleTable>(Unpack, new UnpackMessageBottleDataset(), dataDirectory);
         // NPC 이미지는 NPC·지역 데이터로 받을 목록을 정하므로 그 뒤에 둡니다.
-        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, RuneEnhance, Crafting, World, NpcPortraits, MessageBottles];
+        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, RuneEnhance, Crafting, World, NpcPortraits, SkillQuiz, SkillIcons, MessageBottles];
         await Runes.InitializeAsync(appCts.Token);
         await Classes.InitializeAsync(appCts.Token);
         await MagicResistance.InitializeAsync(appCts.Token);
@@ -269,6 +274,8 @@ class Program
         await Crafting.InitializeAsync(appCts.Token);
         await World.InitializeAsync(appCts.Token);
         await NpcPortraits.InitializeAsync(appCts.Token);
+        await SkillQuiz.InitializeAsync(appCts.Token);
+        await SkillIcons.InitializeAsync(appCts.Token);
         await MessageBottles.InitializeAsync(appCts.Token);
         // version.json의 마지막 커밋을 시작 직후와 이후 1시간마다 한 번 확인하고(데이터 수와 무관), 바뀐 데이터만 다시 받습니다.
         // 실패해도 다른 기능은 그대로 시작합니다.

@@ -2,6 +2,9 @@ using System.Text;
 using Molly.Classes;
 using Molly.Runes;
 using Molly.World;
+using Molly.SkillQuiz;
+using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 
 namespace Molly.Quiz;
 
@@ -16,7 +19,7 @@ public enum QuizTopic
     Season2AccessoryRuneNameClass
 }
 /// <param name="Image">문제와 함께 보여줄 PNG(`/이미지퀴즈`). 출제할 때 읽어 두어, 진행 중 캐시가 바뀌어도 문제는 그대로입니다.</param>
-public sealed record QuizQuestion(string Prompt, string Answer, byte[]? Image = null);
+public sealed record QuizQuestion(string Prompt, string Answer, byte[]? Image = null, string? AnswerReveal = null, string? TimedHint = null);
 
 public static class QuizQuestions
 {
@@ -89,6 +92,33 @@ public static class QuizQuestions
         var withImage = npcs.Where(n => n.ProfileImage is not null).ToArray();
         var shared = withImage.GroupBy(n => n.ProfileImage!, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
         return withImage.Where(n => !shared.Contains(n.ProfileImage!));
+    }
+
+    /// <summary>동일 그림은 픽셀 디코더가 없는 배포 환경에서도 안정적인 PNG 내용 SHA로 합칩니다. 클래스 간 공유 그림은 제외하고 클래스 순환으로 균등 출제합니다.</summary>
+    public static IReadOnlyList<QuizQuestion> PickSkillImage(IEnumerable<SkillQuizEntry> entries, Func<string, byte[]?> load, int count)
+    {
+        if (count < 1) throw new ArgumentException("문제수는 최소 1개입니다.");
+        var loaded = entries.Select(x => (Entry:x, Image:load(x.IconPath))).Where(x => x.Image is { Length: > 0 })
+            .Select(x => (x.Entry, Image:x.Image!, Hash:Convert.ToHexString(SHA256.HashData(x.Image!)))).ToArray();
+        // 같은 클래스의 같은 그림은 대표 스킬 하나(기본→이름 순)로 고정한다. 여러 클래스가 공유하면 모두 뺀다.
+        var unique = loaded.GroupBy(x => x.Hash).Where(g => g.Select(x => x.Entry.ClassId).Distinct().Count() == 1)
+            .Select(g => g.OrderBy(x => x.Entry.RuneModified).ThenBy(x => x.Entry.SkillName, StringComparer.Ordinal).First()).ToArray();
+        var byClass = unique.GroupBy(x => x.Entry.ClassId).Select(g => g.ToList()).Where(g => g.Count > 0).ToList();
+        if (byClass.Count == 0) throw new ArgumentException("현재 출제 가능한 문제가 없습니다.");
+        var picked = new List<QuizQuestion>();
+        while (picked.Count < count && byClass.Count > 0)
+        {
+            Random.Shared.Shuffle(CollectionsMarshal.AsSpan(byClass));
+            foreach (var pool in byClass.ToArray())
+            {
+                if (picked.Count == count) break;
+                var index = Random.Shared.Next(pool.Count); var x = pool[index]; pool.RemoveAt(index);
+                picked.Add(new QuizQuestion($"종류: **{(x.Entry.Passive ? "패시브" : "액티브")}**\n이 스킬을 사용하는 클래스는?", x.Entry.ClassName, x.Image,
+                    $"{x.Entry.ClassName} · 스킬: {x.Entry.SkillName}", x.Entry.SkillName));
+            }
+            byClass.RemoveAll(x => x.Count == 0);
+        }
+        return picked.AsReadOnly();
     }
 
     private static string NpcHint(NpcData npc) => $"지역: {(npc.Regions.Count == 0 ? "불명" : string.Join(", ", npc.Regions))}";
@@ -178,5 +208,6 @@ public enum ConsonantTopic
 public enum ImageQuizTopic
 {
     Class,
-    Npc
+    Npc,
+    SkillIconClass
 }

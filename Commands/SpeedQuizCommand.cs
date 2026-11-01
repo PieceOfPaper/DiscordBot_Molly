@@ -148,6 +148,10 @@ internal sealed class DiscordQuizRoom(IThreadChannel channel) : IQuizRoom
         return message.Id;
     }
 
+    public Task ModifyEmbedAsync(ulong messageId, string title, string description, uint color, CancellationToken ct)
+        => channel.ModifyMessageAsync(messageId, p => p.Embed = new EmbedBuilder().WithTitle(title).WithDescription(description)
+            .WithColor(new Color(color)).WithTimestamp(DateTimeOffset.UtcNow).Build(), new RequestOptions { CancelToken = ct });
+
     public async Task<ulong> SendEmbedWithButtonsAsync(string title, string description, uint color, CancellationToken ct)
     {
         var embed = new EmbedBuilder().WithTitle(title).WithDescription(description)
