@@ -1088,7 +1088,7 @@ public sealed class BattleEngine
         {
             if (skill is null || !HasStatusEffect("악상피해증가")) return 0d;
             var hasMelody = Resources.Any(x => x.Value > 0 && ResourceDefinitions.TryGetValue(x.Key, out var resource) && resource.Kind == "악상");
-            var melodySkill = skill.ParentSkillId == "bards_tale" || skill.Effects.Any(x => x.ConditionType == "자원보유" && x.ConditionId?.StartsWith("bard_", StringComparison.Ordinal) == true);
+            var melodySkill = skill.ParentSkillId == "HighBard_BardsTale" || skill.Effects.Any(x => x.ConditionType == "자원보유" && x.ConditionId?.StartsWith("bard_", StringComparison.Ordinal) == true);
             return hasMelody && melodySkill ? StatusValue("악상피해증가") : 0d;
         }
         /// <summary>대상스킬ID가 이 스킬 또는 부모 스킬인 스킬피해증가 상태의 합. 연계 검술처럼 비검 파생 3종을 부모 ID 하나로 지정한다.</summary>

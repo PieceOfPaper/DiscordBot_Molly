@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 
 namespace Molly.Battle;
 
-/// <summary>Google Sheets에서 검증해 한 번에 교체하는 전투 데이터입니다.</summary>
+/// <summary>Google Sheets 배틀 시트와 게임 데이터(배틀 스킬 원본)로 검증해 한 번에 교체하는 전투 데이터입니다.</summary>
 public sealed class BattleDataSnapshot
 {
     public static readonly BattleDataSnapshot Empty = new();
@@ -23,7 +23,7 @@ public sealed class BattleDataSnapshot
     /// <summary>전투를 시작할 수 있는 클래스 ID. 시트 로딩 때 미리 계산해 두고, /배틀 신청 단계에서 스레드를 만들기 전에 판정한다.</summary>
     public IReadOnlySet<string> BattleReadyClassIds { get => battleReadyClassIds ??= ComputeBattleReadyClassIds(Classes, Skills); init => battleReadyClassIds = value; }
     public bool IsClassBattleReady(string classId) => BattleReadyClassIds.Contains(classId);
-    /// <summary>클래스 시트의 스킬 칸이 모두 채워져 있고, 그 스킬이 모두 배틀스킬 시트에 있어야 전투할 수 있다.</summary>
+    /// <summary>게임 데이터 Slot01~06이 모두 배틀스킬로 채워져 있고, 그 스킬이 모두 배틀스킬 시트에 있어야 전투할 수 있다.</summary>
     public static IReadOnlySet<string> ComputeBattleReadyClassIds(IReadOnlyDictionary<string, BattleClass> classes, IReadOnlyDictionary<string, BattleSkill> skills)
         => classes.Values.Where(x => x.IsBattleReady && x.SkillIds.All(skills.ContainsKey)).Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
 }
@@ -93,7 +93,7 @@ public sealed record BattleSkillAiRule(string Id, string SkillId, string Conditi
 public sealed record BattleDerivation(string Id, string ParentSkillId, string ChildSkillId, string ActivationMode,
     double Weight, double Chance, string? ConditionType, string? ConditionValue, bool AllowDuplicate, string Timing, int Priority);
 
-/// <summary><c>배틀생활스킬</c> 한 행. 이름은 <c>생활스킬</c> 시트의 원본 이름과 같다.</summary>
+/// <summary><c>배틀생활스킬</c> 한 행. 이름은 게임 데이터 생활스킬(LivingSkill) 이름과 같다.</summary>
 public sealed record BattleLifeSkill(string Id, string Name, bool Enabled,
     double BaseChance, double LifeReference, double LifeChanceCoefficient, double MaxChance, int MaxUses, double Weight,
     string ConditionTarget, string ConditionType, string ConditionOperator, double ConditionValue,

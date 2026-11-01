@@ -173,7 +173,7 @@ if (args.Length == 1 && args[0] == "--skill-quiz-live")
 }
 if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
 {
-    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지·생활스킬 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
+    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지·생활스킬·배틀 스킬 원본 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
     // 두 번째 인자로 커밋 SHA를 주면 version.json 커밋 확인 없이 그 커밋 기준으로 만듭니다(저장소 갱신 중 확인용).
     var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
     using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
@@ -188,12 +188,13 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
         var portraits = new Molly.World.NpcPortraitCache(unpack, worldCatalog, liveDir, Console.WriteLine);
         var bottleCatalog = new Molly.Unpack.UnpackDataCatalog<MessageBottleTable>(unpack, new UnpackMessageBottleDataset(), liveDir, Console.WriteLine);
         var lifeSkillCatalog = new Molly.Unpack.UnpackDataCatalog<LifeSkillTable>(unpack, new UnpackLifeSkillDataset(), liveDir, Console.WriteLine);
-        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits, bottleCatalog, lifeSkillCatalog];
+        var battleGameCatalog = new Molly.Unpack.UnpackDataCatalog<BattleGameData>(unpack, new UnpackBattleGameDataset(), liveDir, Console.WriteLine);
+        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits, bottleCatalog, lifeSkillCatalog, battleGameCatalog];
         var results = new List<Molly.Unpack.UnpackRefreshResult>();
         if (args.Length == 2)
             foreach (var catalog in liveCatalogs) results.Add(await catalog.RefreshAsync(args[1], default));
         else results.AddRange(await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, liveCatalogs, default));
-        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null || bottleCatalog.Data is null || lifeSkillCatalog.Data is null)
+        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null || bottleCatalog.Data is null || lifeSkillCatalog.Data is null || battleGameCatalog.Data is null)
         {
             Console.WriteLine("데이터 만들기 실패: " + string.Join(" / ", results.Select(x => $"{x.Status} {x.Detail}")));
             Environment.Exit(1);
@@ -225,6 +226,7 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
         foreach (var bottle in bottleCatalog.Data.Items)
             Console.WriteLine($"{bottle.Id} | {bottle.Message.Replace("\n", " / ")}");
         Console.WriteLine("생활스킬: " + string.Join(", ", lifeSkillCatalog.Data.Items.Select(x => $"{x.Name}({x.Id})")));
+        Console.WriteLine("배틀 스킬 원본: " + new UnpackBattleGameDataset().Describe(battleGameCatalog.Data) + " — " + string.Join(", ", battleGameCatalog.Data.Classes.Select(x => $"{x.Name}({x.CombatJobId}→{ClassIcons.FromCombatJob(x.CombatJobId) ?? "매핑 없음"})")));
     }
     finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
     return;
@@ -233,7 +235,7 @@ if (args.SequenceEqual(new[] { "--battle-live" }))
 {
     using var client = new HttpClient();
     var source = new GoogleSheetsBattleSource(client, GoogleSheetsDocument.DefaultSpreadsheetId);
-    var snapshot = BattleCatalog.Parse(await source.FetchAsync(default), DateTimeOffset.UtcNow);
+    var snapshot = BattleCatalog.Parse(await source.FetchAsync(default), DateTimeOffset.UtcNow, await LiveBattleGameAsync(), warn: Console.WriteLine);
     Console.WriteLine($"실제 배틀 시트: 클래스 {snapshot.Classes.Count}개, 스킬 {snapshot.Skills.Count}개, 배틀 가능 클래스 {string.Join(", ", snapshot.BattleReadyClassIds.Select(id => snapshot.Classes[id].Name).Order(StringComparer.Ordinal))}");
     return;
 }
@@ -244,7 +246,7 @@ if (args.Length >= 3 && args[0] == "--battle-log")
     var tables = args.Length >= 4
         ? GoogleSheetsBattleSource.SheetNames.ToDictionary(x => x, x => File.ReadAllText(Path.Combine(args[3], x + ".csv")))
         : await new GoogleSheetsBattleSource(client, GoogleSheetsDocument.DefaultSpreadsheetId).FetchAsync(default);
-    var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow);
+    var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow, await LiveBattleGameAsync());
     var result = new BattleEngine().Simulate(new CharacterBattleSnapshot(1, "A", args[1], 1000, 0, 0), new CharacterBattleSnapshot(2, "B", args[2], 1000, 0, 0), data, new SystemBattleRandom());
     foreach (var message in DiscordBot_Molly.Commands.BattleLog.Format(result.Events, "A")) Console.WriteLine(message.ToText() + "\n");
     Console.WriteLine($"결과: {result.Outcome}, A {result.FighterAHp}/{result.FighterAMaxHp}, B {result.FighterBHp}/{result.FighterBMaxHp}");
@@ -260,7 +262,7 @@ if (args.Length >= 1 && args[0] == "--battle-balance")
     var tables = args.Length >= 3
         ? GoogleSheetsBattleSource.SheetNames.ToDictionary(x => x, x => File.ReadAllText(Path.Combine(args[2], x + ".csv")))
         : await new GoogleSheetsBattleSource(client, GoogleSheetsDocument.DefaultSpreadsheetId).FetchAsync(default);
-    var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow);
+    var data = BattleCatalog.Parse(tables, DateTimeOffset.UtcNow, await LiveBattleGameAsync());
     var classes = data.Classes.Values.Where(x => data.IsClassBattleReady(x.Id)).OrderBy(x => x.Name, StringComparer.Ordinal).ToArray();
     if (classes.Length < 2) { Console.WriteLine("배틀 준비된 클래스가 2개 미만이라 밸런스 시뮬레이션을 할 수 없습니다."); return; }
     const int power = 1000;
@@ -356,6 +358,20 @@ void Check(bool value, string name)
 {
     if (!value) throw new Exception(name);
     Console.WriteLine("PASS " + name);
+}
+// 배틀 개발용 명령(--battle-live·--battle-log·--battle-balance)이 쓰는 게임 데이터(클래스·스킬 이름·슬롯). 설정된 게임 데이터 저장소 토큰으로 받는다.
+static async Task<BattleGameData> LiveBattleGameAsync()
+{
+    var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
+    using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
+    var liveDir = Path.Combine(Path.GetTempPath(), "molly-battle-game-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var catalog = new Molly.Unpack.UnpackDataCatalog<BattleGameData>(unpack, new UnpackBattleGameDataset(), liveDir, Console.WriteLine);
+        var result = await catalog.RefreshAsync(default);
+        return catalog.Data ?? throw new InvalidOperationException($"게임 데이터 배틀 스킬 원본을 받지 못했습니다: {result.Status} {result.Detail}");
+    }
+    finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
 }
 var registeredCommands = typeof(DiscordBot_Molly.Commands.HelpCatalog).Assembly.GetTypes()
     .SelectMany(t => t.GetMethods())
@@ -646,6 +662,7 @@ await RuneEnhanceTests.RunAsync();
 await WorldDataTests.RunAsync();
 await MessageBottleDataTests.RunAsync();
 await LifeSkillDataTests.RunAsync();
+await BattleGameDataTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await HaeyeonCostTests.RunAsync();
 await KeywordMarketTests.RunAsync();
@@ -826,7 +843,7 @@ Check(DiscordBot_Molly.Commands.RankClassAutocomplete.Suggest("").Count() == 25
     && DiscordBot_Molly.Commands.RankClassAutocomplete.Suggest("술사").All(x => x.Contains("술사")),
     "랭킹 클래스 자동완성은 25개 제한 안에서 입력 글자를 포함한 클래스를 보여준다");
 // 모의배틀: 허수아비는 신청자와 전투력·생활력·매력이 같고 클래스만 고른 클래스다. 클래스 옵션은 ID·이름을 받고 배틀 미지원 클래스는 거부한다.
-var practiceData = BattleCatalog.Parse(ThiefBattleTests.Sheets, DateTimeOffset.UtcNow);
+var practiceData = BattleCatalog.Parse(ThiefBattleTests.Sheets, DateTimeOffset.UtcNow, BattleTestGame.Data);
 var challenger = new CharacterBattleSnapshot(42, "종잇장", "thief", 12345, 23456, 34567);
 var dummy = DiscordBot_Molly.Commands.BattleCommand.CreateDummy(challenger, "thief");
 Check(dummy is { DiscordUserId: 0, CharacterName: "허수아비", ClassId: "thief", CombatPower: 12345, LifePower: 23456, CharmPower: 34567 }

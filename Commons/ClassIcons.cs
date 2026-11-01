@@ -2,7 +2,7 @@ using Discord;
 
 /// <summary>
 /// 마비노기 모바일 클래스 아이콘(assets/class_icons/{클래스 ID}.png)을 찾는다.
-/// 파일명은 배틀 `클래스` 시트의 ID와 같다. 원본은 나무위키 클래스 문서의 흰색·투명 배경 아이콘(321×321, 암흑술사만 410×410)이라
+/// 파일명은 몰리 클래스 ID(배틀·캐릭터 등록·DB가 쓰는 ID, 아래 CombatJob 매핑)와 같다. 원본은 나무위키 클래스 문서의 흰색·투명 배경 아이콘(321×321, 암흑술사만 410×410)이라
 /// 어두운 배경(임베드 썸네일, 작성자 아이콘 등)에 쓰는 것을 전제로 한다.
 /// </summary>
 public static class ClassIcons
@@ -19,8 +19,8 @@ public static class ClassIcons
     ];
 
     /// <summary>
-    /// 게임 데이터 CombatJob.Id → 아이콘 ID. 게임 데이터 클래스 목록으로 아이콘을 찾을 때(`/이미지퀴즈`) 쓴다.
-    /// 새 클래스가 공개되면 아이콘 파일과 함께 추가한다. 없는 클래스는 아이콘 없이 다룬다.
+    /// 게임 데이터 CombatJob.Id → 몰리 클래스 ID(= 아이콘 ID). 배틀 클래스 구성(`BattleCatalog`)과 아이콘 찾기(`/이미지퀴즈`)에 쓴다.
+    /// 새 클래스가 공개되면 아이콘 파일과 함께 추가한다. 없는 클래스는 아이콘 없이 다루고, 배틀·캐릭터 등록에서는 빠진다.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> s_CombatJobIds = new Dictionary<string, string>(StringComparer.Ordinal)
     {

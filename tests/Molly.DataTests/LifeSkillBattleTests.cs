@@ -9,7 +9,7 @@ internal static class LifeSkillBattleTests
 {
     public static void Run()
     {
-        var data = BattleCatalog.Parse(Tables(), DateTimeOffset.UtcNow, GameLifeSkillNames);
+        var data = BattleCatalog.Parse(Tables(), DateTimeOffset.UtcNow, BattleTestGame.Data, GameLifeSkillNames);
         ParseTests(data);
         FormulaTests(data);
         DamageTests(data);
@@ -42,10 +42,10 @@ internal static class LifeSkillBattleTests
         withoutPartTime["배틀생활스킬"] = string.Join("\n", withoutPartTime["배틀생활스킬"].Split('\n').Where(x => !x.StartsWith("\"part_time_job\"", StringComparison.Ordinal)));
         withoutPartTime["배틀생활스킬효과"] = string.Join("\n", withoutPartTime["배틀생활스킬효과"].Split('\n').Where(x => !x.StartsWith("\"part_time_job_", StringComparison.Ordinal)));
         var warnings = new List<string>();
-        var partial = BattleCatalog.Parse(withoutPartTime, DateTimeOffset.UtcNow, GameLifeSkillNames, warnings.Add);
+        var partial = BattleCatalog.Parse(withoutPartTime, DateTimeOffset.UtcNow, BattleTestGame.Data, GameLifeSkillNames, warnings.Add);
         Assert(partial.LifeSkills.Count == 18 && warnings.Count == 1 && warnings[0].Contains("아르바이트") && !warnings[0].Contains("연금술"),
             "게임에 새로 생긴 생활스킬처럼 배틀생활스킬 행이 없는 생활스킬은 로드를 막지 않고 경고만 남긴다(연금술 제외)");
-        var withoutGameNames = BattleCatalog.Parse(Tables(("배틀생활스킬", "\"나무 베기\"", "\"나무베기\"")), DateTimeOffset.UtcNow);
+        var withoutGameNames = BattleCatalog.Parse(Tables(("배틀생활스킬", "\"나무 베기\"", "\"나무베기\"")), DateTimeOffset.UtcNow, BattleTestGame.Data);
         Assert(withoutGameNames.LifeSkills.Any(x => x.Name == "나무베기"), "게임 데이터 생활스킬 목록이 없으면 이름 확인을 건너뛰고 배틀 데이터를 불러온다");
     }
 
@@ -203,7 +203,7 @@ internal static class LifeSkillBattleTests
 
     private static string Throws(Func<Dictionary<string, string>> tables)
     {
-        try { BattleCatalog.Parse(tables(), DateTimeOffset.UtcNow, GameLifeSkillNames); }
+        try { BattleCatalog.Parse(tables(), DateTimeOffset.UtcNow, BattleTestGame.Data, GameLifeSkillNames); }
         catch (InvalidDataException ex) { return ex.Message; }
         return "(예외 없음)";
     }

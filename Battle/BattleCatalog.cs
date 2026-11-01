@@ -14,7 +14,7 @@ public interface IBattleDataSource
 /// <summary>전투용 탭을 한 요청 묶음으로 가져옵니다. 엔진은 이 공급자를 직접 사용하지 않습니다.</summary>
 public sealed class GoogleSheetsBattleSource(HttpClient client, string spreadsheetId) : IBattleDataSource
 {
-    public static readonly string[] SheetNames = ["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과", "배틀생활스킬", "배틀생활스킬효과"];
+    public static readonly string[] SheetNames = ["배틀스킬", "배틀이름교체", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀돌발이벤트", "배틀돌발이벤트효과", "배틀생활스킬", "배틀생활스킬효과"];
     public string CacheKey => spreadsheetId;
 
     public async Task<IReadOnlyDictionary<string, string>> FetchAsync(CancellationToken ct)
@@ -43,15 +43,18 @@ public sealed class BattleCatalog
     private readonly IBattleDataSource source;
     private readonly string cachePath;
     private readonly Action<string> log;
+    // 게임 데이터의 클래스·스킬 이름·슬롯. 없으면(언팩 데이터 없음) 배틀 데이터를 만들 수 없어 마지막 정상 스냅샷을 유지합니다.
+    private readonly Func<BattleGameData?> gameData;
     // 게임 데이터의 생활스킬 이름 목록. 없으면(언팩 데이터 없음) 배틀생활스킬 이름 확인을 건너뜁니다.
     private readonly Func<IReadOnlyCollection<string>?> lifeSkillNames;
     private readonly SemaphoreSlim gate = new(1, 1);
     private BattleDataSnapshot current = BattleDataSnapshot.Empty;
     public BattleDataSnapshot Current => Volatile.Read(ref current);
 
-    public BattleCatalog(IBattleDataSource source, string dataDirectory, Action<string>? log = null, Func<IReadOnlyCollection<string>?>? lifeSkillNames = null)
+    public BattleCatalog(IBattleDataSource source, string dataDirectory, Func<BattleGameData?> gameData, Action<string>? log = null, Func<IReadOnlyCollection<string>?>? lifeSkillNames = null)
     {
         this.source = source;
+        this.gameData = gameData;
         this.log = log ?? Console.WriteLine;
         this.lifeSkillNames = lifeSkillNames ?? (() => null);
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source.CacheKey)));
@@ -68,7 +71,7 @@ public sealed class BattleCatalog
                 try
                 {
                     var tables = JsonSerializer.Deserialize<Dictionary<string, string>>(await File.ReadAllTextAsync(cachePath, ct).ConfigureAwait(false));
-                    if (tables is not null) Volatile.Write(ref current, Parse(tables, File.GetLastWriteTimeUtc(cachePath), LifeSkillNames(), log));
+                    if (tables is not null) Volatile.Write(ref current, Parse(tables, File.GetLastWriteTimeUtc(cachePath), gameData(), LifeSkillNames(), log));
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { log($"[배틀] 로컬 캐시 로딩 실패: {ex.Message}"); }
@@ -84,7 +87,7 @@ public sealed class BattleCatalog
         try
         {
             var tables = await source.FetchAsync(ct).ConfigureAwait(false);
-            var snapshot = Parse(tables, DateTimeOffset.UtcNow, LifeSkillNames(), log);
+            var snapshot = Parse(tables, DateTimeOffset.UtcNow, gameData(), LifeSkillNames(), log);
             var json = JsonSerializer.Serialize(tables);
             Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
             var temporary = cachePath + ".tmp-" + Guid.NewGuid().ToString("N");
@@ -106,15 +109,16 @@ public sealed class BattleCatalog
         return names;
     }
 
+    /// <param name="game">게임 데이터의 클래스·스킬 이름·슬롯. null이면(언팩 데이터 없음) 배틀 데이터를 만들 수 없어 거부합니다.</param>
     /// <param name="lifeSkillNames">게임 데이터(LivingSkill)의 생활스킬 이름. null이면 배틀생활스킬 이름 확인을 건너뜁니다.</param>
-    /// <param name="warn">데이터를 거부하지 않는 경고(배틀생활스킬이 아직 없는 생활스킬 등)를 남깁니다.</param>
-    public static BattleDataSnapshot Parse(IReadOnlyDictionary<string, string> tables, DateTimeOffset loadedAt, IReadOnlyCollection<string>? lifeSkillNames = null, Action<string>? warn = null)
+    /// <param name="warn">데이터를 거부하지 않는 경고(배틀생활스킬이 아직 없는 생활스킬, 배틀스킬이 일부만 있는 클래스 등)를 남깁니다.</param>
+    public static BattleDataSnapshot Parse(IReadOnlyDictionary<string, string> tables, DateTimeOffset loadedAt, BattleGameData? game, IReadOnlyCollection<string>? lifeSkillNames = null, Action<string>? warn = null)
     {
+        if (game is null) throw new InvalidDataException("게임 데이터의 배틀 스킬 원본(클래스·스킬 이름·슬롯)이 없어 배틀 데이터를 만들 수 없습니다.");
+        warn ??= _ => { };
         foreach (var name in GoogleSheetsBattleSource.SheetNames)
             if (!tables.ContainsKey(name)) throw new InvalidDataException($"전투 데이터에 {name} 시트가 없습니다.");
-        var classes = BattleCsv.Read(tables["클래스"], "클래스");
-        var skills = BattleCsv.Read(tables["스킬"], "스킬");
-        var passiveSkills = BattleCsv.Read(tables["패시브스킬"], "패시브스킬");
+        var renames = BattleCsv.Read(tables["배틀이름교체"], "배틀이름교체");
         var battleSkills = BattleCsv.Read(tables["배틀스킬"], "배틀스킬");
         var effects = BattleCsv.Read(tables["배틀스킬효과"], "배틀스킬효과");
         var derivations = BattleCsv.Read(tables["배틀스킬파생"], "배틀스킬파생");
@@ -124,11 +128,10 @@ public sealed class BattleCatalog
         var statuses = BattleCsv.Read(tables["배틀상태효과"], "배틀상태효과");
         var rules = BattleCsv.Read(tables["배틀규칙"], "배틀규칙");
         // 나머지 표도 누락/깨진 CSV를 허용하지 않습니다. 상세 효과는 이후 엔진 단계에서 공통 모델로 확장합니다.
-        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["클래스", "스킬", "패시브스킬", "배틀스킬", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀생활스킬", "배틀생활스킬효과"])) BattleCsv.Read(tables[name], name);
-        BattleCsv.Headers(classes, "클래스", "ID", "이름", "스킬1", "스킬2", "스킬3", "스킬4", "스킬5", "궁극기", "패시브1", "패시브2", "패시브3", "패시브4", "패시브5", "패시브6");
-        BattleCsv.Headers(skills, "스킬", "ID", "이름", "스킬구분", "부모스킬ID");
-        BattleCsv.Headers(passiveSkills, "패시브스킬", "ID", "이름");
-        BattleCsv.Headers(battleSkills, "배틀스킬", "ID", "활성화", "기본쿨다운", "최초쿨다운", "사용우선순위", "자원유형", "자원소모", "자원획득");
+        foreach (var name in GoogleSheetsBattleSource.SheetNames.Except(["배틀스킬", "배틀이름교체", "배틀스킬효과", "배틀스킬파생", "배틀스킬AI", "배틀패시브", "배틀패시브효과", "배틀자원", "배틀상태효과", "배틀규칙", "배틀생활스킬", "배틀생활스킬효과"])) BattleCsv.Read(tables[name], name);
+        // 헤더만 있는 시트는 교체할 이름이 없다는 뜻이다. BattleCsv.Headers는 첫 행에서 헤더를 읽으므로 행이 없으면 검사를 건너뛴다.
+        if (renames.Count > 0) BattleCsv.Headers(renames, "배틀이름교체", "ID", "표시이름");
+        BattleCsv.Headers(battleSkills, "배틀스킬", "ID", "부모스킬ID", "이름", "활성화", "기본쿨다운", "최초쿨다운", "사용우선순위", "자원유형", "자원소모", "자원획득", "궁극기여부");
         BattleCsv.Headers(effects, "배틀스킬효과", "ID", "스킬ID", "실행순서", "효과유형", "대상", "고정값", "횟수", "발동확률", "지속턴", "상태효과ID", "최대중첩", "효과문구", "조건대상", "조건유형", "조건ID", "조건연산자", "조건값", "수치참조ID", "수치참조방식");
         BattleCsv.Headers(derivations, "배틀스킬파생", "ID", "부모스킬ID", "파생스킬ID", "발동방식", "가중치", "발동확률", "조건유형", "조건값", "중복허용", "실행시점", "우선순위");
         BattleCsv.Headers(battlePassives, "배틀패시브", "ID", "활성화");
@@ -138,14 +141,12 @@ public sealed class BattleCatalog
         BattleCsv.Headers(rules, "배틀규칙", "ID", "분류", "값유형", "값", "설명");
 
         var ruleMap = Unique(rules, "배틀규칙").ToDictionary(x => x.Required("ID", "배틀규칙", 0), x => new BattleRule(x["ID"], x["분류"], x["값유형"], x["값"], x["설명"]), StringComparer.Ordinal);
-        var rawSkills = Unique(skills, "스킬").ToDictionary(x => x["ID"], StringComparer.Ordinal);
-        var rawPassives = Unique(passiveSkills, "패시브스킬").ToDictionary(x => x["ID"], StringComparer.Ordinal);
-        foreach (var (row, index) in skills.Select((x, i) => (x, i + 2)))
+        var nameMap = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (row, index) in Unique(renames, "배틀이름교체").Select((x, i) => (x, i + 2)))
         {
-            var id = row.Required("ID", "스킬", index); var kind = row.Required("스킬구분", "스킬", index);
-            var parent = row["부모스킬ID"];
-            if (kind == "파생" && (string.IsNullOrEmpty(parent) || !rawSkills.ContainsKey(parent))) throw new InvalidDataException($"스킬 시트 {index}행의 파생 부모 ID가 올바르지 않습니다.");
-            if (kind is not ("일반" or "궁극기" or "파생")) throw new InvalidDataException($"스킬 시트 {index}행의 스킬구분이 올바르지 않습니다.");
+            var id = row["ID"];
+            if (!game.Skills.ContainsKey(id)) throw new InvalidDataException($"배틀이름교체 시트 {index}행의 ID '{id}'가 게임 데이터 스킬에 없습니다.");
+            nameMap[id] = row.Required("표시이름", "배틀이름교체", index);
         }
         var effectMap = effects.GroupBy(x => x.Required("스킬ID", "배틀스킬효과", 0), StringComparer.Ordinal).ToDictionary(g => g.Key, g => (IReadOnlyList<BattleEffect>)g.Select((x, i) => new BattleEffect(
             x.Required("ID", "배틀스킬효과", i + 2), BattleCsv.Int(x.Required("실행순서", "배틀스킬효과", i + 2), "배틀스킬효과", i + 2, "실행순서", 1), x["효과유형"], x["대상"], BattleCsv.Int(x["고정값"], "배틀스킬효과", i + 2, "고정값"), BattleCsv.Int(x["횟수"], "배틀스킬효과", i + 2, "횟수", 1), BattleCsv.Double(x["발동확률"], "배틀스킬효과", i + 2, "발동확률", 0, 1),
@@ -163,34 +164,37 @@ public sealed class BattleCatalog
         foreach (var (row, index) in battleSkills.Select((x, i) => (x, i + 2)))
         {
             var id = row.Required("ID", "배틀스킬", index);
-            if (!rawSkills.TryGetValue(id, out var sourceSkill)) throw new InvalidDataException($"배틀스킬 시트 {index}행이 존재하지 않는 스킬 ID '{id}'를 참조합니다.");
-            if (!skillMap.TryAdd(id, new BattleSkill(id, sourceSkill["이름"], sourceSkill["스킬구분"], sourceSkill["부모스킬ID"], BattleCsv.Bool(row["활성화"], "배틀스킬", index, "활성화"), BattleCsv.Int(row["기본쿨다운"], "배틀스킬", index, "기본쿨다운"), BattleCsv.Int(row["최초쿨다운"], "배틀스킬", index, "최초쿨다운"), BattleCsv.Int(row["사용우선순위"], "배틀스킬", index, "사용우선순위"), 1d, effectMap.GetValueOrDefault(id, []), EmptyAsNull(row["자원유형"]), EmptyAsNull(row["자원소모"]), EmptyAsNull(row["자원획득"])) { UltimateQuote = EmptyAsNull(row.GetValueOrDefault("궁극기문구", "")) })) throw new InvalidDataException($"배틀스킬 ID '{id}'가 중복되었습니다.");
+            var parent = EmptyAsNull(row["부모스킬ID"]);
+            var customName = EmptyAsNull(row["이름"]);
+            string name;
+            if (game.Skills.TryGetValue(id, out var gameSkill))
+            {
+                if (customName is not null) throw new InvalidDataException($"배틀스킬 시트 {index}행의 '{id}'는 게임 데이터에 있는 스킬이라 이름 칸을 비웁니다. 이름을 바꾸려면 배틀이름교체 시트에 적습니다.");
+                name = nameMap.GetValueOrDefault(id, gameSkill.Name);
+            }
+            // 게임 데이터에 없는 ID는 몰리 배틀이 만든 가상 스킬(예: 정열·우아·화합을 고르는 애드리브 버튼)이다. 이름을 직접 적어야 한다.
+            else name = customName ?? throw new InvalidDataException($"배틀스킬 시트 {index}행의 스킬 ID '{id}'가 게임 데이터에 없습니다. 몰리 배틀 전용 스킬이면 이름 칸을 채웁니다.");
+            // 스킬구분: 부모가 있으면 파생(행동 후보로 추첨되지 않음), 없으면 궁극기여부로 궁극기·일반을 나눈다.
+            var kind = parent is not null ? "파생" : BattleCsv.Bool(row["궁극기여부"], "배틀스킬", index, "궁극기여부") ? "궁극기" : "일반";
+            if (!skillMap.TryAdd(id, new BattleSkill(id, name, kind, parent, BattleCsv.Bool(row["활성화"], "배틀스킬", index, "활성화"), BattleCsv.Int(row["기본쿨다운"], "배틀스킬", index, "기본쿨다운"), BattleCsv.Int(row["최초쿨다운"], "배틀스킬", index, "최초쿨다운"), BattleCsv.Int(row["사용우선순위"], "배틀스킬", index, "사용우선순위"), 1d, effectMap.GetValueOrDefault(id, []), EmptyAsNull(row["자원유형"]), EmptyAsNull(row["자원소모"]), EmptyAsNull(row["자원획득"])) { UltimateQuote = EmptyAsNull(row.GetValueOrDefault("궁극기문구", "")) })) throw new InvalidDataException($"배틀스킬 ID '{id}'가 중복되었습니다.");
         }
-        var classMap = new Dictionary<string, BattleClass>(StringComparer.Ordinal);
-        foreach (var (row, index) in classes.Select((x, i) => (x, i + 2)))
+        foreach (var skill in skillMap.Values)
         {
-            var ids = new[] { row["스킬1"], row["스킬2"], row["스킬3"], row["스킬4"], row["스킬5"], row["궁극기"] };
-            // 아직 전투 스킬을 입력하지 않은 클래스는 원본 데이터로 보존하되 배틀 후보에서 제외합니다.
-            // 일부만 비어 있는 행은 오타 또는 반쯤 반영된 데이터이므로 전체 스냅샷을 거부합니다.
-            var isBattleReady = ids.All(id => !string.IsNullOrWhiteSpace(id));
-            if (!isBattleReady && ids.Any(id => !string.IsNullOrWhiteSpace(id))) throw new InvalidDataException($"클래스 시트 {index}행의 배틀 스킬 구성이 일부만 입력되었습니다.");
-            if (isBattleReady && ids.Any(id => !rawSkills.ContainsKey(id))) throw new InvalidDataException($"클래스 시트 {index}행이 존재하지 않는 스킬 ID를 참조합니다.");
-            // 패시브는 스킬과 달리 클래스마다 개수가 다를 수 있어 부분 채움을 허용합니다. 아직 배틀패시브가 없는 ID도
-            // 원본에는 존재해야 하며(오타 방지), 구현 전까지는 전투 시작 시 조용히 무시됩니다(스킬의 활성화=FALSE와 동일한 패턴).
-            var passiveIds = new[] { row["패시브1"], row["패시브2"], row["패시브3"], row["패시브4"], row["패시브5"], row["패시브6"] }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
-            if (passiveIds.Any(id => !rawPassives.ContainsKey(id))) throw new InvalidDataException($"클래스 시트 {index}행이 존재하지 않는 패시브 ID를 참조합니다.");
-            var id = row.Required("ID", "클래스", index);
-            if (!classMap.TryAdd(id, new BattleClass(id, row.Required("이름", "클래스", index), isBattleReady ? ids : Array.Empty<string>(), isBattleReady, passiveIds))) throw new InvalidDataException($"클래스 ID '{id}'가 중복되었습니다.");
+            if (skill.ParentSkillId is { } parentId && (parentId == skill.Id || !skillMap.ContainsKey(parentId))) throw new InvalidDataException($"배틀스킬 '{skill.Id}'의 부모스킬ID '{parentId}'가 배틀스킬 시트에 없습니다.");
+            if (game.Skills.TryGetValue(skill.Id, out var gameSkill) && gameSkill.Slots.All(x => x.IsPassive)) throw new InvalidDataException($"배틀스킬 '{skill.Id}'는 게임 데이터에서 패시브 슬롯에만 있습니다. 배틀패시브 시트에 적습니다.");
+            if (!game.Skills.ContainsKey(skill.Id) && !skillMap.Values.Any(x => x.ParentSkillId == skill.Id)) throw new InvalidDataException($"배틀 전용 스킬 '{skill.Id}'에 파생 스킬이 없습니다. 게임 데이터에 없는 스킬은 파생 스킬을 고르는 버튼으로만 씁니다.");
         }
+        if (nameMap.Keys.FirstOrDefault(id => !skillMap.ContainsKey(id)) is { } unusedRename) throw new InvalidDataException($"배틀이름교체 시트의 ID '{unusedRename}'가 배틀스킬 시트에 없습니다.");
         var passiveMap = new Dictionary<string, BattlePassive>(StringComparer.Ordinal);
         foreach (var (row, index) in battlePassives.Select((x, i) => (x, i + 2)))
         {
             var id = row.Required("ID", "배틀패시브", index);
-            if (!rawPassives.ContainsKey(id)) throw new InvalidDataException($"배틀패시브 시트 {index}행이 존재하지 않는 패시브 ID '{id}'를 참조합니다.");
+            if (!game.Skills.TryGetValue(id, out var gamePassive) || !gamePassive.Slots.Any(x => x.IsPassive)) throw new InvalidDataException($"배틀패시브 시트 {index}행의 ID '{id}'가 게임 데이터 패시브에 없습니다.");
             var passive = new BattlePassive(id, BattleCsv.Bool(row["활성화"], "배틀패시브", index, "활성화"), passiveEffectMap.GetValueOrDefault(id, []));
             if (passive.Enabled && passive.Effects.Count == 0) throw new InvalidDataException($"배틀패시브 '{id}'가 활성화되어 있지만 효과가 하나도 없습니다.");
             if (!passiveMap.TryAdd(id, passive)) throw new InvalidDataException($"배틀패시브 ID '{id}'가 중복되었습니다.");
         }
+        var classMap = ParseClasses(game, skillMap, passiveMap, warn);
         var resourceMap = Unique(resources, "배틀자원").ToDictionary(x => x["ID"], x => new BattleResource(x["ID"], x["이름"], x["분류"], BattleCsv.Int(x["최대값"], "배틀자원", 0, "최대값"), BattleCsv.Int(x["초기값"], "배틀자원", 0, "초기값"), BattleCsv.Int(x["지속턴"], "배틀자원", 0, "지속턴"), x["중첩방식"]) { HideLog = OptionalBool(x, "로그숨김", "배틀자원") }, StringComparer.Ordinal);
         if (resourceMap.Values.FirstOrDefault(x => x.Stacking == "개별" && x.Duration <= 0) is { } untimedStack) throw new InvalidDataException($"배틀자원 '{untimedStack.Id}'의 중첩방식=개별은 지속턴이 1 이상이어야 합니다.");
         var statusMap = Unique(statuses, "배틀상태효과").Select((x, i) => ParseStatus(x, i + 2)).ToDictionary(x => x.Id, StringComparer.Ordinal);
@@ -224,6 +228,8 @@ public sealed class BattleCatalog
             if (effect.Type == "지속피해폭발" && effect.StatusId is null) throw new InvalidDataException($"{sheet} '{effect.Id}'의 지속피해폭발에는 상태효과ID가 필요합니다.");
             // 브레이크익스텐드(아이시클 섀터)는 브레이크를 바꿔 끼울 익스텐드 상태가 필요하다. 브레이크 효과유형이 없으면 행동 상실이 사라진다.
             if (effect.Type == "브레이크익스텐드" && (effect.StatusId is null || !statusMap.TryGetValue(effect.StatusId, out var extended) || !extended.HasEffectType("브레이크"))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 브레이크익스텐드에는 효과유형에 브레이크가 있는 상태효과ID가 필요합니다.");
+            // 다음행동지정은 상태효과ID 칸에 다음 행동으로 쓸 배틀 스킬 ID를 적는다. 없는 ID면 지정이 조용히 사라진다.
+            if (effect.Type == "다음행동지정" && (effect.StatusId is null || !skillMap.ContainsKey(effect.StatusId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 다음행동지정에는 존재하는 배틀 스킬 ID가 필요합니다(상태효과ID 칸).");
             if (effect.ConditionType == "자원보유" && (effect.ConditionId is null || !resourceMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 조건 ID가 올바르지 않습니다.");
             if (effect.ConditionType == "분류자원미보유" && (effect.ConditionId is null || !resourceMap.Values.Any(x => x.Kind == effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 자원 분류 조건이 올바르지 않습니다.");
             if (effect.ConditionType is "상태효과보유" or "상태효과미보유" && (effect.ConditionId is null || !statusMap.ContainsKey(effect.ConditionId))) throw new InvalidDataException($"{sheet} '{effect.Id}'의 상태 조건 ID가 올바르지 않습니다.");
@@ -256,7 +262,56 @@ public sealed class BattleCatalog
         if (derivationList.FirstOrDefault(x => x.ConditionType is not (null or "자원보유" or "상태효과보유" or "상대상태효과보유" or "악상")) is { } unknownCondition) throw new InvalidDataException($"배틀스킬파생 '{unknownCondition.Id}'의 조건유형 '{unknownCondition.ConditionType}'을(를) 지원하지 않습니다.");
         if (derivationList.FirstOrDefault(x => x.ConditionType == "상대상태효과보유" && (x.ConditionValue is null || !statusMap.ContainsKey(x.ConditionValue))) is { } unknownStatus) throw new InvalidDataException($"배틀스킬파생 '{unknownStatus.Id}'의 상대상태효과보유 조건값이 존재하지 않는 상태 ID입니다.");
         var skillAiRules = ParseSkillAiRules(BattleCsv.Read(tables["배틀스킬AI"], "배틀스킬AI"), skillMap, resourceMap, statusMap);
-        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, SkillAiRules = skillAiRules, LifeSkills = ParseLifeSkills(tables, lifeSkillNames, warn ?? (_ => { })), LoadedAt = loadedAt };
+        return new BattleDataSnapshot { Rules = new ReadOnlyDictionary<string, BattleRule>(ruleMap), Classes = new ReadOnlyDictionary<string, BattleClass>(classMap), Skills = new ReadOnlyDictionary<string, BattleSkill>(skillMap), BattleReadyClassIds = BattleDataSnapshot.ComputeBattleReadyClassIds(classMap, skillMap), Passives = new ReadOnlyDictionary<string, BattlePassive>(passiveMap), Resources = new ReadOnlyDictionary<string, BattleResource>(resourceMap), Statuses = new ReadOnlyDictionary<string, BattleStatus>(statusMap), Derivations = derivationList, SkillAiRules = skillAiRules, LifeSkills = ParseLifeSkills(tables, lifeSkillNames, warn), LoadedAt = loadedAt };
+    }
+
+    private static readonly string[] SkillSlots = ["Slot01", "Slot02", "Slot03", "Slot04", "Slot05", "Slot06"];
+    private static readonly string[] PassiveSlots = ["PassiveSlot01", "PassiveSlot02", "PassiveSlot03", "PassiveSlot04", "PassiveSlot05", "PassiveSlot06"];
+
+    /// <summary>
+    /// 게임 데이터의 클래스 슬롯으로 클래스별 스킬 구성을 만든다. 배틀스킬(파생 제외)·배틀패시브에 있는 ID가 그 클래스의 어느 슬롯에 들어 있는지 보고 배정한다.
+    /// 배틀 전용 스킬은 파생 스킬의 슬롯을 물려받는다. Slot01~06이 모두 채워진 클래스만 배틀할 수 있고, 패시브는 일부만 있어도 된다.
+    /// 몰리 클래스 ID는 <see cref="ClassIcons.FromCombatJob"/>로 정한다(DB·아이콘·이모지가 이 ID를 쓴다).
+    /// </summary>
+    private static Dictionary<string, BattleClass> ParseClasses(BattleGameData game, IReadOnlyDictionary<string, BattleSkill> skills, IReadOnlyDictionary<string, BattlePassive> passives, Action<string> warn)
+    {
+        IEnumerable<BattleGameSlot> SlotsOf(string skillId)
+            => game.Skills.TryGetValue(skillId, out var gameSkill) ? gameSkill.Slots
+                : skills.Values.Where(x => x.ParentSkillId == skillId).SelectMany(x => SlotsOf(x.Id));
+        var assigned = new HashSet<string>(StringComparer.Ordinal);
+        var result = new Dictionary<string, BattleClass>(StringComparer.Ordinal);
+        foreach (var gameClass in game.Classes)
+        {
+            if (ClassIcons.FromCombatJob(gameClass.CombatJobId) is not { } classId)
+            {
+                warn($"[배틀] 게임 데이터 클래스 {gameClass.Name}({gameClass.CombatJobId})의 몰리 클래스 ID가 없어 배틀·캐릭터 등록에서 제외합니다. Commons/ClassIcons에 추가하세요.");
+                continue;
+            }
+            Dictionary<string, string> Assign(IEnumerable<string> ids, bool passive)
+            {
+                var bySlot = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var id in ids)
+                {
+                    var slotNames = SlotsOf(id).Where(x => x.CombatJobId == gameClass.CombatJobId && x.IsPassive == passive).Select(x => x.Slot).Distinct().ToArray();
+                    if (slotNames.Length == 0) continue;
+                    if (slotNames.Length > 1) throw new InvalidDataException($"'{id}'가 {gameClass.Name} 클래스의 여러 슬롯({string.Join(", ", slotNames)})에 있어 배정할 수 없습니다.");
+                    if (!bySlot.TryAdd(slotNames[0], id)) throw new InvalidDataException($"{gameClass.Name} 클래스의 {slotNames[0]}에 '{bySlot[slotNames[0]]}'와 '{id}'가 함께 있습니다. 슬롯마다 하나만 둡니다.");
+                    assigned.Add(id);
+                }
+                return bySlot;
+            }
+            var skillSlots = Assign(skills.Values.Where(x => x.Kind != "파생").Select(x => x.Id), passive: false);
+            var passiveSlots = Assign(passives.Keys, passive: true);
+            var isBattleReady = SkillSlots.All(skillSlots.ContainsKey);
+            if (!isBattleReady && skillSlots.Count > 0)
+                warn($"[배틀] {gameClass.Name} 클래스는 배틀스킬이 {skillSlots.Count}/6 슬롯에만 있어 배틀에 나오지 않습니다(빠진 슬롯: {string.Join(", ", SkillSlots.Where(x => !skillSlots.ContainsKey(x)))}).");
+            var skillIds = isBattleReady ? SkillSlots.Select(x => skillSlots[x]).ToArray() : Array.Empty<string>();
+            var passiveIds = PassiveSlots.Where(passiveSlots.ContainsKey).Select(x => passiveSlots[x]).ToArray();
+            if (!result.TryAdd(classId, new BattleClass(classId, gameClass.Name, skillIds, isBattleReady, passiveIds))) throw new InvalidDataException($"클래스 ID '{classId}'가 중복되었습니다.");
+        }
+        var orphans = skills.Values.Where(x => x.Kind != "파생").Select(x => x.Id).Concat(passives.Keys).Where(x => !assigned.Contains(x)).ToArray();
+        if (orphans.Length > 0) warn($"[배틀] 어느 클래스 슬롯에도 들어가지 않는 배틀스킬·배틀패시브가 있어 배틀에 나오지 않습니다: {string.Join(", ", orphans)}");
+        return result;
     }
 
     /// <summary>수치를 비교하는 AI 조건. 비례 가산(단계당가산)은 이 조건에서만 쓸 수 있다.</summary>
