@@ -14,6 +14,7 @@ using Molly.Lottery;
 using DiscordBot_Molly.Commands;
 using Molly.Battle;
 using Molly.MobiLife;
+using Molly.RuneEnhance;
 using Molly.Unpack;
 using Molly.Crafting;
 using Molly.World;
@@ -33,6 +34,7 @@ class Program
     public UnpackDataCatalog<RuneTable> Runes { get; private set; } = null!;
     public UnpackDataCatalog<ClassTable> Classes { get; private set; } = null!;
     public UnpackDataCatalog<MagicResistanceData> MagicResistance { get; private set; } = null!;
+    public UnpackDataCatalog<RuneEnhanceData> RuneEnhance { get; private set; } = null!;
     public UnpackDataCatalog<WorldTable> World { get; private set; } = null!;
     public NpcPortraitCache NpcPortraits { get; private set; } = null!;
     public MessageBottleCatalog MessageBottles { get; private set; } = null!;
@@ -253,14 +255,16 @@ class Program
         Runes = new UnpackDataCatalog<RuneTable>(Unpack, new UnpackRuneDataset(), dataDirectory);
         Classes = new UnpackDataCatalog<ClassTable>(Unpack, new UnpackClassDataset(), dataDirectory);
         MagicResistance = new UnpackDataCatalog<MagicResistanceData>(Unpack, new UnpackMagicResistanceDataset(), dataDirectory);
+        RuneEnhance = new UnpackDataCatalog<RuneEnhanceData>(Unpack, new UnpackRuneEnhanceDataset(), dataDirectory);
         Crafting = new UnpackDataCatalog<CraftingTable>(Unpack, new UnpackCraftingDataset(), dataDirectory);
         World = new UnpackDataCatalog<WorldTable>(Unpack, new UnpackWorldDataset(), dataDirectory);
         NpcPortraits = new NpcPortraitCache(Unpack, World, dataDirectory);
         // NPC 이미지는 NPC·지역 데이터로 받을 목록을 정하므로 그 뒤에 둡니다.
-        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, Crafting, World, NpcPortraits];
+        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, RuneEnhance, Crafting, World, NpcPortraits];
         await Runes.InitializeAsync(appCts.Token);
         await Classes.InitializeAsync(appCts.Token);
         await MagicResistance.InitializeAsync(appCts.Token);
+        await RuneEnhance.InitializeAsync(appCts.Token);
         await Crafting.InitializeAsync(appCts.Token);
         await World.InitializeAsync(appCts.Token);
         await NpcPortraits.InitializeAsync(appCts.Token);

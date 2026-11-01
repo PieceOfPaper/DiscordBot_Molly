@@ -13,7 +13,7 @@ public class ConsonantQuizCommand : InteractionModuleBase<SocketInteractionConte
         [Choice("시즌2룬", "시즌2룬")]
         [Choice("시즌2무기룬", "시즌2무기룬")]
         [Choice("시즌2방어구룬", "시즌2방어구룬")]
-        [Choice("시즌2앰블럼룬", "시즌2앰블럼룬")]
+        [Choice("시즌2엠블럼룬", "시즌2엠블럼룬")]
         [Choice("시즌2장신구룬", "시즌2장신구룬")]
         [Choice("시즌2장신구룬빼고", "시즌2장신구룬빼고")]
         [Choice("NPC", "NPC")]
@@ -28,7 +28,7 @@ public class ConsonantQuizCommand : InteractionModuleBase<SocketInteractionConte
             "시즌2룬" => ConsonantTopic.Season2Rune,
             "시즌2무기룬" => ConsonantTopic.Season2WeaponRune,
             "시즌2방어구룬" => ConsonantTopic.Season2ArmorRune,
-            "시즌2앰블럼룬" => ConsonantTopic.Season2EmblemRune,
+            "시즌2엠블럼룬" => ConsonantTopic.Season2EmblemRune,
             "시즌2장신구룬" => ConsonantTopic.Season2AccessoryRune,
             "시즌2장신구룬빼고" => ConsonantTopic.Season2NonAccessoryRune,
             "NPC" => ConsonantTopic.Npc,

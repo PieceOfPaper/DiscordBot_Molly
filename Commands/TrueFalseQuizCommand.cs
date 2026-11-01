@@ -13,7 +13,7 @@ public sealed class TrueFalseQuizCommand : InteractionModuleBase<SocketInteracti
         [Choice("시즌2룬", "시즌2룬")]
         [Choice("시즌2무기룬", "시즌2무기룬")]
         [Choice("시즌2방어구룬", "시즌2방어구룬")]
-        [Choice("시즌2앰블럼룬", "시즌2앰블럼룬")]
+        [Choice("시즌2엠블럼룬", "시즌2엠블럼룬")]
         [Choice("시즌2장신구룬", "시즌2장신구룬")]
         [Choice("시즌2장신구룬빼고", "시즌2장신구룬빼고")] string topic,
         [Summary("문제수", "출제할 문제 수 (기본 10개)"), MinValue(1)] int count = 10,
@@ -24,7 +24,7 @@ public sealed class TrueFalseQuizCommand : InteractionModuleBase<SocketInteracti
             "시즌2룬" => TrueFalseTopic.Season2Rune,
             "시즌2무기룬" => TrueFalseTopic.Season2WeaponRune,
             "시즌2방어구룬" => TrueFalseTopic.Season2ArmorRune,
-            "시즌2앰블럼룬" => TrueFalseTopic.Season2EmblemRune,
+            "시즌2엠블럼룬" => TrueFalseTopic.Season2EmblemRune,
             "시즌2장신구룬" => TrueFalseTopic.Season2AccessoryRune,
             "시즌2장신구룬빼고" => TrueFalseTopic.Season2NonAccessoryRune,
             _ => (TrueFalseTopic?)null

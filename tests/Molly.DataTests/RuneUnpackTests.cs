@@ -13,7 +13,7 @@ internal static class TestRunes
             fields[1] switch { "전설" => RuneGrade.Legendary, "신화" => RuneGrade.Mythic, _ => throw new ArgumentException(fields[1]) },
             fields[2] switch
             {
-                "무기" => RuneCategory.Weapon, "방어구" => RuneCategory.Armor, "앰블럼" => RuneCategory.Emblem, "장신구" => RuneCategory.Accessory,
+                "무기" => RuneCategory.Weapon, "방어구" => RuneCategory.Armor, "엠블럼" => RuneCategory.Emblem, "장신구" => RuneCategory.Accessory,
                 _ => throw new ArgumentException(fields[2]),
             },
             fields[3], fields[4], fields[5]);
@@ -206,7 +206,7 @@ internal static class RuneUnpackTests
         var requested = new List<string>();
         var table = await dataset.BuildAsync(Fetcher(s_Sheets, requested), default);
         Assert(table.Items.Select(x => x.Id).SequenceEqual(["W1", "A1", "C1", "E1"]),
-            "전설·신화만 담고 이전 버전(IsOriginal)·이름 없는 룬은 제외, 최신 시즌부터 무기·방어구·앰블럼·장신구 순");
+            "전설·신화만 담고 이전 버전(IsOriginal)·이름 없는 룬은 제외, 최신 시즌부터 무기·방어구·엠블럼·장신구 순");
         var weapon = table.ById["W1"];
         Assert(weapon is { Season: 2, Grade: RuneGrade.Legendary, Category: RuneCategory.Weapon, Class: "", Name: "눈부신 잔영" } &&
                weapon.Effect == "스킬 사용 시 (공격력x147%/155.5%/164%)의 피해를 주고,\n공격 속도가 10%/12%/14% 증가한다." && weapon.TranscendLevels == 2,

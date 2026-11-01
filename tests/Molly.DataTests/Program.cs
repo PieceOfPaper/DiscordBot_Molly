@@ -153,7 +153,7 @@ if (args.Length is 1 or 2 && args[0] == "--runes-live")
 }
 if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
 {
-    // 설정된 토큰으로 클래스·마도저항·제작·NPC·지역 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
+    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
     // 두 번째 인자로 커밋 SHA를 주면 version.json 커밋 확인 없이 그 커밋 기준으로 만듭니다(저장소 갱신 중 확인용).
     var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
     using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
@@ -162,15 +162,16 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
     {
         var classCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.Classes.ClassTable>(unpack, new Molly.Classes.UnpackClassDataset(), liveDir, Console.WriteLine);
         var resistanceCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.MagicResistance.MagicResistanceData>(unpack, new Molly.MagicResistance.UnpackMagicResistanceDataset(), liveDir, Console.WriteLine);
+        var enhanceCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.RuneEnhance.RuneEnhanceData>(unpack, new Molly.RuneEnhance.UnpackRuneEnhanceDataset(), liveDir, Console.WriteLine);
         var craftingCatalog = new Molly.Unpack.UnpackDataCatalog<CraftingTable>(unpack, new UnpackCraftingDataset(), liveDir, Console.WriteLine);
         var worldCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.World.WorldTable>(unpack, new Molly.World.UnpackWorldDataset(), liveDir, Console.WriteLine);
         var portraits = new Molly.World.NpcPortraitCache(unpack, worldCatalog, liveDir, Console.WriteLine);
-        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, craftingCatalog, worldCatalog, portraits];
+        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits];
         var results = new List<Molly.Unpack.UnpackRefreshResult>();
         if (args.Length == 2)
             foreach (var catalog in liveCatalogs) results.Add(await catalog.RefreshAsync(args[1], default));
         else results.AddRange(await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, liveCatalogs, default));
-        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || craftingCatalog.Data is null || worldCatalog.Data is null)
+        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null)
         {
             Console.WriteLine("데이터 만들기 실패: " + string.Join(" / ", results.Select(x => $"{x.Status} {x.Detail}")));
             Environment.Exit(1);
@@ -180,6 +181,16 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
         var growth = Molly.HaeyeonCost.HaeyeonGrowth.From(resistanceCatalog.Data);
         Console.WriteLine($"해연 장비: " + string.Join(", ", resistanceCatalog.Data.HaeyeonEquipment.Select(x => $"{x.Key} {x.Value.Initial}~{x.Value.Max}")) +
                           $" → 해연 비용 계산 범위 {growth.InitialResistance}~{growth.MaxResistance}");
+        var enhance = enhanceCatalog.Current!;
+        foreach (var (part, current, target, percent) in new (string, int, int, double?)[] { ("무기", 10, 15, null), ("엠블럼", 10, 12, 42.1), ("방어구", 0, 20, null) })
+        {
+            var table = enhance.Data.Tables[Molly.RuneEnhance.RuneEnhanceRules.ParsePart(part)!.Value];
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var estimate = Molly.RuneEnhance.RuneEnhanceEstimate.Calculate(enhance.Data, Molly.RuneEnhance.RuneEnhanceRequest.Validate(table, current, target, percent).Request!);
+            var embed = DiscordBot_Molly.Commands.RuneEnhanceCostCommand.BuildEmbed(enhance.Data, estimate, enhance.PatchDisplay);
+            Console.WriteLine($"각인 강화 {part} +{current} {percent ?? 0}% → +{target} ({watch.ElapsedMilliseconds}ms): " +
+                              string.Join(" | ", embed.Fields.Take(3).Select(f => $"{f.Name}: {f.Value.Replace("\n", " / ")}")));
+        }
         foreach (var recipe in HaeyeonMarketRules.SelectRecipes(craftingCatalog.Data))
             Console.WriteLine($"{recipe.Name} | {recipe.Category} | {recipe.Slot} | {recipe.ArmorType} | " +
                               $"{Molly.HaeyeonCost.HaeyeonCostPricing.SlotOf(recipe)} | {string.Join(", ", recipe.Ingredients.Select(x => $"{x.Name}/{x.Quantity}"))}");
@@ -622,6 +633,7 @@ await MobiLifeTests.RunAsync();
 await UnpackRepoTests.RunAsync();
 await RuneUnpackTests.RunAsync();
 await UnpackDataTests.RunAsync();
+await RuneEnhanceTests.RunAsync();
 await WorldDataTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await HaeyeonCostTests.RunAsync();

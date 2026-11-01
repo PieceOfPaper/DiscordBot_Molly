@@ -17,12 +17,12 @@ public static class RuneNames
         _ => throw new ArgumentOutOfRangeException(nameof(grade)),
     };
 
-    // 게임 표시 이름은 '엠블럼 룬'이지만 몰리 명령·퀴즈 종목은 '앰블럼'으로 써 왔으므로 그대로 둡니다.
+    // 게임 데이터(언팩) 표기를 따릅니다.
     public static string Display(this RuneCategory category) => category switch
     {
         RuneCategory.Weapon => "무기",
         RuneCategory.Armor => "방어구",
-        RuneCategory.Emblem => "앰블럼",
+        RuneCategory.Emblem => "엠블럼",
         RuneCategory.Accessory => "장신구",
         _ => throw new ArgumentOutOfRangeException(nameof(category)),
     };

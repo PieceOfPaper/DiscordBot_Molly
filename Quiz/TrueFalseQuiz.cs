@@ -25,7 +25,7 @@ public static class TrueFalseQuestions
         TrueFalseTopic.Season2Rune => "시즌 2 룬의 이름과 효과가 서로 맞는지 판단해주세요.",
         TrueFalseTopic.Season2WeaponRune => "시즌 2 무기 룬의 이름과 효과가 서로 맞는지 판단해주세요.",
         TrueFalseTopic.Season2ArmorRune => "시즌 2 방어구 룬의 이름과 효과가 서로 맞는지 판단해주세요.",
-        TrueFalseTopic.Season2EmblemRune => "시즌 2 앰블럼 룬의 이름과 효과가 서로 맞는지 판단해주세요.",
+        TrueFalseTopic.Season2EmblemRune => "시즌 2 엠블럼 룬의 이름과 효과가 서로 맞는지 판단해주세요.",
         TrueFalseTopic.Season2AccessoryRune => "시즌 2 장신구 룬의 이름과 효과가 서로 맞는지 판단해주세요.",
         TrueFalseTopic.Season2NonAccessoryRune => "시즌 2 장신구 룬을 제외한 이름과 효과가 서로 맞는지 판단해주세요.",
         _ => throw new ArgumentException("지원하지 않는 진혹거퀴즈 문제종목입니다.")

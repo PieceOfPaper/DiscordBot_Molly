@@ -23,7 +23,7 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
         [Choice("시즌2룬효과로이름", "시즌2룬효과로이름")]
         [Choice("시즌2무기룬효과로이름", "시즌2무기룬효과로이름")]
         [Choice("시즌2방어구룬효과로이름", "시즌2방어구룬효과로이름")]
-        [Choice("시즌2앰블럼룬효과로이름", "시즌2앰블럼룬효과로이름")]
+        [Choice("시즌2엠블럼룬효과로이름", "시즌2엠블럼룬효과로이름")]
         [Choice("시즌2장신구룬효과로이름", "시즌2장신구룬효과로이름")]
         [Choice("시즌2장신구룬빼고효과로이름", "시즌2장신구룬빼고효과로이름")]
         [Choice("시즌2장신구룬이름으로클래스", "시즌2장신구룬이름으로클래스")] string topic,
@@ -37,7 +37,7 @@ public class SpeedQuizCommand : InteractionModuleBase<SocketInteractionContext>
             "시즌2룬효과로이름" => QuizTopic.Season2RuneEffect,
             "시즌2무기룬효과로이름" => QuizTopic.Season2WeaponRuneEffect,
             "시즌2방어구룬효과로이름" => QuizTopic.Season2ArmorRuneEffect,
-            "시즌2앰블럼룬효과로이름" => QuizTopic.Season2EmblemRuneEffect,
+            "시즌2엠블럼룬효과로이름" => QuizTopic.Season2EmblemRuneEffect,
             "시즌2장신구룬효과로이름" => QuizTopic.Season2AccessoryRuneEffect,
             "시즌2장신구룬빼고효과로이름" => QuizTopic.Season2NonAccessoryRuneEffect,
             "시즌2장신구룬이름으로클래스" => QuizTopic.Season2AccessoryRuneNameClass,

@@ -112,7 +112,7 @@ public static class QuizQuestions
         QuizTopic.Season2RuneEffect => "시즌2룬효과로이름: 시즌 2 룬의 효과를 보고 룬 이름을 맞혀주세요.",
         QuizTopic.Season2WeaponRuneEffect => "시즌2무기룬효과로이름: 시즌 2 무기 룬의 효과를 보고 룬 이름을 맞혀주세요.",
         QuizTopic.Season2ArmorRuneEffect => "시즌2방어구룬효과로이름: 시즌 2 방어구 룬의 효과를 보고 룬 이름을 맞혀주세요.",
-        QuizTopic.Season2EmblemRuneEffect => "시즌2앰블럼룬효과로이름: 시즌 2 앰블럼 룬의 효과를 보고 룬 이름을 맞혀주세요.",
+        QuizTopic.Season2EmblemRuneEffect => "시즌2엠블럼룬효과로이름: 시즌 2 엠블럼 룬의 효과를 보고 룬 이름을 맞혀주세요.",
         QuizTopic.Season2AccessoryRuneEffect => "시즌2장신구룬효과로이름: 시즌 2 장신구 룬의 효과를 보고 룬 이름을 맞혀주세요.",
         QuizTopic.Season2NonAccessoryRuneEffect => "시즌2장신구룬빼고효과로이름: 시즌 2 장신구 룬을 제외한 룬의 효과를 보고 룬 이름을 맞혀주세요.",
         QuizTopic.Season2AccessoryRuneNameClass => "시즌2장신구룬이름으로클래스: 시즌 2 장신구 룬의 이름을 보고 해당 클래스를 맞혀주세요.",
