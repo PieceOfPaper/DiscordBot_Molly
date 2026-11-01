@@ -153,7 +153,7 @@ if (args.Length is 1 or 2 && args[0] == "--runes-live")
 }
 if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
 {
-    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
+    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
     // 두 번째 인자로 커밋 SHA를 주면 version.json 커밋 확인 없이 그 커밋 기준으로 만듭니다(저장소 갱신 중 확인용).
     var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
     using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
@@ -166,12 +166,13 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
         var craftingCatalog = new Molly.Unpack.UnpackDataCatalog<CraftingTable>(unpack, new UnpackCraftingDataset(), liveDir, Console.WriteLine);
         var worldCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.World.WorldTable>(unpack, new Molly.World.UnpackWorldDataset(), liveDir, Console.WriteLine);
         var portraits = new Molly.World.NpcPortraitCache(unpack, worldCatalog, liveDir, Console.WriteLine);
-        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits];
+        var bottleCatalog = new Molly.Unpack.UnpackDataCatalog<MessageBottleTable>(unpack, new UnpackMessageBottleDataset(), liveDir, Console.WriteLine);
+        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits, bottleCatalog];
         var results = new List<Molly.Unpack.UnpackRefreshResult>();
         if (args.Length == 2)
             foreach (var catalog in liveCatalogs) results.Add(await catalog.RefreshAsync(args[1], default));
         else results.AddRange(await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, liveCatalogs, default));
-        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null)
+        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null || bottleCatalog.Data is null)
         {
             Console.WriteLine("데이터 만들기 실패: " + string.Join(" / ", results.Select(x => $"{x.Status} {x.Detail}")));
             Environment.Exit(1);
@@ -200,6 +201,8 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
             Console.WriteLine($"{npc.Name} | {string.Join("/", npc.Regions)} | {npc.ProfileImage ?? "(이미지 없음)"} | {(npc.ProfileImage is { } image && portraits.GetPath(image) is not null ? "받음" : "-")}");
         var classIcons = classCatalog.Data.Items.Count(x => ClassIcons.FromCombatJob(x.Id) is { } id && ClassIcons.GetPath(id) is not null);
         Console.WriteLine($"아이콘이 연결된 클래스 {classIcons}/{classCatalog.Data.Items.Count}개");
+        foreach (var bottle in bottleCatalog.Data.Items)
+            Console.WriteLine($"{bottle.Id} | {bottle.Message.Replace("\n", " / ")}");
     }
     finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
     return;
@@ -511,23 +514,6 @@ Check(QuizQuestions.PickImage(ImageQuizTopic.Class, quizClasses, [], _ => fakePn
 try { QuizQuestions.PickImage(ImageQuizTopic.Npc, [], imageNpcs, _ => null, _ => null, 10); throw new Exception("이미지가 하나도 없으면 출제 거부"); }
 catch (ArgumentException) { Console.WriteLine("PASS 이미지가 하나도 없으면 출제 거부"); }
 
-var bottleCsv = "ID,메시지\n1,첫 번째 쪽지\n2,\"둘째 줄 첫 문장\n둘째 줄 두 번째 문장\"";
-var bottleTable = MessageBottleCsvReader.Parse(bottleCsv, DateTimeOffset.UtcNow);
-Check(bottleTable.Items.Count == 2 && bottleTable.Items[1].Message == "둘째 줄 첫 문장\n둘째 줄 두 번째 문장", "병 속에 든 쪽지 CSV와 줄바꿈 검증");
-RejectMessageBottle("ID,메시지\n1,첫 쪽지\n1,다른 쪽지", "병 속에 든 쪽지 ID 중복 거부");
-RejectMessageBottle("ID,메시지\n1,", "병 속에 든 쪽지 빈 메시지 거부");
-
-var dir = Path.Combine(Path.GetTempPath(), "molly-data-tests-" + Guid.NewGuid().ToString("N"));
-try
-{
-    var bottleSource = new FakeMessageBottleSource(bottleCsv);
-    var bottleCatalog = new MessageBottleCatalog(bottleSource, dir, _ => { });
-    await bottleCatalog.InitializeAsync();
-    var bottleOriginal = bottleCatalog.Current;
-    bottleSource.Csv = "ID,메시지\n1,첫 쪽지\n1,다른 쪽지";
-    Check(!await bottleCatalog.RefreshAsync() && ReferenceEquals(bottleOriginal, bottleCatalog.Current), "병 속에 든 쪽지 검증 실패 시 정상 스냅샷 유지");
-}
-finally { Directory.Delete(dir, recursive: true); }
 var storageDir = Path.Combine(Path.GetTempPath(), "molly-storage-tests-" + Guid.NewGuid().ToString("N"));
 try
 {
@@ -622,6 +608,7 @@ await RuneUnpackTests.RunAsync();
 await UnpackDataTests.RunAsync();
 await RuneEnhanceTests.RunAsync();
 await WorldDataTests.RunAsync();
+await MessageBottleDataTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await HaeyeonCostTests.RunAsync();
 await KeywordMarketTests.RunAsync();
@@ -1903,25 +1890,8 @@ Check(releaseEvents.Count(x => x.Type == "StatusExpired" && x.Actor == "B" && x.
 
 Console.WriteLine("모든 오프라인 데이터·퀴즈 테스트 통과");
 
-void RejectMessageBottle(string csv, string name)
-{
-    try { MessageBottleCsvReader.Parse(csv, DateTimeOffset.UtcNow); }
-    catch (InvalidDataException) { Console.WriteLine("PASS " + name); return; }
-    throw new Exception(name);
-}
-
 sealed class FixedBattleRandom(IEnumerable<double> values) : IBattleRandom
 {
     private readonly Queue<double> values = new(values);
     public double NextDouble() => values.Count == 0 ? 0.5 : values.Dequeue();
-}
-sealed class FakeMessageBottleSource(string csv) : IMessageBottleSource
-{
-    public string CacheKey => "test-message-bottle-source";
-    public string Csv { get; set; } = csv;
-    public Task<string> FetchCsvAsync(CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult(Csv);
-    }
 }
