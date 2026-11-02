@@ -15,6 +15,7 @@ using DiscordBot_Molly.Commands;
 using Molly.Battle;
 using Molly.MobiLife;
 using Molly.RuneEnhance;
+using Molly.Shop;
 using Molly.Unpack;
 using Molly.Crafting;
 using Molly.World;
@@ -43,6 +44,7 @@ class Program
     public UnpackDataCatalog<MessageBottleTable> MessageBottles { get; private set; } = null!;
     public UnpackDataCatalog<LifeSkillTable> LifeSkills { get; private set; } = null!;
     public UnpackDataCatalog<BattleGameData> BattleGame { get; private set; } = null!;
+    public UnpackDataCatalog<ShopTable> Shops { get; private set; } = null!;
     public SpeedQuizService Quizzes { get; } = new();
     public TrueFalseQuizService TrueFalseQuizzes { get; } = new();
     public NunchiGameService NunchiGames { get; } = new();
@@ -184,7 +186,6 @@ class Program
 
     public async Task MainAsync()
     {
-        MobiShop.LoadTable();
         
         var appCts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
@@ -269,8 +270,9 @@ class Program
         MessageBottles = new UnpackDataCatalog<MessageBottleTable>(Unpack, new UnpackMessageBottleDataset(), dataDirectory);
         LifeSkills = new UnpackDataCatalog<LifeSkillTable>(Unpack, new UnpackLifeSkillDataset(), dataDirectory);
         BattleGame = new UnpackDataCatalog<BattleGameData>(Unpack, new UnpackBattleGameDataset(), dataDirectory);
+        Shops = new UnpackDataCatalog<ShopTable>(Unpack, new UnpackShopDataset(), dataDirectory);
         // NPC 이미지는 NPC·지역 데이터로 받을 목록을 정하므로 그 뒤에 둡니다.
-        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, RuneEnhance, Crafting, World, NpcPortraits, SkillQuiz, SkillIcons, MessageBottles, LifeSkills, BattleGame];
+        IUnpackDataCatalog[] unpackCatalogs = [Runes, Classes, MagicResistance, RuneEnhance, Crafting, World, NpcPortraits, SkillQuiz, SkillIcons, MessageBottles, LifeSkills, BattleGame, Shops];
         await Runes.InitializeAsync(appCts.Token);
         await Classes.InitializeAsync(appCts.Token);
         await MagicResistance.InitializeAsync(appCts.Token);
@@ -283,6 +285,7 @@ class Program
         await MessageBottles.InitializeAsync(appCts.Token);
         await LifeSkills.InitializeAsync(appCts.Token);
         await BattleGame.InitializeAsync(appCts.Token);
+        await Shops.InitializeAsync(appCts.Token);
         // 배틀 데이터는 시작할 때 한 번만 만들고 클래스·스킬 이름·슬롯을 게임 데이터에서 가져오므로, 캐시가 없으면(첫 실행) 먼저 받아 둡니다.
         if (BattleGame.Data is null) await BattleGame.RefreshAsync(appCts.Token);
         // version.json의 마지막 커밋을 시작 직후와 이후 1시간마다 한 번 확인하고(데이터 수와 무관), 바뀐 데이터만 다시 받습니다.

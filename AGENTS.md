@@ -6,7 +6,7 @@
 - 콘텐츠의 제품 방향과 채택 기준은 `docs/content-planning-guidelines.md`를 따른다.
 - 콘텐츠는 게임에 접속하지 않은 동안 대신 관찰·기록·알림을 제공하는 편의 기능과, Discord에서 부담 없이 짧게 즐기는 놀이 기능을 중심으로 한다.
 - Google Sheets의 배틀* 등 원본 데이터를 읽고 검증한다. 요청된 범위만 작업한다.
-- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬(`Runes/`), 퀴즈용 클래스(`Classes/`), 퀴즈용 NPC·지역(`World/`), 마도저항 기준값(`MagicResistance/`), 제작 레시피(`Crafting/`), 병 속에 든 쪽지(`Messages/`), 배틀생활스킬 이름 확인용 생활스킬(`Battle/UnpackLifeSkillDataset`), 배틀의 클래스 목록·스킬 이름·클래스별 스킬 슬롯(`Battle/UnpackBattleGameDataset`, 옛 `클래스`·`스킬`·`패시브스킬` 탭)은 교체를 마쳤다. 배틀 스킬·패시브 ID는 게임 데이터 `Skill.Id`를 쓰고, 몰리 클래스 ID는 `Commons/ClassIcons`의 CombatJob 매핑을 쓴다. `가공` 시트는 쓰는 기능이 없어 교체하지 않았다. 배틀 동작 데이터(`배틀*` 시트: 쿨다운·효과·파생·AI·자원·상태, 파생 관계·배틀 전용 스킬, 이름 교체)는 몰리가 만든 데이터이므로 Google Sheets에 둔다. `증표규칙` 시트는 몰리 운영 데이터이므로 Google Sheets에 둔다.
+- 인게임에서 직접 수집하던 시트 데이터는 게임 데이터 저장소(언팩 데이터)로 하나씩 교체하고 있다. 룬(`Runes/`), 퀴즈용 클래스(`Classes/`), 퀴즈용 NPC·지역(`World/`), 마도저항 기준값(`MagicResistance/`), 제작 레시피(`Crafting/`), 병 속에 든 쪽지(`Messages/`), 배틀생활스킬 이름 확인용 생활스킬(`Battle/UnpackLifeSkillDataset`), 배틀의 클래스 목록·스킬 이름·클래스별 스킬 슬롯(`Battle/UnpackBattleGameDataset`, 옛 `클래스`·`스킬`·`패시브스킬` 탭), 상점 검색(`Shop/`, 옛 배포 에셋 상점 CSV)은 교체를 마쳤다. 배틀 스킬·패시브 ID는 게임 데이터 `Skill.Id`를 쓰고, 몰리 클래스 ID는 `Commons/ClassIcons`의 CombatJob 매핑을 쓴다. `가공` 시트는 쓰는 기능이 없어 교체하지 않고 Google Sheets에서 삭제했다. 배틀 동작 데이터(`배틀*` 시트: 쿨다운·효과·파생·AI·자원·상태, 파생 관계·배틀 전용 스킬, 이름 교체)는 몰리가 만든 데이터이므로 Google Sheets에 둔다. `증표규칙` 시트는 몰리 운영 데이터이므로 Google Sheets에 둔다.
 - 모비라이프 OpenAPI(https://open.mabimobi.life/docs)를 쓰는 작업은 `docs/mobilife-openapi.md`의 이용약관·출처 표기·요청 한도·중단 대비 규칙을 따른다. 기능은 `MobiLife/`의 공용 클라이언트를 도메인 인터페이스 뒤에서만 사용한다.
 - 배틀(자동전투) 기능의 설계는 `docs/battle/README.md`를 따른다. 새 클래스를 배틀 관련 시트에 반영할 때는 `docs/battle/new-class-workflow.md`의 절차를 따른다.
 
@@ -37,9 +37,9 @@
 - Commands/: 슬래시 명령 처리.
 - MobiEventParser·MobiEventService: 이벤트 목록 HTML 파싱과 HTTP 수집·캐시. MobiEventBrowserSource는 HTTP 차단 시에만 쓰는 Playwright 대체 경로.
 - MobiRankBrowser: Playwright 기반 랭킹 수집. MobiEventExpireAlert: 이벤트 마감 알림.
-- MobiShop.cs, Commons/CsvTable.cs: 상점 테이블과 CSV 매핑.
+- Shop/: 게임 데이터 저장소의 NPCShop·NPCShopTab·NPCShopProduct·NPCShopProductPreset·CurrencyInfo 등으로 NPC 상점 상품(판매처·비용·물물교환·구매 제한·판매 기간·이벤트 상점 기간)을 만드는 데이터셋(UnpackShopDataset). 검색·판매처 지역(NPC·지역 데이터)·판매 기간 판정(ShopSearch)과 아이템별 Embed(ShopMessages)는 `/상점검색`(Commands/ShopCommand)이 쓴다.
 - Commons/LocalStorage.cs: 서버별 JSON 저장. MOLLY_DATA_DIR로 저장 위치 지정.
-- assets/: 배포에 포함해야 하는 이미지와 상점 테이블.
+- assets/: 배포에 포함해야 하는 이미지.
 - Unpack/: 게임 데이터 private 저장소(PieceOfPaper/MabinogiMobileUnpack) 읽기 클라이언트와 기능 데이터 공용 보관소(`UnpackDataCatalog<T>`·`IUnpackDataset<T>`), 여러 보관소가 커밋 확인 1회를 함께 쓰는 주기 확인(`UnpackDataCatalogs`). 새 데이터는 Program.cs의 보관소 목록에 추가한다. clone하지 않고 `version.json`을 마지막으로 바꾼 커밋 SHA로 변경을 확인하고, 그 커밋 기준으로 `version.json`·필요한 시트·파일(시트 밖 파일은 `UnpackFileFetcher`, 폴더 목록·blob SHA는 `GetTreeAsync`)만 REST API로 받는다. 다른 데이터에 기대는 보관소는 목록에서 뒤에 둔다. 시트 관계는 저장소의 `Docs/SheetRelations.md`, 토큰·갱신 절차는 `docs/unpack-repo.md`.
 - Runes/: 게임 데이터 저장소의 Rune·Socketable·CombatJob·RuneOption·RuneTranscend 시트로 룬 목록을 만드는 데이터셋(UnpackRuneDataset), 효과 문장 수치 템플릿 해석과 초월 단계 수치의 `기본/1초월/2초월` 슬래시 표기와 수치·계산식을 뺀 검색용 효과 문장(RuneEffectText), `/룬` AND·OR·괄호 검색식 해석(RuneQuery), 시즌·부위·검색식 검색과 이름 일치 우선 정렬(RuneSearch).
 - Classes/: 게임 데이터 저장소의 CombatJob으로 공개된 전직 클래스 목록을 만드는 데이터셋(UnpackClassDataset). `/자음퀴즈`·`/이미지퀴즈` 클래스 종목이 쓴다(배틀은 쓰지 않음). 이미지퀴즈 아이콘은 `Commons/ClassIcons`의 CombatJob.Id 매핑으로 배포 에셋을 찾는다.

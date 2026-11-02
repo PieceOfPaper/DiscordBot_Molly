@@ -173,7 +173,7 @@ if (args.Length == 1 && args[0] == "--skill-quiz-live")
 }
 if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
 {
-    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지·생활스킬·배틀 스킬 원본 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
+    // 설정된 토큰으로 클래스·마도저항·룬 각인 강화·제작·NPC·지역·병 속에 든 쪽지·생활스킬·배틀 스킬 원본·상점 데이터와 NPC 이미지를 게임 데이터 저장소에서 만들어 출력합니다(커밋 1회 + 데이터별 version·시트·파일, Discord 미사용, CI 미사용).
     // 두 번째 인자로 커밋 SHA를 주면 version.json 커밋 확인 없이 그 커밋 기준으로 만듭니다(저장소 갱신 중 확인용).
     var config = new ConfigurationBuilder().AddUserSecrets(typeof(Molly.Unpack.UnpackRepoClient).Assembly).AddEnvironmentVariables().Build();
     using var unpack = new Molly.Unpack.UnpackRepoClient(Molly.Unpack.UnpackRepoOptions.FromConfiguration(config));
@@ -189,12 +189,13 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
         var bottleCatalog = new Molly.Unpack.UnpackDataCatalog<MessageBottleTable>(unpack, new UnpackMessageBottleDataset(), liveDir, Console.WriteLine);
         var lifeSkillCatalog = new Molly.Unpack.UnpackDataCatalog<LifeSkillTable>(unpack, new UnpackLifeSkillDataset(), liveDir, Console.WriteLine);
         var battleGameCatalog = new Molly.Unpack.UnpackDataCatalog<BattleGameData>(unpack, new UnpackBattleGameDataset(), liveDir, Console.WriteLine);
-        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits, bottleCatalog, lifeSkillCatalog, battleGameCatalog];
+        var shopCatalog = new Molly.Unpack.UnpackDataCatalog<Molly.Shop.ShopTable>(unpack, new Molly.Shop.UnpackShopDataset(), liveDir, Console.WriteLine);
+        Molly.Unpack.IUnpackDataCatalog[] liveCatalogs = [classCatalog, resistanceCatalog, enhanceCatalog, craftingCatalog, worldCatalog, portraits, bottleCatalog, lifeSkillCatalog, battleGameCatalog, shopCatalog];
         var results = new List<Molly.Unpack.UnpackRefreshResult>();
         if (args.Length == 2)
             foreach (var catalog in liveCatalogs) results.Add(await catalog.RefreshAsync(args[1], default));
         else results.AddRange(await Molly.Unpack.UnpackDataCatalogs.RefreshAllAsync(unpack, liveCatalogs, default));
-        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null || bottleCatalog.Data is null || lifeSkillCatalog.Data is null || battleGameCatalog.Data is null)
+        if (results.Any(x => !x.IsSuccess) || classCatalog.Data is null || resistanceCatalog.Data is null || enhanceCatalog.Current is null || craftingCatalog.Data is null || worldCatalog.Data is null || bottleCatalog.Data is null || lifeSkillCatalog.Data is null || battleGameCatalog.Data is null || shopCatalog.Data is null)
         {
             Console.WriteLine("데이터 만들기 실패: " + string.Join(" / ", results.Select(x => $"{x.Status} {x.Detail}")));
             Environment.Exit(1);
@@ -227,6 +228,15 @@ if (args.Length is 1 or 2 && args[0] == "--unpack-data-live")
             Console.WriteLine($"{bottle.Id} | {bottle.Message.Replace("\n", " / ")}");
         Console.WriteLine("생활스킬: " + string.Join(", ", lifeSkillCatalog.Data.Items.Select(x => $"{x.Name}({x.Id})")));
         Console.WriteLine("배틀 스킬 원본: " + new UnpackBattleGameDataset().Describe(battleGameCatalog.Data) + " — " + string.Join(", ", battleGameCatalog.Data.Classes.Select(x => $"{x.Name}({x.CombatJobId}→{ClassIcons.FromCombatJob(x.CombatJobId) ?? "매핑 없음"})")));
+        var now = DateTimeOffset.Now;
+        Console.WriteLine($"상점: {new Molly.Shop.UnpackShopDataset().Describe(shopCatalog.Data)}, 지금 판매 중 {shopCatalog.Data.Items.Count(x => x.IsOnSale(now))}개");
+        foreach (var keyword in new[] { "성수", "데코 제작 부품", "케이틴 특제 통밀빵" })
+        {
+            var found = Molly.Shop.ShopSearch.Find(shopCatalog.Data, worldCatalog.Data, keyword, now);
+            Console.WriteLine(Molly.Shop.ShopMessages.Header(keyword, found));
+            foreach (var embed in Molly.Shop.ShopMessages.BuildPages(found).SelectMany(x => x))
+                Console.WriteLine($"[{embed.Title}]\n" + string.Join("\n", embed.Fields.Select(f => $"  {f.Name}\n    {f.Value.Replace("\n", "\n    ")}")));
+        }
     }
     finally { if (Directory.Exists(liveDir)) Directory.Delete(liveDir, recursive: true); }
     return;
@@ -662,6 +672,7 @@ await RuneEnhanceTests.RunAsync();
 await WorldDataTests.RunAsync();
 await MessageBottleDataTests.RunAsync();
 await LifeSkillDataTests.RunAsync();
+await ShopDataTests.RunAsync();
 await BattleGameDataTests.RunAsync();
 await HaeyeonMarketTests.RunAsync();
 await HaeyeonCostTests.RunAsync();
